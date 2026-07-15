@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎉 lite-confetti — Interactive Playground</title>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+          rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box
+        }
+
+        :root {
+            --bg: #06060c;
+            --surface: #0c0c16;
+            --border: #1a1a2e;
+            --text: #d4d4e8;
+            --muted: #555570;
+            --accent: #a78bfa;
+            --accent2: #6366f1;
+            --glow: rgba(167, 139, 250, .15)
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Space Grotesk', sans-serif;
+            min-height: 100vh;
+            overflow-x: hidden
+        }
+
+        canvas#confettiCanvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 50
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            padding: 30px 20px 10px
+        }
+
+        .header h1 {
+            font-size: clamp(28px, 5vw, 48px);
+            font-weight: 700;
+            letter-spacing: -1px;
+            background: linear-gradient(135deg, #c084fc, #818cf8, #6ee7b7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent
+        }
+
+        .header .sub {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            margin-top: 6px
+        }
+
+        .header .badges {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            margin-top: 12px;
+            flex-wrap: wrap
+        }
+
+        .badge {
+            padding: 4px 12px;
+            border: 1px solid var(--border);
+            border-radius: 99px;
+            font-size: 10px;
+            font-family: 'JetBrains Mono', monospace
+        }
+
+        /* Layout */
+        .layout {
+            display: grid;
+            grid-template-columns: 340px 1fr;
+            gap: 0;
+            max-width: 1400px;
+            margin: 20px auto;
+            min-height: calc(100vh - 160px)
+        }
+
+        @media (max-width: 900px) {
+            .layout {
+                grid-template-columns: 1fr;
+                max-height: none
+            }
+        }
+
+        /* Controls Panel */
+        .panel {
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            padding: 20px;
+            overflow-y: auto;
+            max-height: calc(100vh - 160px)
+        }
+
+        @media (max-width: 900px) {
+            .panel {
+                max-height: 50vh;
+                border-right: none;
+                border-bottom: 1px solid var(--border)
+            }
+        }
+
+        .panel-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            margin-bottom: 14px;
+            font-family: 'JetBrains Mono', monospace
+        }
+
+        .section {
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border)
+        }
+
+        .section:last-child {
+            border-bottom: none
+        }
+
+        .section-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+            font-family: 'JetBrains Mono', monospace
+        }
+
+        /* Controls */
+        .control {
+            margin-bottom: 10px
+        }
+
+        .control-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px
+        }
+
+        .control-name {
+            font-size: 12px;
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace
+        }
+
+        .control-val {
+            font-size: 11px;
+            color: var(--accent);
+            font-family: 'JetBrains Mono', monospace;
+            min-width: 40px;
+            text-align: right
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 4px;
+            border-radius: 2px;
+            background: #1a1a2e;
+            outline: none;
+            cursor: pointer
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: grab;
+            border: 2px solid var(--bg)
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: grab;
+            border: 2px solid var(--bg)
+        }
+
+        /* Select */
+        select {
+            width: 100%;
+            padding: 6px 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            cursor: pointer;
+            outline: none
+        }
+
+        select:focus {
+            border-color: var(--accent)
+        }
+
+        /* Emoji input */
+        .emoji-input {
+            width: 100%;
+            padding: 6px 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 18px;
+            text-align: center;
+            outline: none
+        }
+
+        .emoji-input:focus {
+            border-color: var(--accent)
+        }
+
+        /* Buttons */
+        .btn-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 10px
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--surface);
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all .15s;
+            flex: 1;
+            text-align: center;
+            min-width: 0
+        }
+
+        .btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--glow)
+        }
+
+        .btn.primary {
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            color: #fff;
+            border: none;
+            font-weight: 600
+        }
+
+        .btn.primary:hover {
+            opacity: .9;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 20px rgba(99, 102, 241, .3)
+        }
+
+        /* Presets */
+        .presets {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+            margin-bottom: 12px
+        }
+
+        .preset {
+            padding: 7px 8px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            cursor: pointer;
+            transition: all .15s;
+            text-align: center
+        }
+
+        .preset:hover {
+            border-color: var(--accent);
+            color: var(--accent)
+        }
+
+        .preset.active {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--glow)
+        }
+
+        /* Stage */
+        .stage {
+            position: relative;
+            background: var(--bg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: crosshair;
+            min-height: 400px
+        }
+
+        .stage-hint {
+            position: absolute;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: #333;
+            letter-spacing: 1px;
+            pointer-events: none
+        }
+
+        .stage-hud {
+            position: absolute;
+            top: 12px;
+            right: 16px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: #333;
+            text-align: right;
+            pointer-events: none;
+            line-height: 1.7
+        }
+
+        .stage-hud .val {
+            color: var(--accent)
+        }
+
+        /* Code preview */
+        .code-box {
+            position: absolute;
+            bottom: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(10, 10, 20, .9);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 18px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: #888;
+            line-height: 1.6;
+            max-width: 500px;
+            width: 90%;
+            pointer-events: none;
+            white-space: pre-wrap;
+            word-break: break-all;
+            backdrop-filter: blur(8px);
+            opacity: 0;
+            transition: opacity .3s
+        }
+
+        .code-box.visible {
+            opacity: 1
+        }
+
+        .code-box .kw {
+            color: #c084fc
+        }
+
+        .code-box .fn {
+            color: #6ee7b6
+        }
+
+        .code-box .num {
+            color: #f59e0b
+        }
+
+        .code-box .str {
+            color: #38bdf8
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="confettiCanvas"></canvas>
+
+<div class="header">
+    <h1>lite-confetti</h1>
+    <div class="sub">@zakkster/lite-confetti — Interactive Playground</div>
+    <div class="badges">
+        <span class="badge">deterministic</span>
+        <span class="badge">oklch-native</span>
+        <span class="badge">5 shapes</span>
+        <span class="badge">reduced-motion</span>
+        <span class="badge">< 4KB</span>
+    </div>
+</div>
+
+<div class="layout">
+    <!-- Controls -->
+    <div class="panel">
+        <div class="panel-title">Configuration</div>
+
+        <div class="section">
+            <div class="section-label">Presets</div>
+            <div class="presets">
+                <button class="preset active" data-preset="fireworks">🎆 Fireworks</button>
+                <button class="preset" data-preset="cannons">💥 Cannons</button>
+                <button class="preset" data-preset="snow">❄️ Snow</button>
+                <button class="preset" data-preset="pride">🏳️‍🌈 Pride</button>
+                <button class="preset" data-preset="golden">✨ Golden</button>
+                <button class="preset" data-preset="emoji">🌟 Emoji</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-label">Emission</div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">count</span><span class="control-val"
+                                                                                         id="countVal">80</span></div>
+                <input type="range" id="count" min="5" max="200" value="80" step="5">
+            </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">spread</span><span class="control-val"
+                                                                                          id="spreadVal">1.2</span>
+                </div>
+                <input type="range" id="spread" min="0.1" max="6.28" value="1.2" step="0.1">
+            </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">angle (°)</span><span class="control-val"
+                                                                                             id="angleVal">-90</span>
+                </div>
+                <input type="range" id="angle" min="-180" max="180" value="-90" step="5">
+            </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">speed</span><span class="control-val"
+                                                                                         id="speedVal">400</span></div>
+                <input type="range" id="speed" min="50" max="1200" value="400" step="25">
+            </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">speedVariance</span><span class="control-val"
+                                                                                                 id="speedVarVal">200</span>
+                </div>
+                <input type="range" id="speedVar" min="0" max="500" value="200" step="25">
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-label">Physics</div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">gravity</span><span class="control-val"
+                                                                                           id="gravityVal">600</span>
+                </div>
+                <input type="range" id="gravity" min="0" max="1500" value="600" step="25">
+            </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">drag</span><span class="control-val"
+                                                                                        id="dragVal">0.98</span></div>
+                <input type="range" id="drag" min="0.9" max="1.0" value="0.98" step="0.005">
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-label">Appearance</div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">shape</span></div>
+                <select id="shape">
+                    <option value="rect" selected>rect</option>
+                    <option value="circle">circle</option>
+                    <option value="star">star</option>
+                    <option value="triangle">triangle</option>
+                    <option value="emoji">emoji</option>
+                </select>
+            </div>
+            <div class="control" id="emojiRow" style="display:none">
+                <div class="control-header"><span class="control-name">emoji</span></div>
+                <input type="text" class="emoji-input" id="emoji" value="🎉" maxlength="2">
+            </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">sizeMin</span><span class="control-val"
+                                                                                           id="sizeMinVal">5</span>
+                </div>
+                <input type="range" id="sizeMin" min="1" max="20" value="5" step="1">
+            </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">sizeMax</span><span class="control-val"
+                                                                                           id="sizeMaxVal">12</span>
+                </div>
+                <input type="range" id="sizeMax" min="2" max="40" value="12" step="1">
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-label">Lifetime</div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">lifeMin</span><span class="control-val"
+                                                                                           id="lifeMinVal">1.5</span>
+                </div>
+                <input type="range" id="lifeMin" min="0.2" max="5" value="1.5" step="0.1">
+            </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">lifeMax</span><span class="control-val"
+                                                                                           id="lifeMaxVal">3.0</span>
+                </div>
+                <input type="range" id="lifeMax" min="0.5" max="8" value="3.0" step="0.1">
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-label">Actions</div>
+            <div class="btn-row">
+                <button class="btn primary" id="burstBtn">🎉 Burst</button>
+                <button class="btn" id="sprayBtn">🌊 Spray</button>
+            </div>
+            <div class="btn-row">
+                <button class="btn" id="followBtn" aria-pressed="false">🧲 Follow</button>
+                <button class="btn" id="clearBtn">✕ Clear</button>
+            </div>
+            <div class="btn-row">
+                <button class="btn" id="codeBtn">{ } Code</button>
+                <button class="btn" id="seedBtn">🎲 Seed 42</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stage -->
+    <div class="stage" id="stage">
+        <div class="stage-hud">
+            <span class="val">@zakkster/lite-confetti</span><br>
+            alive: <span class="val" id="aliveHud">0</span><br>
+            seed: <span class="val" id="seedHud">—</span>
+        </div>
+        <div class="stage-hint">CLICK TO BURST · 🧲 FOLLOW TO CHASE THE POINTER</div>
+        <div class="code-box" id="codeBox"></div>
+    </div>
+</div>
+
+<script type="importmap">
+{
+    "imports": {
+        "@zakkster/lite-random": "https://cdn.jsdelivr.net/npm/@zakkster/lite-random",
+        "@zakkster/lite-color": "https://cdn.jsdelivr.net/npm/@zakkster/lite-color",
+        "@zakkster/lite-ticker": "https://cdn.jsdelivr.net/npm/@zakkster/lite-ticker",
+        "@zakkster/lite-lerp": "https://cdn.jsdelivr.net/npm/@zakkster/lite-lerp",
+        "@zakkster/lite-confetti": "../Confetti.js"
+    }
+}
+</script>
+
+<script type="module">
+    import { createConfetti, presets, fromElement, colorsFromPalette } from '@zakkster/lite-confetti';
+
+    // ── DOM cache (hoisted once; never queried in a loop) ──────────────────────
+    const $canvas   = document.getElementById('confettiCanvas');
+    const $stage    = document.getElementById('stage');
+    const $alive    = document.getElementById('aliveHud');
+    const $seed     = document.getElementById('seedHud');
+    const $shape    = document.getElementById('shape');
+    const $emoji    = document.getElementById('emoji');
+    const $emojiRow = document.getElementById('emojiRow');
+    const $codeBox  = document.getElementById('codeBox');
+    const $burstBtn = document.getElementById('burstBtn');
+    const $sprayBtn = document.getElementById('sprayBtn');
+    const $followBtn = document.getElementById('followBtn');
+    const $clearBtn = document.getElementById('clearBtn');
+    const $codeBtn  = document.getElementById('codeBtn');
+    const $seedBtn  = document.getElementById('seedBtn');
+
+    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax'];
+    const $in = {};   // id -> input element
+    const $out = {};  // id -> value-display element
+    for (const id of SLIDERS) { $in[id] = document.getElementById(id); $out[id] = document.getElementById(id + 'Val'); }
+    $in.shape = $shape;
+    $in.emoji = $emoji;
+
+    const c = createConfetti($canvas, { maxParticles: 800 });
+    let currentSeed = null;
+
+    // ── Coordinate space ───────────────────────────────────────────────────────
+    // The canvas is position:fixed and fills the whole viewport (top:0,left:0,100%),
+    // and its 2D context is DPR-scaled, so it draws in VIEWPORT CSS pixels. A click's
+    // clientX/clientY are already in exactly that space -- so we pass them straight
+    // through. (The previous demo subtracted the stage's rect, which sits below the
+    // header; that shifted every burst up by the header height. Because the canvas is
+    // full-viewport, no offset subtraction is correct here.)
+    const pointerToCanvas = (e) => ({ x: e.clientX, y: e.clientY });
+
+    // ── Read the controls into a burst config ──────────────────────────────────
+    // Parsed fresh per discrete action (click/keypress) -- never per frame -- so the
+    // allocation is free. The library reads these once at call time and does not retain
+    // the object.
+    function getConfig() {
+        const shape = $shape.value;
+        return {
+            count: +$in.count.value,
+            spread: +$in.spread.value,
+            angle: (+$in.angle.value) * Math.PI / 180,
+            speed: +$in.speed.value,
+            speedVariance: +$in.speedVar.value,
+            gravity: +$in.gravity.value,
+            drag: +$in.drag.value,
+            shape,
+            emoji: $emoji.value || '🎉',
+            sizeMin: +$in.sizeMin.value,
+            sizeMax: +$in.sizeMax.value,
+            lifeMin: +$in.lifeMin.value,
+            lifeMax: +$in.lifeMax.value,
+        };
+    }
+
+    function burst(x, y) {
+        const cfg = getConfig();
+        if (x !== undefined) { cfg.x = x; cfg.y = y; }
+        c.burst(cfg);
+    }
+
+    // ── Slider value displays. toFixed here is fine: 'input' fires at interaction
+    //    rate and stops the instant the drag ends -- it is not a per-frame cost. ────
+    const FIXED1 = new Set(['spread', 'lifeMin', 'lifeMax']);
+    for (const id of SLIDERS) {
+        const el = $in[id], out = $out[id];
+        if (!el || !out) continue;
+        el.addEventListener('input', () => {
+            const raw = el.value;
+            out.textContent = id === 'drag' ? (+raw).toFixed(3) : FIXED1.has(id) ? (+raw).toFixed(1) : raw;
+        });
+    }
+
+    $shape.addEventListener('change', () => {
+        $emojiRow.style.display = $shape.value === 'emoji' ? '' : 'none';
+    });
+
+    // ── Presets. The four canonical ones are the LIBRARY's exported `presets`, so the
+    //    demo stays in lockstep with the package instead of hand-copying values that
+    //    drift. The library presets use radians + engine field names already; we map
+    //    them onto the slider UI (degrees, split min/max). Two extra buttons are demo-
+    //    only flavours, clearly marked. ─────────────────────────────────────────────
+    const DEG = 180 / Math.PI;
+
+    // Map a library preset (engine shape) -> the slider UI's flat shape.
+    function presetToUI(p) {
+        return {
+            count: p.count, spread: p.spread, angle: Math.round(p.angle * DEG),
+            speed: p.speed, speedVar: p.speedVariance, gravity: p.gravity, drag: p.drag,
+            shape: p.shape, sizeMin: p.sizeMin, sizeMax: p.sizeMax, lifeMin: p.lifeMin, lifeMax: p.lifeMax,
+        };
+    }
+
+    const UI_PRESETS = {
+        fireworks: presetToUI(presets.fireworks),
+        cannons:   presetToUI(presets.cannons),
+        snow:      presetToUI(presets.snow),
+        pride:     presetToUI(presets.pride),
+        // demo-only flavours (not in the package export)
+        golden:  { count: 100, spread: 1.8, angle: -90, speed: 500, speedVar: 250, gravity: 500, drag: 0.98, shape: 'rect', sizeMin: 4, sizeMax: 10, lifeMin: 2.0, lifeMax: 4.0 },
+        emoji:   { count: 30, spread: 2.5, angle: 90, speed: 80, speedVar: 40, gravity: 200, drag: 0.99, shape: 'emoji', sizeMin: 14, sizeMax: 24, lifeMin: 2.0, lifeMax: 4.0 },
+    };
+
+    // Which presets carry an OKLCH palette (routed through colorsFromPalette on fire).
+    const PRESET_COLORS = {
+        pride: colorsFromPalette(presets.pride.colors),
+    };
+
+    function applyPreset(name) {
+        const p = UI_PRESETS[name];
+        if (!p) return;
+        $in.count.value = p.count;
+        $in.spread.value = p.spread;
+        $in.angle.value = p.angle;
+        $in.speed.value = p.speed;
+        $in.speedVar.value = p.speedVar;
+        $in.gravity.value = p.gravity;
+        $in.drag.value = p.drag;
+        $shape.value = p.shape;
+        $in.sizeMin.value = p.sizeMin;
+        $in.sizeMax.value = p.sizeMax;
+        $in.lifeMin.value = p.lifeMin;
+        $in.lifeMax.value = p.lifeMax;
+        for (const id of SLIDERS) $in[id] && $in[id].dispatchEvent(new Event('input'));
+        $shape.dispatchEvent(new Event('change'));
+    }
+
+    for (const btn of document.querySelectorAll('.preset')) {
+        btn.addEventListener('click', () => {
+            for (const b of document.querySelectorAll('.preset')) b.classList.remove('active');
+            btn.classList.add('active');
+            const name = btn.dataset.preset;
+            applyPreset(name);   // sync the sliders (for display + further tweaking)
+
+            // Fire it from the button via fromElement() -- the library helper that reads
+            // getBoundingClientRect() once and returns an { x, y } origin. For the four
+            // canonical presets we spread the LIBRARY preset object directly rather than
+            // re-reading the sliders: a slider's `step` snaps values (snow's spread is
+            // 2.9845 rad, which a step=0.1 input would round), so re-reading would fire a
+            // slightly different effect than the package ships. The demo-only flavours
+            // have no library object, so they use the (already exact) slider config.
+            const libPreset = presets[name];
+            const cfg = libPreset ? { ...libPreset } : getConfig();
+            const colors = PRESET_COLORS[name];
+            if (colors) cfg.colors = colors;
+            c.burst(fromElement(btn, cfg));
+        });
+    }
+
+    // ── Actions ────────────────────────────────────────────────────────────────
+    $burstBtn.addEventListener('click', () => burst());
+
+    $sprayBtn.addEventListener('click', () => {
+        const cfg = getConfig();
+        cfg.duration = 1500;
+        cfg.rate = Math.max(1, Math.round(cfg.count / 20));
+        c.spray(cfg);
+    });
+
+    // Follow-spray: a continuous stream that chases the pointer (v1.2.0 followPointer).
+    // Toggle on/off; the library binds a passive pointer listener only while it runs.
+    let following = false;
+    $followBtn.addEventListener('click', () => {
+        following = !following;
+        $followBtn.classList.toggle('primary', following);
+        $followBtn.setAttribute('aria-pressed', following ? 'true' : 'false');
+        if (following) {
+            const cfg = getConfig();
+            cfg.duration = 60_000;          // long-lived; toggled off manually
+            cfg.rate = Math.max(1, Math.round(cfg.count / 30));
+            cfg.followPointer = true;
+            c.spray(cfg);
+        } else {
+            c.clear();
+        }
+    });
+
+    $clearBtn.addEventListener('click', () => {
+        c.clear();
+        if (following) { following = false; $followBtn.classList.remove('primary'); $followBtn.setAttribute('aria-pressed', 'false'); }
+    });
+
+    // Click anywhere on the stage to burst at the pointer. Coordinates pass straight
+    // through -- see pointerToCanvas above.
+    $stage.addEventListener('click', (e) => {
+        const { x, y } = pointerToCanvas(e);
+        burst(x, y);
+    });
+
+    // ── Seed ───────────────────────────────────────────────────────────────────
+    $seedBtn.addEventListener('click', () => {
+        c.seed(42);
+        currentSeed = 42;
+        $seed.textContent = '42';
+    });
+
+    // ── Code preview ───────────────────────────────────────────────────────────
+    let codeVisible = false;
+    $codeBtn.addEventListener('click', () => {
+        codeVisible = !codeVisible;
+        if (codeVisible) {
+            const cfg = getConfig();
+            let code = `<span class="kw">import</span> { <span class="fn">confetti</span> } <span class="kw">from</span> <span class="str">'@zakkster/lite-confetti'</span>;\n\n<span class="fn">confetti</span>({`;
+            code += `\n  count: <span class="num">${cfg.count}</span>,`;
+            code += `\n  spread: <span class="num">${cfg.spread.toFixed(1)}</span>,`;
+            code += `\n  angle: <span class="num">${cfg.angle.toFixed(2)}</span>,`;
+            code += `\n  speed: <span class="num">${cfg.speed}</span>,`;
+            code += `\n  speedVariance: <span class="num">${cfg.speedVariance}</span>,`;
+            code += `\n  gravity: <span class="num">${cfg.gravity}</span>,`;
+            code += `\n  drag: <span class="num">${cfg.drag}</span>,`;
+            code += `\n  shape: <span class="str">'${cfg.shape}'</span>,`;
+            if (cfg.shape === 'emoji') code += `\n  emoji: <span class="str">'${cfg.emoji}'</span>,`;
+            code += `\n  sizeMin: <span class="num">${cfg.sizeMin}</span>,`;
+            code += `\n  sizeMax: <span class="num">${cfg.sizeMax}</span>,`;
+            code += `\n  lifeMin: <span class="num">${cfg.lifeMin}</span>,`;
+            code += `\n  lifeMax: <span class="num">${cfg.lifeMax}</span>,`;
+            code += `\n});`;
+            $codeBox.innerHTML = code;
+        }
+        $codeBox.classList.toggle('visible', codeVisible);
+    });
+
+    // ── Live HUD (alive count). rAF-driven, throttled to ~10Hz, and it only touches
+    //    the DOM when the number actually changes -- so an idle stage writes nothing
+    //    and allocates nothing. (Replaces the old setInterval that re-queried #aliveHud
+    //    and re-wrote textContent 10x/s forever, even at rest.) ───────────────────
+    let _lastAlive = -1, _hudFrame = 0;
+    function hudLoop() {
+        // ~10Hz: at 60fps a mask of 7 lands every ~117ms; cheap and allocation-free.
+        if ((_hudFrame++ & 7) === 0) {
+            const n = c.count;
+            if (n !== _lastAlive) { _lastAlive = n; $alive.textContent = n; }
+        }
+        requestAnimationFrame(hudLoop);
+    }
+    requestAnimationFrame(hudLoop);
+
+    // ── Initial state hooked from the DOM's declared preset, then one welcome burst ──
+    document.querySelector('.preset.active')?.click();
+    setTimeout(() => burst(), 400);
+</script>
+</body>
+</html>
