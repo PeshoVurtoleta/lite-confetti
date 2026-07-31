@@ -181,3 +181,18 @@ comment decoration de-boxed) -- closes the gap decisions/0001 flagged for F1.
 Tests: 57 unit (was 44) + the nine torture tiers extended (T1 validation, T5 custom-shape/
 flutter/sway determinism lane, T6 custom-pool alloc gate, T8 per-instance isolation proof,
 T9 sway control). No runtime dep change.
+
+## v1.3.1 -- fail-closed input validation + count fix
+
+Hardening release, no new public API. Default look, default positions, and the committed
+fingerprint (1569828004) all unchanged (validation is a no-op for in-range defaults).
+
+Every numeric option on burst()/spray() is now sanitised: a non-finite value coerces to
+its documented default rather than poisoning a particle. Previously speed:NaN drew a NaN
+position (hashing silently as 0), lifeMax:NaN made a particle immortal (NaN <= 0 is
+false), and colors:null threw on .map. drag is additionally clamped to [0,1]. A call-time
+typo degrades gracefully -- the same fail-closed stance as an unknown shape name falling
+back to rect (registerShape's throw-on-bad-def is unchanged; that is setup, not a
+per-call tunable). destroy() now zeroes the count getter (was left stale). Internals:
+num()/nonneg() coercion helpers beside clamp01 (once per burst, never on the hot path);
+a non-enumerable __stats() conservation probe for the torture gate. Tests: 73 unit.

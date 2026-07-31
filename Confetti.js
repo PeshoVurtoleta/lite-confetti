@@ -1,10 +1,13 @@
 /**
- * @zakkster/lite-confetti v1.3.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.3.1 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.3.1 adds: fail-closed input validation -- every non-finite/out-of-range numeric
+ * option on burst()/spray() coerces to its documented default (no NaN positions, no
+ * immortal particles); destroy() now zeroes the count getter.
  * v1.3.0 adds: instance.registerShape() for custom vector + image-sprite shapes
  * (per-instance, seed-sealed), and tunable flutter/sway on burst()/spray().
  * v1.2.0 added: named presets (fireworks / cannons / snow / pride),
@@ -92,6 +95,19 @@ const SWAY_PX = 60;
 // zero"). Used at spawn time only, never on the render hot path.
 function clamp01(v, dflt) {
     return Number.isFinite(v) ? (v < 0 ? 0 : v > 1 ? 1 : v) : dflt;
+}
+
+// Fail-closed numeric coercion for call-time options. A non-finite value (NaN/Infinity,
+// or a caller typo like a string) coerces to `dflt` instead of poisoning a particle's
+// physics -- "fail closed on every unverified state, null is not zero". Unlike clamp01
+// these are unbounded above; `nonneg` additionally floors at 0 for extents/counts that
+// have no meaning when negative. Called once per burst/spray, never on the render loop.
+function num(v, dflt) {
+    return Number.isFinite(v) ? v : dflt;
+}
+function nonneg(v, dflt) {
+    const n = Number.isFinite(v) ? v : dflt;
+    return n < 0 ? 0 : n;
 }
 
 
@@ -640,8 +656,27 @@ export function createConfetti(canvas, {
               } = {}) {
             if (destroyed) return;
 
-            const cx = x ?? cw / 2;
-            const cy = y ?? ch * 0.33;
+            // Fail closed: coerce every numeric option to a finite, in-range value before
+            // it can reach a particle. A non-finite speed/gravity would paint a NaN
+            // position (hashing silently as 0); a non-finite lifeMax would make a particle
+            // immortal (NaN <= 0 is false). A call-time typo must not crash or poison a
+            // running animation, so we coerce to the documented default rather than throw.
+            count = Math.floor(nonneg(count, 80));
+            spread = num(spread, 1.2);
+            speed = num(speed, 400);
+            speedVariance = num(speedVariance, 200);
+            gravity = num(gravity, 600);
+            drag = clamp01(drag, 0.98);
+            sizeMin = nonneg(sizeMin, 5);
+            sizeMax = nonneg(sizeMax, 12);
+            lifeMin = nonneg(lifeMin, 1.5);
+            lifeMax = nonneg(lifeMax, 3.0);
+            angle = num(angle, -Math.PI / 2);
+            // A null/empty colors array would throw on .map (fail open); fall back to the defaults.
+            if (!Array.isArray(colors) || colors.length === 0) colors = DEFAULT_COLORS;
+
+            const cx = num(x, cw / 2);
+            const cy = num(y, ch * 0.33);
             // Unknown shape names fail closed to rect (id 0), matching pre-1.3.0 behaviour.
             const shapeId = shapeName2Id.get(shape) ?? 0;
             // Rasterize the emoji glyph now (once), so the first frame has no hitch.
@@ -712,6 +747,25 @@ export function createConfetti(canvas, {
                   followPointer = false,
               } = {}) {
             if (destroyed) return;
+
+            // Fail closed (see burst): coerce every numeric option to a finite, in-range
+            // value before use. x/y coerce to undefined (not a baked centre) so the
+            // dynamic `?? cw/2` fallback still re-centres if the canvas resizes mid-spray.
+            duration = nonneg(duration, 1000);
+            rate = Math.floor(nonneg(rate, 5));
+            spread = num(spread, 0.8);
+            speed = num(speed, 300);
+            speedVariance = num(speedVariance, 150);
+            gravity = num(gravity, 500);
+            drag = clamp01(drag, 0.98);
+            sizeMin = nonneg(sizeMin, 4);
+            sizeMax = nonneg(sizeMax, 10);
+            lifeMin = nonneg(lifeMin, 1.2);
+            lifeMax = nonneg(lifeMax, 2.5);
+            angle = num(angle, -Math.PI / 2);
+            if (!Number.isFinite(x)) x = undefined;
+            if (!Number.isFinite(y)) y = undefined;
+            if (!Array.isArray(colors) || colors.length === 0) colors = DEFAULT_COLORS;
 
             const cx = x ?? cw / 2;
             const cy = y ?? ch * 0.33;
@@ -845,8 +899,22 @@ export function createConfetti(canvas, {
             if (_ptrBound) { window.removeEventListener('pointermove', _onPointerMove); _ptrBound = false; }
             releaseTicker();
             pool.life.fill(0);
+            aliveCount = 0; // keep the count getter honest: a destroyed pool has 0 alive
         },
     };
+
+    // Non-enumerable, undocumented, test-only conservation probe (decision 0004): lets the
+    // torture gate assert the count getter matches the actual live-slot count and that a
+    // destroyed pool truly holds zero. Non-enumerable so it never widens the public shape
+    // (Object.keys(api) is unchanged) and Confetti.d.ts stays a no-change patch.
+    Object.defineProperty(api, '__stats', {
+        enumerable: false,
+        value() {
+            let live = 0;
+            for (let i = 0; i < pool.life.length; i++) if (pool.life[i] > 0) live++;
+            return { cap: pool.life.length, aliveGetter: aliveCount, aliveActual: live };
+        },
+    });
 
     return api;
 }

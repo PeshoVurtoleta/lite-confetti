@@ -5,8 +5,11 @@
  * the matching gate is blind and T9 fails the whole run. It folds and widens F0's
  * Phase C:
  *
- *   K1 NaN detector-- the assertFinite draw path throws on a non-finite position, so
- *                     a NaN that would otherwise hash silently as 0 is loud.
+ *   K1 NaN detector-- (a) the assertFinite draw path throws on a non-finite position, so
+ *                     a NaN that would otherwise hash silently as 0 is loud; (b) POISON:
+ *                     a burst carrying a full barrage of non-finite options must pump
+ *                     WITHOUT tripping it -- proof v1.3.1 fail-closed sanitisation holds
+ *                     end-to-end (pre-1.3.1 this threw; the inversion is the regression guard).
  *   K2 retention   -- a dropped-but-NOT-destroyed instance stays live (Phase A can
  *                     see a real leak).
  *   K3 alloc       -- a per-frame-allocating loop reads > floor (the retained-bytes
@@ -20,11 +23,9 @@
  *   K6 end-to-end  -- TORTURE_CONTROL=alloc drives a per-frame-allocating soak that
  *                     MUST breach maxMajor:0, then exits non-zero.
  *
- * ORDER MATTERS for K1 only: its end-to-end variant drives a throwing update through
- * the SHARED lite-ticker, which leaves the ticker unscheduled after the throw. The
- * ticker recovers cleanly once its listener count returns to 0, so K1 runs FIRST --
- * before K2 registers a permanent (deliberately-leaked) listener -- and then
- * self-checks that a fresh instance integrates again before the tier continues.
+ * Since v1.3.1 sanitises inputs, K1b no longer throws through the ticker, so it can no
+ * longer corrupt the shared scheduler; K1 still runs first and self-checks that a fresh
+ * instance integrates, guarding against any future NaN-through-ticker regression.
  */
 
 import {
@@ -36,12 +37,13 @@ import {
 export async function run() {
     if (!HAS_GC) { log('  T9 inconclusive -- run with node --expose-gc'); return; }
 
-    // K1 -- NaN detector control. Runs FIRST, while the shared ticker has no other
-    // listeners (see the header note). Two injections must trip the assertFinite draw
-    // path: (a) a direct translate(NaN), proving the check itself bites; (b) a real
-    // burst({speed:NaN}) + pump, proving confetti actually propagates NaN into drawn
-    // positions -- the gap T1 documents, made loud here. Then self-check that the
-    // ticker recovered (a throwing _tick leaves it unscheduled until listeners hit 0).
+    // K1 -- NaN detector + input-sanitisation poison control. K1a proves the assertFinite
+    // draw path itself bites: a direct translate(NaN) throws, so the check is not blind.
+    // K1b is the poison control for v1.3.1 fail-closed validation: a burst carrying a full
+    // barrage of non-finite options must pump WITHOUT tripping assertFinite -- every bad
+    // input is coerced before it can reach a drawn position (pre-1.3.1 this threw; the
+    // inversion is the end-to-end regression guard). Then self-check a fresh instance
+    // integrates, so a later control's failure is never a corrupted ticker.
     {
         const direct = makeCanvas({ assertFinite: true });
         const errDirect = capture(() => direct.getContext().translate(NaN, 5));
@@ -49,19 +51,24 @@ export async function run() {
 
         const cv = makeCanvas({ record: true, assertFinite: true });
         const c = createConfetti(cv, { seed: 3, maxParticles: 64 });
-        c.burst({ count: 20, speed: NaN, lifeMin: 5, lifeMax: 5 });
-        const errE2E = capture(() => pump(1, 16));
-        c.destroy(); // listeners back to 0 -> next add() reschedules the ticker
-        if (errE2E === null) {
-            die('T9 K1b: burst({speed:NaN}) drew a finite position -- either confetti sanitised it (update the T1 note) or the detector is blind');
+        c.burst({
+            count: 20, x: NaN, y: NaN, speed: NaN, speedVariance: NaN, gravity: NaN,
+            angle: NaN, drag: NaN, spread: NaN, sizeMin: NaN, sizeMax: NaN,
+            lifeMin: NaN, lifeMax: NaN,
+        });
+        const errE2E = capture(() => pump(3, 16));
+        if (errE2E !== null) {
+            c.destroy();
+            die('T9 K1b: a burst of non-finite options tripped assertFinite (' + errE2E.message + ') -- fail-closed sanitisation is NOT holding');
         }
+        if (c.count !== 20) { c.destroy(); die('T9 K1b: poison burst spawned ' + c.count + ' != 20 -- count was not sanitised to a finite integer'); }
+        c.destroy();
 
-        // Self-check: a fresh instance must integrate again, or a later control's
-        // failure would be a corrupted ticker, not a blind gate.
+        // Self-check: a fresh instance must integrate again.
         const rc = createConfetti(makeCanvas(), { seed: 8, maxParticles: 64 });
         rc.burst({ count: 10, lifeMin: 5, lifeMax: 5 });
         pump(1, 16);
-        if (rc.count !== 10) die('T9 K1: ticker did not recover after the NaN throw (fresh count ' + rc.count + ' != 10)');
+        if (rc.count !== 10) die('T9 K1: ticker did not integrate a fresh burst (count ' + rc.count + ' != 10)');
         rc.destroy();
     }
 
@@ -143,7 +150,7 @@ export async function run() {
         b.destroy();
     }
 
-    log('  T9 ok -- retention, alloc, determinism, NaN-detector, count-channel and sway controls all bite');
+    log('  T9 ok -- NaN-detector + sanitiser-poison, retention, alloc, determinism, count-channel and sway controls all bite');
 
     // K6 -- end-to-end alloc red path.
     if (CONTROL === 'alloc') {

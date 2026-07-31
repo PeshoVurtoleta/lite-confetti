@@ -2,20 +2,19 @@
  * T1 -- degenerate inputs.
  *
  * Feed burst()/spray() and createConfetti() the values a real caller eventually
- * passes by accident, and assert the engine stays WITHIN ITS BOUNDS: no throw, and
- * count() always in [0, cap]. This is lite-bvh's "degenerate query values" tier for
- * a particle pool.
+ * passes by accident, and assert the engine FAILS CLOSED: no throw, count() always in
+ * [0, cap], and -- since v1.3.1 -- every non-finite numeric option is coerced to its
+ * documented default before it can reach a particle, so a drawn position is NEVER
+ * non-finite. That last claim is asserted under the assertFinite draw path, which turns
+ * any leaked NaN into a hard throw. This is lite-bvh's "degenerate query values" tier
+ * for a particle pool.
  *
- * IMPORTANT, and deliberately honest: confetti does NOT sanitise non-finite numeric
- * options (there is no input validation in burst/spray). A `speed:NaN` propagates
- * NaN into a particle's velocity and thus its drawn position; a `lifeMin:NaN` makes
- * a particle immortal (NaN <= 0 is false, so it never dies). Those are real,
- * documented gaps (see decisions/0002) that a byte-unchanged patch cannot fix. So
- * this tier asserts what IS true for non-finite input -- no crash, count bounded --
- * and, crucially, that a non-finite POSITION never blocks a particle's DEATH when
- * its life is finite (the pool still drains). It does NOT assert positions stay
- * finite for garbage input; the black-box NaN detector is exercised as a control in
- * T9, where a NaN is injected on purpose and the draw path must flag it.
+ * History (see decisions/0002 + 0004): pre-1.3.1 confetti did NOT sanitise numerics --
+ * a `speed:NaN` propagated NaN into a drawn position (hashing silently as 0) and a
+ * `lifeMax:NaN` made a particle immortal (NaN <= 0 is false, so it never died). 0004
+ * closed that gap. This tier now PROVES the coercion holds (positions finite, the
+ * immortal bug gone) rather than merely documenting the old bounded-garbage behaviour.
+ * The detector itself is still exercised as a control in T9 (K1a, a direct NaN inject).
  */
 
 import { createConfetti, makeCanvas, pump, check, capture, withSilencedWarn } from './harness.mjs';
@@ -63,30 +62,50 @@ export function run() {
         c.destroy();
     }
 
-    // --- non-finite numerics: NO CRASH, count bounded, and a FINITE life still
-    //     drains the pool even though positions may be non-finite. -------------
-    const nonFiniteFiniteLife = [
+    // --- non-finite numerics FAIL CLOSED (v1.3.1): each is coerced to its default, so
+    //     NO throw, count bounded, AND -- under assertFinite -- NO drawn position is
+    //     ever non-finite. Every finite-life burst still drains the pool. -----------
+    const poison = [
         ['speed:NaN', { count: 60, speed: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['speedVariance:Infinity', { count: 60, speedVariance: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
         ['gravity:Infinity', { count: 60, gravity: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
         ['gravity:-Infinity', { count: 60, gravity: -Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
-        ['sizeMin:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spread:Infinity', { count: 60, spread: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['x/y:NaN', { count: 60, x: NaN, y: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['colors:null', { count: 60, colors: null, lifeMin: 0.3, lifeMax: 0.3 }],
     ];
-    for (const [label, opts] of nonFiniteFiniteLife) {
-        const c = fresh();
+    for (const [label, opts] of poison) {
+        const cv = makeCanvas({ assertFinite: true });
+        const c = createConfetti(cv, { seed: 3, maxParticles: CAP });
         const err = capture(() => {
             c.burst(opts);
             pump(1, 16);
             // count must be bounded regardless of the garbage
             check(c.count >= 0 && c.count <= CAP, () => `T1 ${label}: count ${c.count} out of [0, ${CAP}]`);
-            // finite life -> drains within ~1s (0.3s life, 50ms/frame)
+            // finite life -> drains within ~1.5s (0.3s life, 50ms/frame)
             for (let f = 0; f < 30; f++) pump(1, 50);
         });
-        check(err === null, () => `T1 ${label}: threw ${err && err.message}`);
+        check(err === null, () =>
+            `T1 ${label}: coercion failed -- threw or drew a non-finite position (${err && err.message})`);
+        check(c.count === 0, () => `T1 ${label}: pool did not drain (count ${c.count} != 0)`);
+        c.destroy();
+    }
+
+    // --- the immortal-particle bug (0002/0004): a NaN life made NaN <= 0 false, so the
+    //     particle NEVER died. Coerced to the default life now, it MUST expire. --------
+    {
+        const cv = makeCanvas({ assertFinite: true });
+        const c = createConfetti(cv, { seed: 5, maxParticles: CAP });
+        c.burst({ count: 50, lifeMin: NaN, lifeMax: NaN });
+        pump(1, 16);
+        check(c.count === 50, () => `T1 immortal: NaN life did not spawn a bounded burst (count ${c.count} != 50)`);
+        for (let f = 0; f < 90; f++) pump(1, 50); // default life <= 3.0s; drain over 4.5s
         check(c.count === 0, () =>
-            `T1 ${label}: non-finite input blocked particle DEATH (count ${c.count} != 0) -- ` +
-            `a finite life must still expire`);
+            `T1 immortal: a NaN-life particle stayed alive (count ${c.count} != 0) -- ` +
+            `coercion to the default life failed`);
         c.destroy();
     }
 
@@ -124,8 +143,8 @@ export function run() {
         c.destroy();
     }
 
-    // --- flutter/sway ARE validated (clamp01): non-finite coerces to default, so a
-    //     NaN knob -- unlike a NaN speed -- must NOT produce a non-finite position.
+    // --- flutter/sway are clamped into [0,1] (clamp01): a non-finite OR out-of-range
+    //     knob coerces to default/edge, so it must NOT produce a non-finite position.
     //     assertFinite makes any leaked NaN a hard throw. -------------------------
     {
         const cv = makeCanvas({ assertFinite: true });

@@ -39,24 +39,53 @@ export function run() {
         c.destroy();
     }
 
-    // A2 -- destroy() mid-pump stops the render loop. Note: destroy() zeroes the
-    // pool's life but NOT the count getter (only clear()/update() touch aliveCount),
-    // so count freezes at its last integrated value -- a documented stale-count quirk
-    // (see decisions/0002). The load-bearing invariant is that the ticker is truly
-    // OFF: pumping after destroy() must not change count for this instance.
+    // A2 -- destroy() mid-pump stops the render loop AND reports zero. Pre-1.3.1
+    // destroy() zeroed pool.life but not aliveCount, so count froze at its last value
+    // (the stale-count quirk decision 0002 documented). Decision 0004 fixed it:
+    // destroy() now zeroes aliveCount too, so count reads 0 immediately and the
+    // conservation probe (__stats) shows 0 live slots. The ticker must also be truly
+    // OFF: pumping after destroy() drives nothing.
     {
         const c = fresh();
-        let frozen = -1;
+        let atDestroy = -1;
         const err = capture(() => {
             c.burst({ count: 100, lifeMin: 5, lifeMax: 5 });
             pump(3, 16);
             c.destroy();
-            frozen = c.count;
+            atDestroy = c.count;
             pump(10, 16); // ticker was unregistered; must drive nothing for this instance
         });
         check(err === null, () => `T3 A2: threw ${err && err.message}`);
-        check(c.count === frozen, () =>
-            `T3 A2: count changed ${frozen} -> ${c.count} after destroy() -- render loop still running`);
+        check(atDestroy === 0, () => `T3 A2: destroy() left count ${atDestroy} != 0 -- the stale-count bug is back`);
+        check(c.count === 0, () => `T3 A2: count moved to ${c.count} after destroy() -- render loop still running`);
+        const s = c.__stats();
+        check(s.aliveActual === 0 && s.aliveGetter === 0, () =>
+            `T3 A2: __stats after destroy shows getter=${s.aliveGetter} actual=${s.aliveActual}, both must be 0`);
+    }
+
+    // A7 -- conservation: the count getter must equal the true live-slot count at every
+    // checkpoint of a churning soak (the getter never drifts from the pool). __stats is
+    // the non-enumerable white-box probe decision 0002 deferred and 0004 landed.
+    {
+        const c = fresh(17);
+        const err = capture(() => {
+            for (let f = 0; f < 400; f++) {
+                c.burst({ count: 12, lifeMin: 0.4, lifeMax: 1.2, shape: f % 3 ? 'rect' : 'star' });
+                pump(1, 16);
+                if (f % 17 === 0) {
+                    const s = c.__stats();
+                    check(s.aliveGetter === s.aliveActual, () =>
+                        `T3 A7: conservation broke at frame ${f} -- count getter ${s.aliveGetter} != live slots ${s.aliveActual}`);
+                    check(s.aliveActual <= s.cap, () => `T3 A7: live ${s.aliveActual} > cap ${s.cap} at frame ${f}`);
+                }
+            }
+            c.clear();
+            const s = c.__stats();
+            check(s.aliveGetter === 0 && s.aliveActual === 0, () =>
+                `T3 A7: after clear() getter=${s.aliveGetter} actual=${s.aliveActual}, both must be 0`);
+        });
+        check(err === null, () => `T3 A7: threw ${err && err.message}`);
+        c.destroy();
     }
 
     // A3 -- double (and triple) destroy is idempotent.

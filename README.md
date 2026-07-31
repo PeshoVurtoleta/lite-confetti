@@ -79,7 +79,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `speed` | number | 400 | Initial particle speed center (px/s) |
 | `speedVariance` | number | 200 | Speed randomness range. Actual speed: `speed ± speedVariance` |
 | `gravity` | number | 600 | Downward acceleration in px/s². Higher = falls faster. |
-| `drag` | number | 0.98 | Per-frame velocity retention (0–1). 0.98 = 2% speed loss per frame. |
+| `drag` | number | 0.98 | Per-frame velocity retention, clamped to `0–1`. 0.98 = 2% speed loss per frame. |
 | `sizeMin` | number | 5 | Minimum particle width in CSS pixels |
 | `sizeMax` | number | 12 | Maximum particle width in CSS pixels |
 | `lifeMin` | number | 1.5 | Minimum particle lifetime in seconds |
@@ -91,6 +91,8 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `colors` | Array | 7 OKLCH defaults | Array of OKLCH objects `{ l, c, h }` or CSS strings |
 | `angle` | number | `-Math.PI / 2` | Center angle of emission cone in radians. -π/2 = upward. |
 | `onComplete` | Function | — | Called when all burst particles have died |
+
+**Inputs fail closed.** Every numeric option is sanitised before it can reach a particle: a non-finite value (`NaN`/`Infinity`, or a stray non-number) coerces to its default, `drag` clamps to `0–1`, and a `null`/empty `colors` falls back to the defaults. A call-time typo degrades gracefully — it never throws mid-animation or paints a `NaN` position — the same fail-closed stance as an unknown `shape` name falling back to `'rect'`. (`registerShape` is the one exception: a bad shape *definition* throws, because it is setup, not a per-call tunable.)
 
 ### Spray Options
 
@@ -424,6 +426,23 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ---
 
 ## Changelog
+
+Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.3.1
+
+**Fail-closed input validation + count fix.** No new public API; default look and the
+committed determinism fingerprint unchanged.
+
+- Every numeric `burst()`/`spray()` option is sanitised — a non-finite value coerces to its default, `drag` clamps to `0–1`, `null`/empty `colors` falls back to defaults. Fixes: `speed: NaN` drawing a `NaN` position, `lifeMax: NaN` making a particle immortal, `colors: null` throwing.
+- `destroy()` now zeroes the `.count` getter (was left reporting the last integrated count).
+
+### v1.3.0
+
+**Custom shapes + tunable flutter/sway.**
+
+- `registerShape(name, def)` — per-instance, seed-sealed custom **vector** or **image-sprite** shapes, usable as `burst({ shape: name })`. Fails closed on a bad name/def.
+- `flutter` (0–1, tumble depth, scale-only) and `sway` (0–1, horizontal drift). Defaults reproduce the pre-1.3.0 look and fingerprint exactly.
 
 ### v1.2.0
 

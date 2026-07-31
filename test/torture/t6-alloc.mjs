@@ -83,6 +83,24 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- registerShape dispatch/sprite/sway is allocating');
     }
 
+    // (4) A pool SPAWNED from out-of-range/garbage options (every one coerced by v1.3.1
+    // fail-closed sanitisation) must integrate with the same ~0 B/frame. Coercion runs
+    // once in burst(), never in the loop, and must not leave a value that de-opts
+    // update() into allocating. Large finite life keeps the pool full for the window.
+    const cp = createConfetti(makeCanvas(), { seed: 777, maxParticles: MAXP });
+    cp.burst({
+        count: MAXP, speed: NaN, gravity: Infinity, drag: NaN, angle: NaN, spread: NaN,
+        sizeMin: NaN, sizeMax: NaN, lifeMin: 1e6, lifeMax: 1e6, colors: null, sway: 0.5,
+    });
+    pump(1, 1000);
+    check(cp.count === MAXP, () => `T6: sanitised pool has ${cp.count} alive, expected ${MAXP}`);
+    const bpfPoison = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    cp.destroy();
+    if (bpfPoison > RETAIN_FLOOR_BPF) {
+        die('T6: sanitised-input update() retains ' + bpfPoison.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- coercion left the render loop allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -92,6 +110,7 @@ export async function run() {
     }
 
     log('  T6 ok -- update() ' + bpf.toFixed(2) + ' B/frame over ' + MAXP + ' particles ('
-        + bpfCustom.toFixed(2) + ' B/frame with custom vector+sprite+sway); '
+        + bpfCustom.toFixed(2) + ' B/frame custom vector+sprite+sway, '
+        + bpfPoison.toFixed(2) + ' B/frame from sanitised garbage inputs); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

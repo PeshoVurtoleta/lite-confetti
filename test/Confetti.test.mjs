@@ -568,4 +568,102 @@ describe('lite-confetti', () => {
             c.destroy();
         });
     });
+
+    // -------------------------------------------------------------------------
+    //  input validation + count/destroy consistency (v1.3.1, decision 0004)
+    // -------------------------------------------------------------------------
+    describe('fail-closed input validation', () => {
+        // A recording+assertFinite canvas turns any leaked non-finite draw position into
+        // a hard throw, so "doesNotThrow" here also proves positions stayed finite.
+        const bad = {
+            'speed:NaN': { speed: NaN },
+            'gravity:Infinity': { gravity: Infinity },
+            'angle:NaN': { angle: NaN },
+            'drag:NaN': { drag: NaN },
+            'spread:-Infinity': { spread: -Infinity },
+            'sizeMin/Max:NaN': { sizeMin: NaN, sizeMax: NaN },
+            'x/y:NaN': { x: NaN, y: NaN },
+            'colors:null': { colors: null },
+            'colors:[] empty': { colors: [] },
+            'count:NaN': { count: NaN },
+        };
+        for (const [label, opts] of Object.entries(bad)) {
+            it(`coerces ${label} without throwing or drawing a non-finite position`, () => {
+                const c = createConfetti(makeCanvas({ assertFinite: true }), { seed: 3, maxParticles: 128 });
+                assert.doesNotThrow(() => {
+                    c.burst({ count: 40, lifeMin: 0.3, lifeMax: 0.3, ...opts });
+                    pump(6, 16);
+                });
+                assert.ok(c.count >= 0 && c.count <= 128, `count ${c.count} out of range`);
+                c.destroy();
+            });
+        }
+
+        it('coerces a non-finite lifeMax so the particle is NOT immortal (bug fixed)', () => {
+            const c = createConfetti(makeCanvas(), { seed: 5, maxParticles: 128 });
+            c.burst({ count: 50, lifeMin: NaN, lifeMax: NaN }); // -> default life, must expire
+            pump(1, 16);
+            assert.equal(c.count, 50);
+            for (let f = 0; f < 90; f++) pump(1, 50); // default life <= 3.0s
+            assert.equal(c.count, 0, 'a NaN-life particle never died');
+            c.destroy();
+        });
+
+        it('clamps drag into [0,1] (drag:2 must not amplify velocity to Infinity)', () => {
+            const c = createConfetti(makeCanvas({ assertFinite: true }), { seed: 6, maxParticles: 128 });
+            assert.doesNotThrow(() => {
+                c.burst({ count: 40, drag: 2, lifeMin: 5, lifeMax: 5 });
+                for (let f = 0; f < 60; f++) pump(1, 16);
+            });
+            c.destroy();
+        });
+
+        it('sanitises spray() options too (duration/rate/physics)', () => {
+            const c = createConfetti(makeCanvas({ assertFinite: true }), { seed: 7, maxParticles: 128 });
+            assert.doesNotThrow(() => {
+                c.spray({ duration: NaN, rate: NaN, speed: NaN, gravity: Infinity, colors: null });
+                pump(10, 16);
+            });
+            assert.ok(c.count >= 0 && c.count <= 128);
+            c.destroy();
+        });
+
+        it('preserves the committed fingerprint (defaults are already in range)', () => {
+            // Identical to the deterministic-replay run: validation must be a no-op for
+            // in-range defaults, so the committed hash still reproduces post-sanitisation.
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8 });
+            pump(1, 1000); pump(29, 16);
+            const h = canvas.hash;
+            c.destroy();
+            assert.equal(h, COMMITTED_HASH, 'validation moved the seeded output');
+        });
+    });
+
+    describe('count / destroy consistency', () => {
+        it('destroy() zeroes count (no stale-count)', () => {
+            const c = createConfetti(makeCanvas(), { seed: 4, maxParticles: 128 });
+            c.burst({ count: 60, lifeMin: 5, lifeMax: 5 });
+            pump(2, 16);
+            assert.equal(c.count, 60);
+            c.destroy();
+            assert.equal(c.count, 0, 'destroy() left a stale count');
+        });
+
+        it('exposes a non-enumerable __stats conservation probe (not on the public shape)', () => {
+            const c = createConfetti(makeCanvas(), { seed: 8, maxParticles: 128 });
+            assert.ok(!Object.keys(c).includes('__stats'), '__stats must be non-enumerable');
+            c.burst({ count: 40, lifeMin: 5, lifeMax: 5 });
+            pump(1, 16);
+            const s = c.__stats();
+            assert.equal(s.aliveGetter, s.aliveActual, 'count getter drifted from live slots');
+            assert.equal(s.aliveGetter, 40);
+            assert.equal(s.cap, 128);
+            c.destroy();
+            const after = c.__stats();
+            assert.equal(after.aliveActual, 0);
+            assert.equal(after.aliveGetter, 0);
+        });
+    });
 });

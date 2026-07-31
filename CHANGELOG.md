@@ -3,6 +3,45 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.3.1] - 2026-07-31
+
+Hardening release. Closes the two correctness gaps flagged (and deferred) in
+decisions 0002 and 0003, both under the Law "fail closed on every unverified state,
+null is not zero". No new public API; the default look, default positions, and the
+committed determinism fingerprint (`1569828004`) are all unchanged -- validation is a
+no-op for the in-range defaults.
+
+### Fixed
+- **Numeric options now fail closed.** `burst()`/`spray()` sanitise every numeric
+  option: a non-finite value coerces to its documented default instead of poisoning a
+  particle. Previously a `speed: NaN` propagated NaN into a drawn position (hashing
+  silently as 0), a `lifeMax: NaN` made a particle **immortal** (`NaN <= 0` is false, so
+  it never died), and a `colors: null` **threw** on `.map`. `drag` is additionally
+  clamped to `[0,1]` (a retention factor above 1 amplified velocity). A call-time typo
+  now degrades gracefully rather than crashing or poisoning a running animation --
+  matching how an unknown `shape` name already falls back to rect.
+- **`destroy()` zeroes the count getter.** It cleared the pool's `life` but not the
+  `aliveCount` the `.count` getter returns, so a destroyed instance kept reporting its
+  last integrated count. `count` now reads `0` immediately after `destroy()`.
+
+### Changed
+- `drag` outside `[0,1]` is clamped (was applied verbatim). The documented range was
+  always `0-1`; only callers passing out-of-range values see a behaviour change.
+
+### Internal
+- Added `num()`/`nonneg()` fail-closed coercion helpers beside `clamp01`; all
+  sanitisation runs once per `burst`/`spray`, never on the render hot path (T6 proves a
+  pool spawned from garbage inputs still integrates at ~0 B/frame).
+- Added a **non-enumerable, undocumented** `__stats()` conservation probe (the
+  white-box introspection deferred in decision 0002): reports `{ cap, aliveGetter,
+  aliveActual }` so the torture gate can assert the count getter never drifts from the
+  true live-slot count. Non-enumerable, so the public shape and `Confetti.d.ts` are
+  unchanged.
+- Tests: 73 unit (was 57); torture tiers reworked -- T1 now proves coercion (finite
+  positions, immortal bug gone) instead of documenting the old bounded-garbage
+  behaviour, T3 adds a conservation soak + the fixed destroy/count assertion, T6 adds a
+  sanitised-input zero-alloc lane, T9 K1 inverts to a sanitiser-poison control.
+
 ## [1.3.0] - 2026-07-31
 
 First **feature** release on the F0/torture base. Adds custom shapes and tunable
