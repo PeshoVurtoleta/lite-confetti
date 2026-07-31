@@ -3,6 +3,42 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.2.3] - 2026-07-31
+
+Infrastructure only -- **no runtime or API change**. `Confetti.js` is byte-for-byte
+unchanged. This release rebuilds the torture gate in the suite's multi-tier shape
+(modelled on `@zakkster/lite-bvh`) so the render loop is stressed the way the rest of
+the suite is, not just gated for allocation.
+
+### Changed
+- The single-file three-phase gate (`test/torture.mjs`) is now a thin dispatcher over
+  **nine tier files** in `test/torture/` sharing one `harness.mjs`: `t0` metamorphic
+  laws, `t1` degenerate inputs, `t3` adversarial op orders, `t4` handle/stub/buffer
+  abuse, `t5` differential-determinism fuzz, `t6` the zero-alloc gate (F0's Phase B),
+  `t7` soak + occupancy conservation, `t8` cross-package poison + shared-ticker
+  retention (F0's Phase A), `t9` controls (F0's Phase C, widened). Nothing the old
+  gate proved was dropped; T2 (aliasing) is intentionally omitted, as in lite-bvh.
+- All tiers are **black-box**: confetti's pool is encapsulated, so they observe only
+  the public `count()` and the instrumented-ctx draw fingerprint, never private
+  arrays. `Confetti.js` stays untouched.
+
+### Added
+- Seeded-PRNG replay: `TORTURE_SEED=<n> npm run torture` reproduces any fuzz run.
+- Whole-suite red switch `CONFETTI_TORTURE_BREAK=1` (injects a retained allocation
+  into the real T6 hot loop; the gate must then exit non-zero).
+- `test/_env.mjs` gained an opt-in `assertFinite` draw-position check (default off, so
+  the committed determinism fingerprint is unchanged) used as T9's NaN-detector.
+
+### Notes (latent gaps surfaced by the new tiers -- not fixed here; see decisions/0002)
+- `burst`/`spray` do **not** validate numeric options: a non-finite `speed`/`gravity`
+  propagates NaN into particle positions until the particle's finite life expires, and
+  a NaN `life` makes a particle immortal. Garbage-in does not crash and the pool stays
+  bounded, but it is not fail-closed.
+- `destroy()` zeroes the pool's life but not the `count` getter, so a destroyed
+  instance reports its last integrated count until `clear()`/`update()` runs.
+  These are candidates for a future validation patch (a source change, so out of scope
+  for a byte-unchanged release).
+
 ## [1.2.2] - 2026-07-31
 
 Infrastructure only -- **no runtime or API change**. `Confetti.js` is byte-for-byte

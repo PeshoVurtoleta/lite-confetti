@@ -89,7 +89,7 @@ export function pointerListenerCount() { return (_win._listeners.pointermove || 
  * which is how the determinism gate proves seeded replays are byte-identical
  * without reaching into private pool arrays.
  */
-export function makeCanvas({ record = false } = {}) {
+export function makeCanvas({ record = false, assertFinite = false } = {}) {
     const c = { style: {}, parentElement: null, width: 0, height: 0, id: '' };
     Object.defineProperty(c, 'clientWidth', { value: 800, configurable: true });
     Object.defineProperty(c, 'clientHeight', { value: 600, configurable: true });
@@ -103,8 +103,19 @@ export function makeCanvas({ record = false } = {}) {
     // a committed baseline is portable; rotations (radians) are deliberately not
     // hashed for the same reason. Positions still encode the full physics
     // integration (velocity, gravity, drag), so this is a strong regression tripwire.
-    const mix = record
+    //
+    // `assertFinite` is the torture suite's black-box NaN detector. Confetti's pool
+    // is encapsulated, so a NaN that leaks into a particle's position cannot be seen
+    // by reading columns -- and it would hash SILENTLY as 0 (Math.round(NaN)|0 === 0).
+    // With this flag the draw path throws the instant a non-finite position appears,
+    // so a NaN is loud instead of invisible. Default OFF: the committed unit-test
+    // fingerprint (all-finite) is byte-identical whether or not this is enabled.
+    const mix = (record || assertFinite)
         ? (x, y) => {
+            if (assertFinite && !(Number.isFinite(x) && Number.isFinite(y))) {
+                throw new Error('non-finite draw position: translate(' + x + ', ' + y + ')');
+            }
+            if (!record) return;
             hash = (Math.imul(hash ^ (Math.round(x) | 0), 16777619)) >>> 0;
             hash = (Math.imul(hash ^ (Math.round(y) | 0), 16777619)) >>> 0;
         }
