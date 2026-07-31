@@ -146,4 +146,54 @@ export function run() {
         check(c.count === 0, () => `T5 F3: pool did not fully drain (count ${c.count})`);
         c.destroy();
     }
+
+    // --- F4: custom shapes + flutter + sway are DETERMINISTIC. Two same-seed
+    // instances register identical custom shapes in identical order, then run the same
+    // fuzzed stream with flutter/sway options -- their fingerprints must stay identical.
+    // A separate call-counter proves the custom VECTOR fn is actually being dispatched
+    // (the position hash cannot see shape geometry, so "dispatched at all" needs its
+    // own channel). ------------------------------------------------------------------
+    {
+        const seed = 424242;
+        const ca = makeCanvas({ record: true });
+        const cb = makeCanvas({ record: true });
+        const A = createConfetti(ca, { seed, maxParticles: CAP });
+        const B = createConfetti(cb, { seed, maxParticles: CAP });
+
+        let drawCalls = 0;
+        const heartA = (ctx, w) => { drawCalls++; ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, Math.PI * 2); ctx.fill(); };
+        const heartB = (ctx, w) => { ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, Math.PI * 2); ctx.fill(); };
+        A.registerShape('heart', heartA);
+        A.registerShape('logo', { image: makeCanvas() });
+        B.registerShape('heart', heartB);
+        B.registerShape('logo', { image: makeCanvas() });
+
+        const CUSTOM = ['rect', 'heart', 'emoji', 'logo', 'star'];
+        const prng = makePrng(SEED ^ 0x1a2b3c4d);
+        for (let i = 0; i < 1500; i++) {
+            const roll = prng() % 100;
+            if (roll < 50) {
+                pump(1, 8 + (prng() % 17));
+                check(ca.hash === cb.hash, () =>
+                    `T5 F4: op ${i} seed ${SEED}: same-seed custom-shape instances diverged (A ${ca.hash} != B ${cb.hash})`);
+            } else {
+                const o = {
+                    count: 1 + (prng() % 200),
+                    shape: CUSTOM[prng() % CUSTOM.length],
+                    speed: 100 + (prng() % 500),
+                    gravity: 200 + (prng() % 600),
+                    lifeMin: 0.5 + (prng() % 200) / 100,
+                    lifeMax: 2.5 + (prng() % 200) / 100,
+                    flutter: (prng() % 101) / 100,
+                    sway: (prng() % 101) / 100,
+                };
+                A.burst(o);
+                B.burst(o);
+            }
+        }
+        check(drawCalls > 0, () =>
+            `T5 F4: the custom vector draw fn was never invoked -- registerShape dispatch is not reaching it`);
+        A.destroy();
+        B.destroy();
+    }
 }

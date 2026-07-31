@@ -90,14 +90,73 @@ export function run() {
         c.destroy();
     }
 
+    // --- registerShape: bad arguments FAIL CLOSED (throw), unlike numeric options.
+    //     A shape is a structural contract, not a tunable, so garbage throws loudly
+    //     rather than silently degrading. ------------------------------------------
+    {
+        const c = fresh();
+        const heart = (ctx, w) => { ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, Math.PI * 2); ctx.fill(); };
+        for (const [label, def, name] of [
+            ['empty name', heart, ''],
+            ['non-string name', heart, 42],
+            ['override built-in rect', heart, 'rect'],
+            ['override built-in emoji', heart, 'emoji'],
+            ['def is a number', 123, 'bad1'],
+            ['def is null', null, 'bad2'],
+            ['def is {} (no draw/image)', {}, 'bad3'],
+        ]) {
+            const err = capture(() => c.registerShape(name, def));
+            check(err !== null, () => `T1 registerShape ${label}: must throw, did not`);
+        }
+        c.destroy();
+    }
+
+    // --- unknown shape name in burst/spray falls back to rect (no throw, bounded) -
+    {
+        const c = fresh();
+        const err = capture(() => {
+            c.burst({ count: 30, shape: 'no-such-shape', lifeMin: 5, lifeMax: 5 });
+            c.spray({ rate: 3, duration: 32, shape: 'also-missing' });
+            pump(2, 16);
+        });
+        check(err === null, () => `T1 unknown-shape: threw ${err && err.message}`);
+        check(c.count >= 0 && c.count <= CAP, () => `T1 unknown-shape: count ${c.count} out of range`);
+        c.destroy();
+    }
+
+    // --- flutter/sway ARE validated (clamp01): non-finite coerces to default, so a
+    //     NaN knob -- unlike a NaN speed -- must NOT produce a non-finite position.
+    //     assertFinite makes any leaked NaN a hard throw. -------------------------
+    {
+        const cv = makeCanvas({ assertFinite: true });
+        const c = createConfetti(cv, { seed: 9, maxParticles: CAP });
+        const err = capture(() => {
+            c.burst({ count: 40, flutter: NaN, sway: Infinity, lifeMin: 5, lifeMax: 5 });
+            c.burst({ count: 40, flutter: -5, sway: 999, lifeMin: 5, lifeMax: 5 });
+            for (let f = 0; f < 20; f++) pump(1, 16);
+        });
+        check(err === null, () =>
+            `T1 flutter/sway garbage produced a non-finite position or threw: ${err && err.message}`);
+        check(c.count >= 0 && c.count <= CAP, () => `T1 flutter/sway: count ${c.count} out of range`);
+        c.destroy();
+    }
+
     // --- bad canvas objects: createConfetti must degrade to an inert stub -------
     withSilencedWarn(() => {
         const nullStub = createConfetti(null);
-        const errN = capture(() => { nullStub.burst({ count: 10 }); nullStub.spray({}); nullStub.clear(); nullStub.destroy(); });
+        const errN = capture(() => {
+            nullStub.burst({ count: 10 }); nullStub.spray({}); nullStub.clear();
+            check(nullStub.registerShape('x', () => {}) === -1, () => 'T1 null stub registerShape != -1');
+            nullStub.destroy();
+        });
         check(errN === null, () => `T1 null-canvas stub: threw ${errN && errN.message}`);
 
         const noCtx = createConfetti({ getContext: () => null });
-        const errC = capture(() => { noCtx.burst({ count: 10 }); noCtx.spray({}); noCtx.clear(); noCtx.seed(1); noCtx.destroy(); });
+        const errC = capture(() => {
+            noCtx.burst({ count: 10 }); noCtx.spray({}); noCtx.clear(); noCtx.seed(1);
+            check(noCtx.registerShape('x', () => {}) === -1, () => 'T1 no-ctx stub registerShape != -1');
+            noCtx.destroy();
+        });
         check(errC === null, () => `T1 no-ctx stub: threw ${errC && errC.message}`);
         check(noCtx.count === 0, () => `T1 no-ctx stub: count ${noCtx.count} != 0`);
     });

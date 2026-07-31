@@ -15,11 +15,34 @@
  */
 
 import {
-    makeLivePool, pump, retainedBytesPerCall, GcProfiler, assertNoGc, maybeGc,
-    HAS_GC, check, die, log, WARM, FRAMES, SOAK, RETAIN_FLOOR_BPF, RULES, MAXP, BREAK,
+    makeLivePool, makeCanvas, createConfetti, pump, retainedBytesPerCall, GcProfiler,
+    assertNoGc, maybeGc, HAS_GC, check, die, log, WARM, FRAMES, SOAK, RETAIN_FLOOR_BPF,
+    RULES, MAXP, BREAK,
 } from './harness.mjs';
 
 const breakSink = [];
+
+// A full pool that ALSO exercises the two registerShape() code paths every frame:
+// a custom VECTOR shape (engine sets fillStyle, then calls the user draw fn) and an
+// image SPRITE (blit, fillStyle skipped). If the new indexed dispatch, the custom-fn
+// call, or the sprite blit allocated anything, this pool's retained-bytes/frame would
+// rise above the floor exactly like a leaking built-in loop.
+function makeCustomLivePool() {
+    const c = createConfetti(makeCanvas(), { seed: 4321, maxParticles: MAXP });
+    const heart = (ctx, w) => {
+        ctx.beginPath();
+        ctx.arc(0, 0, w / 2, 0, Math.PI * 2);
+        ctx.fill();
+    };
+    c.registerShape('heart', heart);
+    c.registerShape('logo', { image: makeCanvas() }); // any image source; blitted
+    const per = MAXP / 4;
+    for (const shape of ['rect', 'emoji', 'heart', 'logo']) {
+        c.burst({ count: per, shape, lifeMin: 1e6, lifeMax: 1e6, sizeMin: 4, sizeMax: 12, flutter: 1, sway: 0.5 });
+    }
+    pump(1, 1000);
+    return c;
+}
 
 export async function run() {
     if (!HAS_GC) { log('  T6 inconclusive -- run with node --expose-gc'); return; }
@@ -49,6 +72,17 @@ export async function run() {
             + ' floor -- the render loop is allocating');
     }
 
+    // (3) The registerShape() paths (custom vector + sprite blit + sway drift) must be
+    // as allocation-free as the built-ins. Same GC-bracketed measurement, own pool.
+    const cc = makeCustomLivePool();
+    check(cc.count === MAXP, () => `T6: custom pool has ${cc.count} alive, expected ${MAXP}`);
+    const bpfCustom = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    cc.destroy();
+    if (bpfCustom > RETAIN_FLOOR_BPF) {
+        die('T6: custom-shape update() retains ' + bpfCustom.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- registerShape dispatch/sprite/sway is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -57,6 +91,7 @@ export async function run() {
         die('T6: ' + SOAK + '-frame window fired a major GC (maxMajor:0) [' + gcLine + ']: ' + budgetMsg);
     }
 
-    log('  T6 ok -- update() ' + bpf.toFixed(2) + ' B/frame over ' + MAXP + ' particles; '
+    log('  T6 ok -- update() ' + bpf.toFixed(2) + ' B/frame over ' + MAXP + ' particles ('
+        + bpfCustom.toFixed(2) + ' B/frame with custom vector+sprite+sway); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

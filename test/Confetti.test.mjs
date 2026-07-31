@@ -418,7 +418,7 @@ describe('lite-confetti', () => {
     });
 
     // -------------------------------------------------------------------------
-    //  Reduced motion (path exists; flutter suppression lands in F1)
+    //  Reduced motion
     // -------------------------------------------------------------------------
     describe('reduced motion', () => {
         it('renders the static path without throwing when reduce is preferred', () => {
@@ -430,6 +430,142 @@ describe('lite-confetti', () => {
             } finally {
                 setReducedMotion(false);
             }
+        });
+
+        it('renders a custom registered shape on the static path', () => {
+            setReducedMotion(true);
+            try {
+                const c = createConfetti(makeCanvas(), { seed: 5 });
+                c.registerShape('heart', (ctx, w) => { ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, Math.PI * 2); ctx.fill(); });
+                assert.doesNotThrow(() => c.burst({ count: 30, shape: 'heart' }));
+                c.destroy();
+            } finally {
+                setReducedMotion(false);
+            }
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    //  registerShape() -- custom vector + image-sprite shapes (v1.3.0)
+    // -------------------------------------------------------------------------
+    describe('registerShape()', () => {
+        const heart = (ctx, w) => { ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, Math.PI * 2); ctx.fill(); };
+
+        it('assigns custom ids starting at 5 and increments', () => {
+            const c = createConfetti(makeCanvas(), { seed: 1 });
+            assert.equal(c.registerShape('heart', heart), 5);
+            assert.equal(c.registerShape('hex', heart), 6);
+            c.destroy();
+        });
+
+        it('re-registering a custom name keeps its id', () => {
+            const c = createConfetti(makeCanvas(), { seed: 1 });
+            const id = c.registerShape('heart', heart);
+            assert.equal(c.registerShape('heart', heart), id);
+            c.destroy();
+        });
+
+        it('bursts a custom vector shape and actually dispatches to its draw fn', () => {
+            const c = createConfetti(makeCanvas(), { seed: 1, maxParticles: 100 });
+            let calls = 0;
+            c.registerShape('heart', (ctx, w) => { calls++; ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, Math.PI * 2); ctx.fill(); });
+            c.burst({ count: 20, shape: 'heart', lifeMin: 5, lifeMax: 5 });
+            pump(1);
+            assert.equal(c.count, 20);
+            assert.ok(calls > 0, 'custom draw fn was never called');
+            c.destroy();
+        });
+
+        it('registers an image sprite and bursts it without touching fillText', () => {
+            const before = globalThis.__fillTextCount || 0;
+            const c = createConfetti(makeCanvas(), { seed: 1, maxParticles: 100 });
+            const id = c.registerShape('logo', { image: makeCanvas() });
+            assert.ok(id >= 5);
+            c.burst({ count: 20, shape: 'logo', lifeMin: 5, lifeMax: 5 });
+            pump(1);
+            assert.equal(c.count, 20);
+            assert.equal(globalThis.__fillTextCount || 0, before, 'a sprite must blit, never fillText');
+            c.destroy();
+        });
+
+        it('throws on an empty name, a built-in override, or a bad def', () => {
+            const c = createConfetti(makeCanvas(), { seed: 1 });
+            assert.throws(() => c.registerShape('', heart));
+            assert.throws(() => c.registerShape('rect', heart));
+            assert.throws(() => c.registerShape('emoji', heart));
+            assert.throws(() => c.registerShape('x', 123));
+            assert.throws(() => c.registerShape('y', {}));
+            c.destroy();
+        });
+
+        it('an unknown shape name falls back to rect without throwing', () => {
+            const c = createConfetti(makeCanvas(), { seed: 1, maxParticles: 100 });
+            assert.doesNotThrow(() => c.burst({ count: 10, shape: 'no-such', lifeMin: 5, lifeMax: 5 }));
+            pump(1);
+            assert.equal(c.count, 10);
+            c.destroy();
+        });
+
+        it('returns -1 after destroy() and stays inert', () => {
+            const c = createConfetti(makeCanvas(), { seed: 1 });
+            c.destroy();
+            assert.equal(c.registerShape('heart', heart), -1);
+        });
+
+        it('is per-instance: a shape on one instance is invisible to another', () => {
+            const cvB = makeCanvas({ record: true });
+            const a = createConfetti(makeCanvas(), { seed: 9, maxParticles: 100 });
+            const b = createConfetti(cvB, { seed: 9, maxParticles: 100 });
+            a.registerShape('heart', heart);
+            b.burst({ x: 400, y: 300, count: 30, shape: 'heart', lifeMin: 50, lifeMax: 50 });
+            pump(1, 1000); pump(10, 16);
+            const bHash = cvB.hash;
+            b.destroy(); a.destroy();
+
+            const cvR = makeCanvas({ record: true });
+            const r = createConfetti(cvR, { seed: 9, maxParticles: 100 });
+            r.burst({ x: 400, y: 300, count: 30, shape: 'rect', lifeMin: 50, lifeMax: 50 });
+            pump(1, 1000); pump(10, 16);
+            r.destroy();
+            assert.equal(bHash, cvR.hash, 'instance B saw instance A\'s custom shape (registry leaked)');
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    //  flutter / sway (v1.3.0)
+    // -------------------------------------------------------------------------
+    describe('flutter / sway', () => {
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 2024 });
+            c.burst({ x: 400, y: 300, count: 80, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const h = canvas.hash;
+            c.destroy();
+            return h;
+        };
+
+        it('flutter is hash-neutral: it changes scale, never position', () => {
+            assert.equal(run({ flutter: 1 }), run({ flutter: 0 }));
+            assert.equal(run({ flutter: 1 }), run({ flutter: 0.37 }));
+        });
+
+        it('sway moves positions (sway 0 vs 0.8 diverge)', () => {
+            assert.notEqual(run({ sway: 0 }), run({ sway: 0.8 }));
+        });
+
+        it('default (flutter 1, sway 0) leaves positions identical to omitting them', () => {
+            assert.equal(run({}), run({ flutter: 1, sway: 0 }));
+        });
+
+        it('non-finite flutter/sway are clamped, never producing a non-finite position', () => {
+            const canvas = makeCanvas({ assertFinite: true });
+            const c = createConfetti(canvas, { seed: 3 });
+            assert.doesNotThrow(() => {
+                c.burst({ count: 40, flutter: NaN, sway: Infinity, lifeMin: 5, lifeMax: 5 });
+                pump(5, 16);
+            });
+            c.destroy();
         });
     });
 });

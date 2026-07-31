@@ -3,6 +3,43 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.3.0] - 2026-07-31
+
+First **feature** release on the F0/torture base. Adds custom shapes and tunable
+flutter. The default look is unchanged and the committed determinism fingerprint
+(`1569828004`) still reproduces: `flutter` defaults to 1 (reproducing the old wobble
+exactly) and `sway` defaults to 0 (positions byte-identical to pre-1.3.0).
+
+### Added
+- `instance.registerShape(name, def)` -- register a custom particle shape, usable as
+  `burst({ shape: name })`. `def` is either a **vector** draw function
+  `(ctx, w, h) => void` (the engine sets `fillStyle` to the particle colour first), an
+  **image sprite** `{ image }` (prerendered once and blitted, the same GPU-blit path as
+  the emoji atlas), or `{ draw, blit }`. Shapes are **per-instance** (seed-sealed,
+  invisible to other instances, dropped on `destroy()`); registering a bad name/def or
+  overriding a built-in throws (fail-closed). Custom ids start at 5; built-ins keep 0..4.
+- `flutter` (0..1, default 1) on `burst()`/`spray()` -- tumble depth. `1` is the classic
+  wobble, `0` holds a piece rigid. Controls X-scale only, so it never shifts positions.
+- `sway` (0..1, default 0) on `burst()`/`spray()` -- paper-like horizontal drift as a
+  piece falls. Opt-in; `0` keeps the straight fall (and the committed fingerprint).
+- Non-finite `flutter`/`sway` are clamped to their defaults (validated, unlike the
+  physics numerics -- see the 1.2.3 note); a garbage knob never yields a NaN position.
+
+### Changed
+- The five-way shape `switch` (hot loop + reduced-motion static path) is replaced by a
+  per-instance indexed shape table (`shapeDraw`/`shapeBlit`), so custom shapes dispatch
+  through the same zero-allocation path as the built-ins. Proven by T6, which now also
+  measures a live pool of a custom vector shape + an image sprite + sway at ~0 B/frame.
+- `Confetti.js` is now fully **ASCII** (the suite Law): the functional default emoji is
+  built from its code point (`String.fromCodePoint(0x1F389)`) and all box-drawing /
+  em-dash / bullet characters in comments are ASCII. This closes the Law gap
+  `decisions/0001` flagged for F1.
+- Torture suite extended (still nine tiers, no new file): T1 covers registerShape
+  argument validation + unknown-shape fallback + flutter/sway clamping; T5 adds a
+  custom-shape + flutter/sway determinism lane; T6 the custom-pool alloc gate; T8 the
+  **per-instance isolation** proof (one instance's shape is invisible to another) and a
+  registry-aware retention check; T9 a sway-discrimination control.
+
 ## [1.2.3] - 2026-07-31
 
 Infrastructure only -- **no runtime or API change**. `Confetti.js` is byte-for-byte

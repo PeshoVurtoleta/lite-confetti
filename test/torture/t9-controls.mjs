@@ -15,6 +15,8 @@
  *                     comparator can see divergence; it is not comparing constants).
  *   K5 count channel- count() actually moves (0 -> n -> 0), so the T0/T5 count laws
  *                     are not vacuously true against a stuck getter.
+ *   K7 sway        -- sway 0 vs 0.9 diverges, so sway-determinism checks (T5 F4) are
+ *                     not comparing constants.
  *   K6 end-to-end  -- TORTURE_CONTROL=alloc drives a per-frame-allocating soak that
  *                     MUST breach maxMajor:0, then exits non-zero.
  *
@@ -123,7 +125,25 @@ export async function run() {
         c.destroy();
     }
 
-    log('  T9 ok -- retention, alloc, determinism, NaN-detector and count-channel controls all bite');
+    // K7 -- sway discrimination. sway must actually move positions, or T5's custom-shape
+    // determinism (which pumps sway on both sides) would be comparing constants. Same
+    // seed, sway 0 vs 0.9, everything else equal -> fingerprints MUST diverge.
+    {
+        const c0 = makeCanvas({ record: true });
+        const c9 = makeCanvas({ record: true });
+        const a = createConfetti(c0, { seed: 55, maxParticles: 64 });
+        const b = createConfetti(c9, { seed: 55, maxParticles: 64 });
+        a.burst({ x: 400, y: 300, count: 60, speed: 300, sway: 0 });
+        b.burst({ x: 400, y: 300, count: 60, speed: 300, sway: 0.9 });
+        pump(1, 1000); pump(15, 16);
+        if (c0.hash === c9.hash) {
+            die('T9 K7: sway 0 vs 0.9 produced the SAME fingerprint (' + c0.hash + ') -- sway is a no-op, so sway-determinism checks are vacuous');
+        }
+        a.destroy();
+        b.destroy();
+    }
+
+    log('  T9 ok -- retention, alloc, determinism, NaN-detector, count-channel and sway controls all bite');
 
     // K6 -- end-to-end alloc red path.
     if (CONTROL === 'alloc') {

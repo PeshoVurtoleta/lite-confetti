@@ -68,6 +68,39 @@ export async function run() {
         cc.destroy();
     }
 
+    // X5 -- registerShape isolation. A custom shape is PER-INSTANCE: it must be
+    // invisible to every other instance. Instance A registers 'heart'; instance B,
+    // bursting shape:'heart' it never registered, must fall back to rect. Proven by
+    // fingerprint: B(heart-name) at seed S is byte-identical to a control instance
+    // that bursts rect at seed S. This is the tier that earns the per-instance design
+    // decision -- a global registry would let A's registration leak into B's output.
+    {
+        const heart = (ctx, w) => { ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, Math.PI * 2); ctx.fill(); };
+        const params = { x: 400, y: 300, count: 40, lifeMin: 100, lifeMax: 100, speed: 300 };
+
+        const a = createConfetti(makeCanvas(), { seed: 77, maxParticles: 128 });
+        a.registerShape('heart', heart);
+        const heartId = a.registerShape('heart', heart); // re-register: same id, no leak
+        check(heartId === 5, () => `T8 X5: custom id ${heartId} != 5 (built-ins must reserve 0..4)`);
+
+        const cvB = makeCanvas({ record: true });
+        const b = createConfetti(cvB, { seed: 77, maxParticles: 128 });
+        b.burst({ ...params, shape: 'heart' }); // B has no 'heart' -> rect fallback
+        pump(1, 1000); pump(20, 16);
+        const bHash = cvB.hash;
+        b.destroy(); a.destroy();
+
+        const cvR = makeCanvas({ record: true });
+        const r = createConfetti(cvR, { seed: 77, maxParticles: 128 });
+        r.burst({ ...params, shape: 'rect' });
+        pump(1, 1000); pump(20, 16);
+        const rHash = cvR.hash;
+        r.destroy();
+
+        check(bHash === rHash, () =>
+            `T8 X5: instance B saw instance A's custom shape (heart-name hash ${bHash} != rect hash ${rHash}) -- registry leaked across instances`);
+    }
+
     // X4 -- shared-ticker retention. Mirrors F0 Phase A.
     if (!HAS_GC) { log('  T8 X4 inconclusive -- run with node --expose-gc'); return; }
     const tracker = createLeakTracker({ name: 'lite-confetti-cross' });
@@ -78,7 +111,11 @@ export async function run() {
         const inst = createConfetti(canvas, { seed: i, maxParticles: 128 });
         handles.push(tracker.track(canvas, null, 'canvas'));
         handles.push(tracker.track(inst, null, 'instance'));
-        inst.burst({ count: 64, lifeMin: 1, lifeMax: 1 });
+        // Register a custom vector shape + a sprite so the per-instance shape table
+        // (its closures capture instance state) is part of what destroy() must release.
+        inst.registerShape('heart', (ctx, w) => { ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, Math.PI * 2); ctx.fill(); });
+        inst.registerShape('logo', { image: makeCanvas() });
+        inst.burst({ count: 64, shape: 'heart', lifeMin: 1, lifeMax: 1 });
         pump(1);
         inst.destroy();
     }

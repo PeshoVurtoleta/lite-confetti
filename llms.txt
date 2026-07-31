@@ -1,6 +1,6 @@
 # @zakkster/lite-confetti
 
-> Deterministic confetti engine with OKLCH colors, 5 shapes, reduced-motion support, and timeline composability.
+> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), tunable flutter/sway, reduced-motion support, and timeline composability.
 
 ## Installation
 npm install @zakkster/lite-confetti
@@ -25,6 +25,7 @@ Full control instance bound to a specific canvas.
 - `.clear()` — Kill all particles immediately
 - `.count` — Number of alive particles (getter)
 - `.seed(s)` — Re-seed RNG for deterministic replay
+- `.registerShape(name, def)` — Register a custom per-instance shape (v1.3.0). `def` is a draw fn `(ctx,w,h)=>void` (vector; engine sets fillStyle), `{ image }` (sprite, blitted), or `{ draw, blit }`. Returns the id (>=5). Throws on bad name/def or built-in override; unknown shape names in burst() fall back to rect.
 - `.destroy()` — Clean up everything, disconnect ResizeObserver
 
 ## Burst / Spray Options
@@ -42,8 +43,10 @@ Full control instance bound to a specific canvas.
 | `sizeMax` | 12 | Maximum particle size |
 | `lifeMin` | 1.5 | Minimum lifetime (seconds) |
 | `lifeMax` | 3.0 | Maximum lifetime (seconds) |
-| `shape` | 'rect' | 'rect', 'circle', 'star', 'triangle', 'emoji' |
-| `emoji` | '🎉' | Emoji character (when shape is 'emoji') |
+| `shape` | 'rect' | 'rect', 'circle', 'star', 'triangle', 'emoji', or a registerShape() name (unknown -> rect) |
+| `emoji` | party popper | Emoji character (when shape is 'emoji') |
+| `flutter` | 1 | Tumble depth 0–1 (0 rigid, 1 classic wobble). Scale only — never moves a particle. |
+| `sway` | 0 | Horizontal drift 0–1 (0 straight fall). Opt-in side-to-side motion. |
 | `colors` | 7 OKLCH defaults | Array of OKLCH objects `{ l, c, h }` or CSS strings |
 | `angle` | -π/2 (upward) | Center angle of emission cone (radians) |
 | `onComplete` | — | Called when all burst particles die |
@@ -59,7 +62,8 @@ Particles rotate via `spin` (angular velocity applied each frame). The `spinV` i
 ## Key Features
 - SoA flat TypedArrays for cache-friendly particle physics
 - Deterministic: `seed(42)` produces identical output every time
-- 5 shapes: rect, circle, star, triangle, emoji
+- 5 built-in shapes (rect, circle, star, triangle, emoji) + `registerShape()` for custom vector/sprite shapes
+- Tunable flutter (tumble depth) + sway (horizontal drift), both deterministic
 - OKLCH colors (perceptually uniform — every piece looks equally vibrant)
 - Reduced motion: auto-detects `prefers-reduced-motion: reduce`, renders static spread, fades out
 - ResizeObserver (not polling) for canvas sizing — zero layout thrashing
@@ -142,3 +146,38 @@ Net effect: an emoji burst is now as cheap as any other shape; rasterization is 
 glyphs), not O(particles x frames). No API change. Tests: 41 (was 37) -- four new checks
 assert a glyph rasterizes at most once regardless of particle count, is not re-rasterized when
 already cached, and that non-emoji shapes never touch fillText.
+
+## v1.3.0 — registerShape (custom shapes) + flutter/sway
+
+First feature release on the F0/torture base. Default look unchanged; the committed
+determinism fingerprint (1569828004) still reproduces.
+
+registerShape(name, def): per-instance custom shapes, usable as burst({ shape: name }).
+def is a VECTOR draw fn (ctx,w,h)=>void (engine sets fillStyle to the particle colour, so
+fill() is coloured for you), an IMAGE SPRITE { image } (prerendered once to a 64px offscreen
+canvas and blitted per particle, the same fast path as the emoji atlas), or { draw, blit }.
+PER-INSTANCE by design: a shape is invisible to other instances and dropped on destroy(), so
+registration cannot leak across instances and determinism stays sealed to one seed. Ids start
+at 5 (built-ins keep 0..4); re-registering a custom name keeps its id. Fails closed: empty/
+non-string name, built-in override, or malformed def throws. Unknown shape name in burst()/
+spray() falls back to rect (a call-time typo must not crash a running animation).
+
+Internals: the five-way shape switch (hot loop + reduced-motion static path) became a
+per-instance indexed table shapeDraw[id](ctx,w,h,i) + shapeBlit[id]; zero-allocation, net
+cheaper than the switch. T6 measures a live pool of a custom vector shape + a sprite + sway at
+~0 B/frame.
+
+flutter (0..1, default 1): tumble depth via X-scale, wobbleScale = 1 - flutter*0.5*(1-|cos(tilt)|).
+flutter=1 reproduces the pre-1.3.0 wobble exactly; flutter=0 is rigid. Scale-only, so it never
+changes the translate fingerprint at any value. sway (0..1, default 0): horizontal drift
+x += sin(tilt)*sway*60*dt, guarded so default (0) keeps byte-identical straight-fall positions.
+Both are per-particle Float32Array columns set at spawn (no hot-path alloc) and, unlike the
+physics numerics, are validated (non-finite clamps to the default -- a NaN knob never yields a
+NaN position).
+
+ASCII Law: Confetti.js is now fully ASCII (default emoji via String.fromCodePoint(0x1F389);
+comment decoration de-boxed) -- closes the gap decisions/0001 flagged for F1.
+
+Tests: 57 unit (was 44) + the nine torture tiers extended (T1 validation, T5 custom-shape/
+flutter/sway determinism lane, T6 custom-pool alloc gate, T8 per-instance isolation proof,
+T9 sway control). No runtime dep change.

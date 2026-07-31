@@ -1,7 +1,7 @@
 {
   "name": "@zakkster/lite-confetti",
   "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "description": "Deterministic confetti engine with OKLCH colors, 5 shapes, named presets, palette import, pointer-follow spray, reduced-motion support, and timeline composability.",
   "type": "module",
   "main": "./Confetti.js",

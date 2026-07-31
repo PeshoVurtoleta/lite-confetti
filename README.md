@@ -7,7 +7,8 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-Types-informational)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-Deterministic confetti engine with OKLCH colors, 5 shapes, and reduced-motion support.
+Deterministic confetti engine with OKLCH colors, 5 built-in shapes plus custom
+`registerShape()` shapes (vector or image sprite), tunable flutter, and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -20,7 +21,7 @@ Deterministic confetti engine with OKLCH colors, 5 shapes, and reduced-motion su
 | **Deterministic (seeded)** | **Yes** | No | No | No |
 | **OKLCH colors** | **Yes** | No | No | No |
 | **Reduced motion** | **Yes (auto)** | No | No | No |
-| **Shapes** | **5 (rect, circle, star, triangle, emoji)** | 2 | 2 | 3 |
+| **Shapes** | **5 built-in + custom (registerShape: vector or sprite)** | 2 | 2 | 3 |
 | **Spray mode** | **Yes** | No | No | No |
 | **Shared ticker** | **Yes** | Own RAF | Own RAF | Own RAF |
 | **SoA flat arrays** | **Yes** | No | No | No |
@@ -83,8 +84,10 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `sizeMax` | number | 12 | Maximum particle width in CSS pixels |
 | `lifeMin` | number | 1.5 | Minimum particle lifetime in seconds |
 | `lifeMax` | number | 3.0 | Maximum particle lifetime in seconds |
-| `shape` | string | `'rect'` | Particle shape: `'rect'`, `'circle'`, `'star'`, `'triangle'`, `'emoji'` |
-| `emoji` | string | `'🎉'` | Emoji character (only used when `shape` is `'emoji'`) |
+| `shape` | string | `'rect'` | `'rect'`, `'circle'`, `'star'`, `'triangle'`, `'emoji'`, or a name from `registerShape()`. Unknown names fall back to `'rect'`. |
+| `emoji` | string | party popper | Emoji character (only used when `shape` is `'emoji'`) |
+| `flutter` | number | 1 | Tumble depth, 0–1. `1` = full wobble (classic), `0` = rigid. Affects scale only, never position. |
+| `sway` | number | 0 | Horizontal drift, 0–1. `0` = straight fall; higher values sway side-to-side like real paper. |
 | `colors` | Array | 7 OKLCH defaults | Array of OKLCH objects `{ l, c, h }` or CSS strings |
 | `angle` | number | `-Math.PI / 2` | Center angle of emission cone in radians. -π/2 = upward. |
 | `onComplete` | Function | — | Called when all burst particles have died |
@@ -117,10 +120,11 @@ Every frame, each alive particle runs through this pipeline:
 1. GRAVITY     vy += gravity × dt        (downward acceleration)
 2. DRAG        vx *= drag, vy *= drag    (air resistance)
 3. POSITION    x += vx × dt, y += vy × dt
-4. SPIN        rotation += spinVelocity × dt
-5. TILT        tiltPhase += tiltSpeed × dt
-6. OPACITY     fade to 0 in last 30% of life
-7. RENDER      translate → rotate → wobble-scale → draw shape
+4. SWAY        x += sin(tiltPhase) × sway × dt   (opt-in horizontal drift)
+5. SPIN        rotation += spinVelocity × dt
+6. TILT        tiltPhase += tiltSpeed × dt
+7. OPACITY     fade to 0 in last 30% of life
+8. RENDER      translate → rotate → flutter-scale → draw shape
 ```
 
 ### Rotation & 3D Tumbling
@@ -129,9 +133,11 @@ Each particle has two rotational properties:
 
 **Spin** — continuous rotation around the particle's center. Angular velocity is randomized at spawn: `(rng.next() - 0.5) * 10` radians/second. This produces particles spinning between -5 and +5 rad/s — some clockwise, some counterclockwise, all at different speeds.
 
-**Tilt** — a wobble phase that drives a cosine-based X-scale oscillation: `wobbleScale = 0.5 + |cos(tiltPhase)| × 0.5`. This makes particles appear to tumble in 3D — they visually "flip" as the cosine oscillates, creating the illusion of a thin piece of paper turning in space. Tilt speed is randomized between 1 and 5 rad/s per particle.
+**Tilt** — a wobble phase that drives a cosine-based X-scale oscillation. The **`flutter`** option sets its depth: `wobbleScale = 1 − flutter × 0.5 × (1 − |cos(tiltPhase)|)`. At `flutter: 1` (the default) this is the classic `0.5 + |cos| × 0.5`, making particles "flip" like a thin piece of paper turning in space; at `flutter: 0` they stay rigid. Tilt speed is randomized between 1 and 5 rad/s per particle. Because flutter scales only, it never moves a particle — output stays byte-identical under a fixed seed regardless of its value.
 
-The combination of spin rotation + tilt wobble produces the realistic confetti tumbling you see in the real world.
+**Sway** — the opt-in **`sway`** option adds a horizontal drift driven by the same tilt phase, so pieces drift side-to-side as they fall (real confetti rarely falls straight). It defaults to `0`, which keeps the exact straight-fall positions of earlier versions.
+
+The combination of spin rotation + flutter wobble (+ optional sway) produces the realistic confetti tumbling you see in the real world.
 
 ### Canvas Sizing
 
@@ -150,6 +156,36 @@ lite-confetti uses **ResizeObserver** (not polling) to track canvas dimensions. 
 | `'emoji'` | Any emoji character — set via `emoji` option (e.g. `'🌟'`, `'🎊'`, `'❤️'`) |
 
 Emoji shapes are rendered through a **glyph atlas**: each unique emoji is rasterized once to a small offscreen canvas the first time it is used, then drawn per particle as a cheap `drawImage` blit. This keeps a burst of hundreds of emoji particles as cheap as any other shape. (Earlier versions set `ctx.font` and called `fillText` per particle per frame, which re-rasterized the colour glyph every time — a burst of many emoji could stall the main thread.)
+
+### Custom shapes — `registerShape(name, def)`
+
+Register your own shape on an instance, then use it as `burst({ shape: name })`. Shapes are **per-instance**: they are invisible to other instances and released on `destroy()`, so registration never leaks across instances and determinism stays sealed to the seed.
+
+```js
+const c = createConfetti(canvas);
+
+// 1. A VECTOR shape — a draw function. The engine sets fillStyle to the particle's
+//    colour before calling, so a plain fill() is coloured for you. Drawn centred at (0,0).
+c.registerShape('heart', (ctx, w) => {
+  const s = w / 16;
+  ctx.beginPath();
+  ctx.moveTo(0, 4 * s);
+  ctx.bezierCurveTo(-7 * s, -3 * s, -3 * s, -8 * s, 0, -3 * s);
+  ctx.bezierCurveTo(3 * s, -8 * s, 7 * s, -3 * s, 0, 4 * s);
+  ctx.fill();
+});
+c.burst({ shape: 'heart', count: 80 });
+
+// 2. An IMAGE SPRITE — prerendered once, then blitted per particle (same fast path as emoji).
+const logo = new Image();
+logo.src = '/logo.png';
+c.registerShape('logo', { image: logo });     // an <img>, a <canvas>, or an ImageBitmap
+c.spray({ shape: 'logo', duration: 1500 });
+```
+
+`registerShape` returns the assigned shape id (`>= 5`; built-ins keep `0–4`). Re-registering a custom name replaces it and keeps its id. It **fails closed** — an empty/non-string name, a built-in override (`'rect'`, `'emoji'`, …), or a malformed `def` throws. A typo'd `shape` name at `burst()` time does not throw; it falls back to `'rect'`.
+
+Custom shapes go through the same zero-allocation dispatch as the built-ins — the torture gate proves a live pool of a custom vector shape + an image sprite renders at ~0 bytes/frame.
 
 ---
 

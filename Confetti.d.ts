@@ -1,11 +1,33 @@
 import type { OklchColor } from '@zakkster/lite-color';
 
+/** A built-in shape name, or any custom name registered via registerShape(). */
+export type ShapeName = 'rect' | 'circle' | 'star' | 'triangle' | 'emoji' | (string & {});
+
+/** Draw a single particle centred at (0,0); the canvas is pre-translated/rotated/scaled. */
+export type ShapeDrawFn = (ctx: CanvasRenderingContext2D, w: number, h: number, i: number) => void;
+
+/**
+ * A custom shape definition for registerShape():
+ *  - a draw function -> a VECTOR shape (the engine sets fillStyle to the particle
+ *    colour before calling, so a plain fill() paints correctly);
+ *  - `{ image }` -> an image source prerendered to a sprite and blitted per particle;
+ *  - `{ draw, blit }` -> an advanced self-painting shape (blit defaults to true).
+ */
+export type ShapeDef =
+    | ShapeDrawFn
+    | { image: CanvasImageSource }
+    | { draw: ShapeDrawFn; blit?: boolean };
+
 export interface BurstOptions {
     x?: number; y?: number; count?: number; spread?: number;
     speed?: number; speedVariance?: number; gravity?: number; drag?: number;
     sizeMin?: number; sizeMax?: number; lifeMin?: number; lifeMax?: number;
-    shape?: 'rect' | 'circle' | 'star' | 'triangle' | 'emoji';
+    shape?: ShapeName;
     emoji?: string; colors?: Array<OklchColor | string>;
+    /** Tumble depth 0..1 (0 rigid, 1 full wobble). Default 1. Affects scale, not position. */
+    flutter?: number;
+    /** Horizontal drift 0..1 (0 straight fall). Default 0. */
+    sway?: number;
     angle?: number; onComplete?: () => void;
 }
 export interface SprayOptions extends Omit<BurstOptions, 'onComplete'> {
@@ -69,6 +91,14 @@ export interface ConfettiInstance {
     clear(): void;
     readonly count: number;
     seed(s: number): void;
+    /**
+     * Register a custom particle shape for THIS instance, usable as
+     * `burst({ shape: name })`. Per-instance: invisible to other instances and dropped
+     * on destroy(). `name` must not be a built-in; re-registering a custom name replaces
+     * it and keeps its id. Returns the assigned shape id (>= 5), or -1 after destroy().
+     * Throws on an empty/non-string name, a built-in override, or a malformed def.
+     */
+    registerShape(name: string, def: ShapeDef): number;
     destroy(): void;
 }
 export function createConfetti(canvas: HTMLCanvasElement, options?: { seed?: number; maxParticles?: number; respectReducedMotion?: boolean }): ConfettiInstance;

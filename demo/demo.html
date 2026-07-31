@@ -399,7 +399,8 @@
     <div class="badges">
         <span class="badge">deterministic</span>
         <span class="badge">oklch-native</span>
-        <span class="badge">5 shapes</span>
+        <span class="badge">5 + custom shapes</span>
+        <span class="badge">flutter + sway</span>
         <span class="badge">reduced-motion</span>
         <span class="badge">< 4KB</span>
     </div>
@@ -474,11 +475,18 @@
             <div class="control">
                 <div class="control-header"><span class="control-name">shape</span></div>
                 <select id="shape">
-                    <option value="rect" selected>rect</option>
-                    <option value="circle">circle</option>
-                    <option value="star">star</option>
-                    <option value="triangle">triangle</option>
-                    <option value="emoji">emoji</option>
+                    <optgroup label="built-in">
+                        <option value="rect" selected>rect</option>
+                        <option value="circle">circle</option>
+                        <option value="star">star</option>
+                        <option value="triangle">triangle</option>
+                        <option value="emoji">emoji</option>
+                    </optgroup>
+                    <optgroup label="registerShape()">
+                        <option value="heart">heart (vector)</option>
+                        <option value="hexagon">hexagon (vector)</option>
+                        <option value="sprite">sprite (image)</option>
+                    </optgroup>
                 </select>
             </div>
             <div class="control" id="emojiRow" style="display:none">
@@ -512,6 +520,21 @@
                                                                                            id="lifeMaxVal">3.0</span>
                 </div>
                 <input type="range" id="lifeMax" min="0.5" max="8" value="3.0" step="0.1">
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-label">Motion</div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">flutter</span><span class="control-val"
+                                                                                           id="flutterVal">1.0</span>
+                </div>
+                <input type="range" id="flutter" min="0" max="1" value="1" step="0.05">
+            </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">sway</span><span class="control-val"
+                                                                                        id="swayVal">0.0</span></div>
+                <input type="range" id="sway" min="0" max="1" value="0" step="0.05">
             </div>
         </div>
 
@@ -575,7 +598,7 @@
     const $codeBtn  = document.getElementById('codeBtn');
     const $seedBtn  = document.getElementById('seedBtn');
 
-    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax'];
+    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway'];
     const $in = {};   // id -> input element
     const $out = {};  // id -> value-display element
     for (const id of SLIDERS) { $in[id] = document.getElementById(id); $out[id] = document.getElementById(id + 'Val'); }
@@ -584,6 +607,58 @@
 
     const c = createConfetti($canvas, { maxParticles: 800 });
     let currentSeed = null;
+
+    // ── Custom shapes via registerShape() (v1.3.0). Per-instance: registered on THIS
+    //    instance only. A vector shape is a draw fn (the engine sets fillStyle to the
+    //    particle colour first); a sprite is an image prerendered once and blitted. ────
+    function heart(ctx, w) {
+        const s = w / 16;
+        ctx.beginPath();
+        ctx.moveTo(0, 4 * s);
+        ctx.bezierCurveTo(-7 * s, -3 * s, -3 * s, -8 * s, 0, -3 * s);
+        ctx.bezierCurveTo(3 * s, -8 * s, 7 * s, -3 * s, 0, 4 * s);
+        ctx.closePath();
+        ctx.fill();
+    }
+    function hexagon(ctx, w) {
+        const r = w / 2;
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+            const a = Math.PI / 3 * i - Math.PI / 2;
+            const x = Math.cos(a) * r, y = Math.sin(a) * r;
+            i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        }
+        ctx.closePath();
+        ctx.fill();
+    }
+    // A glossy gradient star, drawn ONCE to an offscreen canvas -> registered as an image.
+    function makeSpriteCanvas() {
+        const s = 64;
+        const off = document.createElement('canvas');
+        off.width = off.height = s;
+        const g = off.getContext('2d');
+        const grad = g.createLinearGradient(0, 0, s, s);
+        grad.addColorStop(0, '#c084fc');
+        grad.addColorStop(0.5, '#818cf8');
+        grad.addColorStop(1, '#6ee7b7');
+        g.fillStyle = grad;
+        g.translate(s / 2, s / 2);
+        g.beginPath();
+        const R = s * 0.46, ir = R * 0.45;
+        for (let i = 0; i < 10; i++) {
+            const a = Math.PI / 5 * i - Math.PI / 2;
+            const rad = i % 2 ? ir : R;
+            const x = Math.cos(a) * rad, y = Math.sin(a) * rad;
+            i ? g.lineTo(x, y) : g.moveTo(x, y);
+        }
+        g.closePath();
+        g.fill();
+        return off;
+    }
+    c.registerShape('heart', heart);
+    c.registerShape('hexagon', hexagon);
+    c.registerShape('sprite', { image: makeSpriteCanvas() });
+    const CUSTOM_SHAPES = new Set(['heart', 'hexagon', 'sprite']);
 
     // ── Coordinate space ───────────────────────────────────────────────────────
     // The canvas is position:fixed and fills the whole viewport (top:0,left:0,100%),
@@ -614,6 +689,8 @@
             sizeMax: +$in.sizeMax.value,
             lifeMin: +$in.lifeMin.value,
             lifeMax: +$in.lifeMax.value,
+            flutter: +$in.flutter.value,
+            sway: +$in.sway.value,
         };
     }
 
@@ -626,12 +703,15 @@
     // ── Slider value displays. toFixed here is fine: 'input' fires at interaction
     //    rate and stops the instant the drag ends -- it is not a per-frame cost. ────
     const FIXED1 = new Set(['spread', 'lifeMin', 'lifeMax']);
+    const FIXED2 = new Set(['flutter', 'sway']);
     for (const id of SLIDERS) {
         const el = $in[id], out = $out[id];
         if (!el || !out) continue;
         el.addEventListener('input', () => {
             const raw = el.value;
-            out.textContent = id === 'drag' ? (+raw).toFixed(3) : FIXED1.has(id) ? (+raw).toFixed(1) : raw;
+            out.textContent = id === 'drag' ? (+raw).toFixed(3)
+                : FIXED2.has(id) ? (+raw).toFixed(2)
+                : FIXED1.has(id) ? (+raw).toFixed(1) : raw;
         });
     }
 
@@ -764,20 +844,31 @@
         codeVisible = !codeVisible;
         if (codeVisible) {
             const cfg = getConfig();
-            let code = `<span class="kw">import</span> { <span class="fn">confetti</span> } <span class="kw">from</span> <span class="str">'@zakkster/lite-confetti'</span>;\n\n<span class="fn">confetti</span>({`;
-            code += `\n  count: <span class="num">${cfg.count}</span>,`;
-            code += `\n  spread: <span class="num">${cfg.spread.toFixed(1)}</span>,`;
-            code += `\n  angle: <span class="num">${cfg.angle.toFixed(2)}</span>,`;
-            code += `\n  speed: <span class="num">${cfg.speed}</span>,`;
-            code += `\n  speedVariance: <span class="num">${cfg.speedVariance}</span>,`;
-            code += `\n  gravity: <span class="num">${cfg.gravity}</span>,`;
-            code += `\n  drag: <span class="num">${cfg.drag}</span>,`;
-            code += `\n  shape: <span class="str">'${cfg.shape}'</span>,`;
-            if (cfg.shape === 'emoji') code += `\n  emoji: <span class="str">'${cfg.emoji}'</span>,`;
-            code += `\n  sizeMin: <span class="num">${cfg.sizeMin}</span>,`;
-            code += `\n  sizeMax: <span class="num">${cfg.sizeMax}</span>,`;
-            code += `\n  lifeMin: <span class="num">${cfg.lifeMin}</span>,`;
-            code += `\n  lifeMax: <span class="num">${cfg.lifeMax}</span>,`;
+            const isCustom = CUSTOM_SHAPES.has(cfg.shape);
+
+            // Custom shapes are per-instance, so their snippet uses createConfetti +
+            // registerShape + c.burst; built-ins use the fire-and-forget confetti().
+            let code = `<span class="kw">import</span> { <span class="fn">${isCustom ? 'createConfetti' : 'confetti'}</span> } <span class="kw">from</span> <span class="str">'@zakkster/lite-confetti'</span>;\n\n`;
+            let indent = '  ';
+            let call = 'confetti';
+            if (isCustom) {
+                code += `<span class="kw">const</span> c = <span class="fn">createConfetti</span>(canvas);\n`;
+                code += `c.<span class="fn">registerShape</span>(<span class="str">'${cfg.shape}'</span>, ${cfg.shape === 'sprite' ? '{ image }' : 'draw'});\n\n`;
+                code += `c.<span class="fn">burst</span>({`;
+                call = 'c.burst';
+            } else {
+                code += `<span class="fn">confetti</span>({`;
+            }
+            code += `\n${indent}count: <span class="num">${cfg.count}</span>,`;
+            code += `\n${indent}spread: <span class="num">${cfg.spread.toFixed(1)}</span>,`;
+            code += `\n${indent}angle: <span class="num">${cfg.angle.toFixed(2)}</span>,`;
+            code += `\n${indent}speed: <span class="num">${cfg.speed}</span>,`;
+            code += `\n${indent}gravity: <span class="num">${cfg.gravity}</span>,`;
+            code += `\n${indent}shape: <span class="str">'${cfg.shape}'</span>,`;
+            if (cfg.shape === 'emoji') code += `\n${indent}emoji: <span class="str">'${cfg.emoji}'</span>,`;
+            if (cfg.flutter !== 1) code += `\n${indent}flutter: <span class="num">${cfg.flutter.toFixed(2)}</span>,`;
+            if (cfg.sway !== 0) code += `\n${indent}sway: <span class="num">${cfg.sway.toFixed(2)}</span>,`;
+            code += `\n${indent}lifeMin: <span class="num">${cfg.lifeMin}</span>, lifeMax: <span class="num">${cfg.lifeMax}</span>,`;
             code += `\n});`;
             $codeBox.innerHTML = code;
         }

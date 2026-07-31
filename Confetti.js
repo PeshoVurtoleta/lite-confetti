@@ -1,11 +1,13 @@
 /**
- * @zakkster/lite-confetti v1.2.0 — Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.3.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
- * v1.2.0 adds: named presets (fireworks / cannons / snow / pride),
+ * v1.3.0 adds: instance.registerShape() for custom vector + image-sprite shapes
+ * (per-instance, seed-sealed), and tunable flutter/sway on burst()/spray().
+ * v1.2.0 added: named presets (fireworks / cannons / snow / pride),
  * colorsFromPalette() for direct lite-hueforge toGradientStops() consumption,
  * fromElement() burst-origin sugar, and per-instance pointer-follow spray.
  *
@@ -15,7 +17,7 @@
  *   lite-ticker            (shared RAF loop)
  *
  * Does NOT depend on lite-vec, lite-steer, lite-fx, or lite-particles.
- * Confetti is simple physics — gravity, drag, spin. No steering needed.
+ * Confetti is simple physics -- gravity, drag, spin. No steering needed.
  * If you want confetti that flocks or swirls into a vortex, compose this
  * with lite-steer in a recipe. Don't bloat the core.
  *
@@ -31,9 +33,9 @@ import { toCssOklch } from '@zakkster/lite-color';
 import { Ticker } from '@zakkster/lite-ticker';
 
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  SHARED TICKER (ref-counted)
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 let _ticker = null;
 let _tickerRefs = 0;
@@ -50,9 +52,9 @@ function releaseTicker() {
 }
 
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  REDUCED MOTION DETECTION
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 let _prefersReducedMotion = false;
 if (typeof window !== 'undefined' && window.matchMedia) {
@@ -62,10 +64,10 @@ if (typeof window !== 'undefined' && window.matchMedia) {
 }
 
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  DEFAULT OKLCH CONFETTI COLORS
-//  Perceptually uniform — every piece looks equally vibrant.
-// ─────────────────────────────────────────────────────────
+//  Perceptually uniform -- every piece looks equally vibrant.
+// ---------------------------------------------------------
 
 const DEFAULT_COLORS = [
     { l: 0.70, c: 0.25, h: 30 },   // orange
@@ -78,28 +80,42 @@ const DEFAULT_COLORS = [
 ];
 
 
-// ─────────────────────────────────────────────────────────
-// ─────────────────────────────────────────────────────────
-//  NAMED PRESETS — drop-in configs for iconic effects
+// The default emoji glyph (U+1F389 PARTY POPPER). Built from its code point so this
+// source file stays ASCII-only per the suite Law; the rendered glyph is identical.
+const DEFAULT_EMOJI = String.fromCodePoint(0x1F389);
+
+// Peak horizontal sway speed (CSS px/sec) at sway == 1. Amplitude scales with the knob.
+const SWAY_PX = 60;
+
+// Clamp a numeric option into [0,1], failing closed to `dflt` for non-finite input
+// (NaN/Infinity coerce to the default rather than poisoning a particle -- "null is not
+// zero"). Used at spawn time only, never on the render hot path.
+function clamp01(v, dflt) {
+    return Number.isFinite(v) ? (v < 0 ? 0 : v > 1 ? 1 : v) : dflt;
+}
+
+
+// ---------------------------------------------------------
+//  NAMED PRESETS -- drop-in configs for iconic effects
 //  Spread into burst()/spray(): c.burst({ ...presets.fireworks })
 //  Every `shape` here is one of the five the engine knows
-//  (rect | circle | star | triangle | emoji) — validated in the test suite.
-// ─────────────────────────────────────────────────────────
+//  (rect | circle | star | triangle | emoji) -- validated in the test suite.
+// ---------------------------------------------------------
 
 export const presets = {
-    /** Explosive upward burst with stars — classic celebration. */
+    /** Explosive upward burst with stars -- classic celebration. */
     fireworks: {
         count: 140, spread: 1.9, speed: 380, speedVariance: 220,
         gravity: 420, drag: 0.97, sizeMin: 6, sizeMax: 14,
         lifeMin: 1.6, lifeMax: 3.2, shape: 'star', angle: -Math.PI / 2,
     },
-    /** Powerful angled launch — side cannons, stage effects. */
+    /** Powerful angled launch -- side cannons, stage effects. */
     cannons: {
         count: 55, spread: 0.5, speed: 720, speedVariance: 80,
         gravity: 920, drag: 0.985, sizeMin: 5, sizeMax: 11,
         lifeMin: 1.3, lifeMax: 2.8, shape: 'rect', angle: -Math.PI * 0.65,
     },
-    /** Gentle wide falling snow — long life, low gravity, circles. */
+    /** Gentle wide falling snow -- long life, low gravity, circles. */
     snow: {
         count: 180, spread: Math.PI * 0.95, speed: 60, speedVariance: 35,
         gravity: 95, drag: 0.996, sizeMin: 3.5, sizeMax: 7,
@@ -125,7 +141,7 @@ export const presets = {
 //  SHAPE RENDERERS
 //  Each draws a single particle at (0,0). The canvas is
 //  pre-translated and rotated by the caller.
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 const Shapes = {
     rect(ctx, w, h) {
@@ -176,13 +192,14 @@ const Shapes = {
 };
 
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  EMOJI GLYPH ATLAS
 //  Rasterize each emoji once to a small offscreen canvas at a fixed base size, then
 //  drawImage() it (scaled) per particle. Module-level and shared across instances --
-//  the '🎉' bitmap is identical everywhere, so there is no reason to cache per canvas.
+//  the default party-popper bitmap is identical everywhere, so there is no reason to
+//  cache per canvas.
 //  Zero rasterization on the hot path after first sight of a glyph.
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 const EmojiAtlas = (() => {
     const BASE = 64;            // render size; drawImage scales to each particle's w
@@ -226,9 +243,50 @@ const EmojiAtlas = (() => {
 })();
 
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
+//  SPRITE ATLAS
+//  registerShape({ image }) prerenders an arbitrary image source (an <img>, a
+//  canvas, an ImageBitmap) ONCE to a fixed-size offscreen canvas, then blits it
+//  (scaled) per particle -- the same GPU-blit hot path as the emoji glyph atlas,
+//  generalised to any picture. Keyed by the source object's identity and shared
+//  across instances (the rasterised bitmap does not depend on which instance asked).
+// ---------------------------------------------------------
+
+const SpriteAtlas = (() => {
+    const SIZE = 64;              // render size; drawImage scales to each particle's w
+    const cache = new Map();      // image source -> HTMLCanvasElement (or null in SSR)
+
+    function rasterize(img) {
+        if (typeof document === 'undefined' || typeof document.createElement !== 'function') return null;
+        const c = document.createElement('canvas');
+        c.width = SIZE;
+        c.height = SIZE;
+        const g = c.getContext('2d');
+        if (!g) return null;
+        // A not-yet-decoded <img> draws nothing rather than throwing; a broken source
+        // (drawImage rejects it) fails closed to null so registerShape can report it.
+        try { g.drawImage(img, 0, 0, SIZE, SIZE); } catch (_e) { return null; }
+        return c;
+    }
+
+    return {
+        /** The cached sprite canvas for `img`, rasterizing on first use; null if it cannot. */
+        get(img) {
+            if (!img) return null;
+            let c = cache.get(img);
+            if (c === undefined) {
+                c = rasterize(img);
+                if (c) cache.set(img, c);
+            }
+            return c;
+        },
+    };
+})();
+
+
+// ---------------------------------------------------------
 //  CONFETTI CANVAS
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /**
  * Create a confetti instance bound to a canvas.
@@ -246,20 +304,23 @@ export function createConfetti(canvas, {
 } = {}) {
     if (!canvas) {
         console.warn('@zakkster/lite-confetti: canvas required');
-        return { burst() {}, spray() {}, clear() {}, destroy() {} };
+        return { burst() {}, spray() {}, clear() {}, registerShape() { return -1; }, destroy() {} };
     }
 
     const ctx = canvas.getContext('2d');
     if (!ctx) {
         console.warn('@zakkster/lite-confetti: canvas 2d context unavailable');
-        return { burst() {}, spray() {}, clear() {}, get count() { return 0; }, seed() {}, destroy() {} };
+        return {
+            burst() {}, spray() {}, clear() {}, get count() { return 0; },
+            seed() {}, registerShape() { return -1; }, destroy() {},
+        };
     }
     const rng = new Random(seed ?? Date.now());
     const ticker = acquireTicker();
     let removeFn = null;
     let destroyed = false;
 
-    // ── Cached dimensions (never read clientWidth in the hot loop) ──
+    // -- Cached dimensions (never read clientWidth in the hot loop) --
     const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
     let cw = 0;
     let ch = 0;
@@ -275,7 +336,7 @@ export function createConfetti(canvas, {
 
     updateSize(); // Initial sizing
 
-    // ── ResizeObserver (same pattern as lite-viewport) ──
+    // -- ResizeObserver (same pattern as lite-viewport) --
     // Observes parent element, RAF-deduped to prevent double-fire.
     // Responds to CSS flex/grid reflow, not just window resize.
     let _ro = null;
@@ -294,7 +355,7 @@ export function createConfetti(canvas, {
         _ro.observe(canvas.parentElement || canvas);
     }
 
-    // ── Particle Pool (flat arrays for cache-friendliness) ──
+    // -- Particle Pool (flat arrays for cache-friendliness) --
     const pool = {
         x:     new Float32Array(maxParticles),
         y:     new Float32Array(maxParticles),
@@ -310,7 +371,9 @@ export function createConfetti(canvas, {
         maxL:  new Float32Array(maxParticles),
         grav:  new Float32Array(maxParticles),   // per-particle gravity
         drag:  new Float32Array(maxParticles),
-        shape: new Uint8Array(maxParticles),     // 0=rect, 1=circle, 2=star, 3=triangle, 4=emoji
+        flut:  new Float32Array(maxParticles),   // flutter: tumble depth 0..1 (X-scale wobble)
+        sway:  new Float32Array(maxParticles),   // sway: horizontal drift amplitude 0..1
+        shape: new Uint8Array(maxParticles),     // 0..4 built-in, 5+ = registerShape() custom
     };
 
     // Color and emoji stored as arrays (can't go in TypedArrays)
@@ -320,7 +383,7 @@ export function createConfetti(canvas, {
     let head = 0;
     let aliveCount = 0;
 
-    // ── Pointer-follow state (v1.2.0), per-instance ──────────────────────────
+    // -- Pointer-follow state (v1.2.0), per-instance --------------------------
     // Opt-in: nothing is bound until spray({ followPointer:true }) runs, so a page
     // that imports lite-confetti but never follows the pointer installs no global
     // listener. Coordinates are converted from viewport space into THIS canvas's
@@ -362,10 +425,24 @@ export function createConfetti(canvas, {
         _ptrBound = false;
     }
 
-    // ── Shape ID mapping ──
-    const SHAPE_MAP = { rect: 0, circle: 1, star: 2, triangle: 3, emoji: 4 };
+    // -- Shape table (per-instance, so custom shapes never leak between instances) --
+    // Ids 0..4 are the built-ins; registerShape() allocates 5+. The render loop
+    // dispatches through shapeDraw[id] (an indexed call, zero-allocation) and consults
+    // shapeBlit[id] to decide whether to set fillStyle (vector fill) or leave it (blit:
+    // emoji / image sprites paint their own pixels). Every draw fn takes the uniform
+    // signature (ctx, w, h, i) and ignores the args it does not need.
+    const shapeDraw = [
+        Shapes.rect,
+        Shapes.circle,
+        Shapes.star,
+        Shapes.triangle,
+        (dctx, w, _h, i) => Shapes.emoji(dctx, w, emojis[i]),
+    ];
+    const shapeBlit = [false, false, false, false, true];
+    const shapeName2Id = new Map([['rect', 0], ['circle', 1], ['star', 2], ['triangle', 3], ['emoji', 4]]);
+    let nextShapeId = 5;
 
-    // ── Spawn a single particle ──
+    // -- Spawn a single particle --
     function spawn(x, y, vx, vy, config) {
         const i = head;
         head = (head + 1) % maxParticles;
@@ -384,12 +461,14 @@ export function createConfetti(canvas, {
         pool.maxL[i] = pool.life[i];
         pool.grav[i] = config.gravity;
         pool.drag[i] = config.drag;
+        pool.flut[i] = config.flutter;
+        pool.sway[i] = config.sway;
         pool.shape[i] = config.shapeId;
         colors[i] = config.colorPick();
-        emojis[i] = config.emoji || '🎉';
+        emojis[i] = config.emoji || DEFAULT_EMOJI;
     }
 
-    // ── Render loop ──
+    // -- Render loop --
     function update(dt) {
         const dtSec = dt / 1000;
         const W = canvas.width;
@@ -418,12 +497,23 @@ export function createConfetti(canvas, {
             pool.spin[i] += pool.spinV[i] * dtSec;
             pool.tilt[i] += pool.tiltV[i] * dtSec;
 
+            // Sway: paper-like side-to-side drift, opt-in. Guarded so the default
+            // (sway == 0) leaves positions byte-identical to pre-1.3.0 -- the committed
+            // determinism fingerprint depends on this branch never firing by default.
+            if (pool.sway[i] !== 0) {
+                pool.x[i] += Math.sin(pool.tilt[i]) * pool.sway[i] * SWAY_PX * dtSec;
+            }
+
             // Opacity fade in last 30% of life
             const lifeT = pool.life[i] / pool.maxL[i];
             const alpha = lifeT < 0.3 ? lifeT / 0.3 : 1;
 
-            // 3D-ish wobble via X-scale oscillation
-            const wobbleScale = 0.5 + Math.abs(Math.cos(pool.tilt[i])) * 0.5;
+            // 3D-ish tumble via X-scale oscillation. flutter (flut, 0..1) sets its depth:
+            // flut == 1 reproduces the pre-1.3.0 wobble (0.5 + 0.5|cos|) exactly, flut == 0
+            // holds the piece rigid. Scale never enters the position fingerprint, so this
+            // knob is hash-neutral regardless of its value.
+            const a = pool.flut[i];
+            const wobbleScale = 1 - a * 0.5 * (1 - Math.abs(Math.cos(pool.tilt[i])));
 
             // Render
             ctx.save();
@@ -432,18 +522,11 @@ export function createConfetti(canvas, {
             ctx.scale(wobbleScale, 1);
             ctx.globalAlpha = alpha;
 
-            const c = colors[i];
-            if (pool.shape[i] !== 4) {
-                ctx.fillStyle = c; // Pre-parsed in burst()/spray() — zero allocation
+            const id = pool.shape[i];
+            if (!shapeBlit[id]) {
+                ctx.fillStyle = colors[i]; // Pre-parsed in burst()/spray() -- zero allocation
             }
-
-            switch (pool.shape[i]) {
-                case 0: Shapes.rect(ctx, pool.w[i], pool.h[i]); break;
-                case 1: Shapes.circle(ctx, pool.w[i]); break;
-                case 2: Shapes.star(ctx, pool.w[i]); break;
-                case 3: Shapes.triangle(ctx, pool.w[i]); break;
-                case 4: Shapes.emoji(ctx, pool.w[i], emojis[i]); break;
-            }
+            shapeDraw[id](ctx, pool.w[i], pool.h[i], i);
 
             ctx.restore();
         }
@@ -463,9 +546,52 @@ export function createConfetti(canvas, {
         }
     }
 
-    // ═══════════════════════════════════════════════════════
+    // -- Reduced-motion static render (per-instance so it shares the shape table) --
+    // Shows confetti pieces in their spread positions with no animation, holds ~1.5s,
+    // then fades via a CSS opacity transition. Custom shapes render here too, through
+    // the same shapeDraw/shapeBlit table as the animated path.
+    function renderStaticBurst(cx, cy, count, colors, shapeId, sizeMin, sizeMax, spread, emoji) {
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+        for (let i = 0; i < Math.min(count, 40); i++) {
+            const angle = -Math.PI / 2 + (rng.next() - 0.5) * spread;
+            const dist = 30 + rng.next() * 120;
+            const px = cx + Math.cos(angle) * dist;
+            const py = cy + Math.sin(angle) * dist;
+            const size = sizeMin + rng.next() * (sizeMax - sizeMin);
+            const color = colors[Math.floor(rng.next() * colors.length)];
+            const rotation = rng.next() * Math.PI * 2;
+
+            ctx.save();
+            ctx.translate(px, py);
+            ctx.rotate(rotation);
+            ctx.globalAlpha = 0.85;
+
+            if (!shapeBlit[shapeId]) {
+                ctx.fillStyle = color; // Already pre-parsed by burst()/spray()
+            }
+            // The built-in emoji glyph comes from the local `emoji` here (no pool row to
+            // read); every other shape -- vector or sprite -- dispatches through the table.
+            if (shapeId === 4) Shapes.emoji(ctx, size, emoji);
+            else shapeDraw[shapeId](ctx, size, size * 0.6, -1);
+
+            ctx.restore();
+        }
+
+        // Fade out after 1.5s
+        const canvasEl = ctx.canvas;
+        canvasEl.style.transition = 'opacity 0.5s ease-out';
+        setTimeout(() => { canvasEl.style.opacity = '0'; }, 1500);
+        setTimeout(() => {
+            ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+            canvasEl.style.opacity = '';
+            canvasEl.style.transition = '';
+        }, 2100);
+    }
+
+    // =======================================================
     //  PUBLIC API
-    // ═══════════════════════════════════════════════════════
+    // =======================================================
 
     const api = {
         /**
@@ -484,8 +610,10 @@ export function createConfetti(canvas, {
          * @param {number} [options.sizeMax=12]
          * @param {number} [options.lifeMin=1.5]
          * @param {number} [options.lifeMax=3.0]
-         * @param {string} [options.shape='rect'] 'rect','circle','star','triangle','emoji'
-         * @param {string} [options.emoji='🎉']  Emoji character (shape must be 'emoji')
+         * @param {string} [options.shape='rect'] 'rect','circle','star','triangle','emoji', or a registerShape() name
+         * @param {string} [options.emoji]       Emoji character (shape must be 'emoji'); defaults to a party popper
+         * @param {number} [options.flutter=1]   Tumble depth 0..1 (0 rigid, 1 full wobble)
+         * @param {number} [options.sway=0]      Horizontal drift 0..1 (0 straight fall)
          * @param {Array}  [options.colors]      Array of OKLCH objects or CSS strings
          * @param {number} [options.angle=-Math.PI/2] Center angle of emission cone
          * @param {Function} [options.onComplete] Called when all burst particles die
@@ -503,7 +631,9 @@ export function createConfetti(canvas, {
                   lifeMin = 1.5,
                   lifeMax = 3.0,
                   shape = 'rect',
-                  emoji = '🎉',
+                  emoji = DEFAULT_EMOJI,
+                  flutter = 1,
+                  sway = 0,
                   colors = DEFAULT_COLORS,
                   angle = -Math.PI / 2,
                   onComplete,
@@ -512,23 +642,27 @@ export function createConfetti(canvas, {
 
             const cx = x ?? cw / 2;
             const cy = y ?? ch * 0.33;
-            const shapeId = SHAPE_MAP[shape] ?? 0;
+            // Unknown shape names fail closed to rect (id 0), matching pre-1.3.0 behaviour.
+            const shapeId = shapeName2Id.get(shape) ?? 0;
             // Rasterize the emoji glyph now (once), so the first frame has no hitch.
-            if (shapeId === 4) EmojiAtlas.prime(emoji || '🎉');
+            if (shapeId === 4) EmojiAtlas.prime(emoji || DEFAULT_EMOJI);
 
             // Pre-parse OKLCH objects to CSS strings ONCE per burst.
-            // This keeps the render loop 100% zero-GC — no toCssOklch() per frame.
+            // This keeps the render loop 100% zero-GC -- no toCssOklch() per frame.
             const parsedColors = colors.map(c => typeof c === 'string' ? c : toCssOklch(c));
 
             // Reduced motion: show static confetti, no animation
             if (respectReducedMotion && _prefersReducedMotion) {
-                _renderStaticBurst(ctx, cx, cy, count, parsedColors, shapeId, sizeMin, sizeMax, spread, emoji, rng);
+                renderStaticBurst(cx, cy, count, parsedColors, shapeId, sizeMin, sizeMax, spread, emoji);
                 if (onComplete) setTimeout(onComplete, 1500);
                 return;
             }
 
             const colorPick = () => rng.pick(parsedColors);
-            const config = { sizeMin, sizeMax, lifeMin, lifeMax, gravity, drag, shapeId, emoji, colorPick };
+            const config = {
+                sizeMin, sizeMax, lifeMin, lifeMax, gravity, drag, shapeId, emoji, colorPick,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0),
+            };
 
             for (let i = 0; i < count; i++) {
                 const a = angle + (rng.next() - 0.5) * spread;
@@ -553,6 +687,8 @@ export function createConfetti(canvas, {
          * @param {Object} [options]    Same as burst, plus:
          * @param {number} [options.duration=1000]  Spray duration in ms
          * @param {number} [options.rate=5]         Particles per frame
+         * @param {number} [options.flutter=1]      Tumble depth 0..1
+         * @param {number} [options.sway=0]         Horizontal drift 0..1
          */
         spray({
                   duration = 1000,
@@ -568,7 +704,9 @@ export function createConfetti(canvas, {
                   lifeMin = 1.2,
                   lifeMax = 2.5,
                   shape = 'rect',
-                  emoji = '🎉',
+                  emoji = DEFAULT_EMOJI,
+                  flutter = 1,
+                  sway = 0,
                   colors = DEFAULT_COLORS,
                   angle = -Math.PI / 2,
                   followPointer = false,
@@ -577,20 +715,24 @@ export function createConfetti(canvas, {
 
             const cx = x ?? cw / 2;
             const cy = y ?? ch * 0.33;
-            const shapeId = SHAPE_MAP[shape] ?? 0;
+            // Unknown shape names fail closed to rect (id 0), matching pre-1.3.0 behaviour.
+            const shapeId = shapeName2Id.get(shape) ?? 0;
             // Rasterize the emoji glyph now (once), so the first frame has no hitch.
-            if (shapeId === 4) EmojiAtlas.prime(emoji || '🎉');
+            if (shapeId === 4) EmojiAtlas.prime(emoji || DEFAULT_EMOJI);
 
             // Pre-parse OKLCH objects to CSS strings ONCE per spray.
             const parsedColors = colors.map(c => typeof c === 'string' ? c : toCssOklch(c));
 
             if (respectReducedMotion && _prefersReducedMotion) {
-                _renderStaticBurst(ctx, cx, cy, 30, parsedColors, shapeId, sizeMin, sizeMax, spread, emoji, rng);
+                renderStaticBurst(cx, cy, 30, parsedColors, shapeId, sizeMin, sizeMax, spread, emoji);
                 return;
             }
 
             const colorPick = () => rng.pick(parsedColors);
-            const config = { sizeMin, sizeMax, lifeMin, lifeMax, gravity, drag, shapeId, emoji, colorPick };
+            const config = {
+                sizeMin, sizeMax, lifeMin, lifeMax, gravity, drag, shapeId, emoji, colorPick,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0),
+            };
 
             // Pointer-follow is opt-in and, by nature, NON-DETERMINISTIC: it injects
             // live pointer positions the seed knows nothing about. It never consumes an
@@ -618,7 +760,7 @@ export function createConfetti(canvas, {
                 }
             };
 
-            // Piggyback on the render loop — spray spawns, render draws
+            // Piggyback on the render loop -- spray spawns, render draws
             const origUpdate = update;
             const wrappedUpdate = (dt) => {
                 sprayFn(dt);
@@ -642,6 +784,56 @@ export function createConfetti(canvas, {
         /** Re-seed the RNG for deterministic replay. */
         seed(s) { rng.reset(s); },
 
+        /**
+         * Register a custom particle shape for this instance, usable as
+         * `burst({ shape: name })`. Per-instance: the shape is invisible to other
+         * instances and dies with this one on destroy().
+         *
+         * @param {string} name  Shape name. Must not be a built-in
+         *   ('rect'|'circle'|'star'|'triangle'|'emoji'); re-registering a custom name
+         *   replaces it and keeps its id.
+         * @param {Function|Object} def  Either a draw function `(ctx, w, h) => void`
+         *   (a VECTOR shape -- the engine sets fillStyle to the particle colour before
+         *   calling, so a plain fill() paints correctly), or `{ image }` (an <img> /
+         *   canvas / ImageBitmap prerendered to a sprite and blitted), or
+         *   `{ draw, blit }` for an advanced self-painting shape.
+         * @returns {number} the assigned shape id (>= 5), or -1 after destroy().
+         */
+        registerShape(name, def) {
+            if (destroyed) return -1;
+            if (typeof name !== 'string' || name === '') {
+                throw new Error('@zakkster/lite-confetti: registerShape(name) requires a non-empty string name');
+            }
+            const existing = shapeName2Id.get(name);
+            if (existing !== undefined && existing < 5) {
+                throw new Error('@zakkster/lite-confetti: cannot override built-in shape "' + name + '"');
+            }
+
+            let draw, blit;
+            if (typeof def === 'function') {
+                draw = def;
+                blit = false;
+            } else if (def && typeof def === 'object' && def.image) {
+                const sprite = SpriteAtlas.get(def.image);
+                if (!sprite) {
+                    throw new Error('@zakkster/lite-confetti: registerShape("' + name + '") image could not be rasterized');
+                }
+                draw = (dctx, w) => { dctx.drawImage(sprite, -w / 2, -w / 2, w, w); };
+                blit = true;
+            } else if (def && typeof def === 'object' && typeof def.draw === 'function') {
+                draw = def.draw;
+                blit = def.blit !== false; // self-painting by default; opt into fill with blit:false
+            } else {
+                throw new Error('@zakkster/lite-confetti: registerShape(name, def) def must be a draw function, { image }, or { draw, blit }');
+            }
+
+            const id = existing === undefined ? nextShapeId++ : existing;
+            shapeDraw[id] = draw;
+            shapeBlit[id] = blit;
+            shapeName2Id.set(name, id);
+            return id;
+        },
+
         /** Destroy everything. Idempotent. */
         destroy() {
             if (destroyed) return;
@@ -660,69 +852,19 @@ export function createConfetti(canvas, {
 }
 
 
-// ─────────────────────────────────────────────────────────
-//  REDUCED MOTION: Static Confetti Render
-//  Shows confetti pieces in their spread positions with no
-//  animation. Fades out after 1.5s via CSS opacity transition.
-//  Users see the celebration without motion sickness.
-// ─────────────────────────────────────────────────────────
-
-function _renderStaticBurst(ctx, cx, cy, count, colors, shapeId, sizeMin, sizeMax, spread, emoji, rng) {
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-
-    for (let i = 0; i < Math.min(count, 40); i++) {
-        const angle = -Math.PI / 2 + (rng.next() - 0.5) * spread;
-        const dist = 30 + rng.next() * 120;
-        const x = cx + Math.cos(angle) * dist;
-        const y = cy + Math.sin(angle) * dist;
-        const size = sizeMin + rng.next() * (sizeMax - sizeMin);
-        const color = colors[Math.floor(rng.next() * colors.length)];
-        const rotation = rng.next() * Math.PI * 2;
-
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(rotation);
-        ctx.globalAlpha = 0.85;
-
-        if (shapeId !== 4) {
-            ctx.fillStyle = color; // Already pre-parsed by burst()/spray()
-        }
-
-        switch (shapeId) {
-            case 0: Shapes.rect(ctx, size, size * 0.6); break;
-            case 1: Shapes.circle(ctx, size); break;
-            case 2: Shapes.star(ctx, size); break;
-            case 3: Shapes.triangle(ctx, size); break;
-            case 4: Shapes.emoji(ctx, size, emoji); break;
-        }
-        ctx.restore();
-    }
-
-    // Fade out after 1.5s
-    const canvasEl = ctx.canvas;
-    canvasEl.style.transition = 'opacity 0.5s ease-out';
-    setTimeout(() => { canvasEl.style.opacity = '0'; }, 1500);
-    setTimeout(() => {
-        ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
-        canvasEl.style.opacity = '';
-        canvasEl.style.transition = '';
-    }, 2100);
-}
-
-
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  v1.2.0 HELPERS
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /**
  * Normalize a lite-hueforge `toGradientStops()` result (or a plain palette)
  * into a colors array ready for the `colors` option of burst() / spray().
  *
  * Accepts:
- *   • gradient stops: [{ color: {l,c,h}, stop: 0 }, ...]  -> the colors
- *   • { stops: [...] }                                    -> its stops' colors
- *   • a plain colors array (OKLCH objects or CSS strings) -> passed through
- *   • a single OKLCH object or CSS string                 -> wrapped in an array
+ *   - gradient stops: [{ color: {l,c,h}, stop: 0 }, ...]  -> the colors
+ *   - { stops: [...] }                                    -> its stops' colors
+ *   - a plain colors array (OKLCH objects or CSS strings) -> passed through
+ *   - a single OKLCH object or CSS string                 -> wrapped in an array
  *
  * Returns DEFAULT_COLORS for empty/invalid input, and never an empty array --
  * an empty `colors` would make rng.pick() return undefined and paint nothing.
@@ -760,7 +902,7 @@ export function colorsFromPalette(paletteInput) {
  * Burst-origin sugar: `{ x, y, ...extra }` from `el.getBoundingClientRect()`,
  * measured once at call time (never inside a loop).
  *
- * IMPORTANT — coordinate space. The returned x/y are in VIEWPORT coordinates
+ * IMPORTANT -- coordinate space. The returned x/y are in VIEWPORT coordinates
  * (the element's centre on screen). They line up with a confetti canvas only
  * when that canvas is a full-viewport overlay pinned at (0,0) -- the standard
  * `confetti()` overlay, and the fixed full-screen canvas most apps use. For an
@@ -789,10 +931,10 @@ export function fromElement(el, extra = {}) {
 }
 
 
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 //  CONVENIENCE: One-Shot Global Confetti
 //  Creates a temporary full-screen overlay, fires, cleans up.
-// ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------
 
 /**
  * Fire-and-forget confetti. Creates a temporary canvas overlay,
