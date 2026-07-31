@@ -21,6 +21,11 @@ import { createConfetti, confetti, presets, colorsFromPalette, fromElement } fro
 // that must bump this constant deliberately). See the determinism test below.
 const COMMITTED_HASH = 1569828004;
 
+// Committed fingerprint for a canonical MIXED burst (shapes:['rect','circle','star']).
+// The per-particle shape pick draws one extra rng value per particle, so this
+// deliberately differs from COMMITTED_HASH; it is its own deterministic-replay gate.
+const MIXED_HASH = 3132631460;
+
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
 function withSilencedWarn(fn) {
     const orig = console.warn;
@@ -528,6 +533,108 @@ describe('lite-confetti', () => {
             pump(1, 1000); pump(10, 16);
             r.destroy();
             assert.equal(bHash, cvR.hash, 'instance B saw instance A\'s custom shape (registry leaked)');
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    //  multi-shape mixing -- shapes: [] (v1.4.0, decision 0005)
+    // -------------------------------------------------------------------------
+    describe('multi-shape mixing (shapes: [])', () => {
+        // A position fingerprint cannot tell geometry apart (a custom shape hashes like
+        // rect at the same positions), so shape IDENTITY is proven with per-shape
+        // dispatch counters; the fingerprint proves only stream-level determinism.
+        const counter = (ref, key) => (ctx, w) => { ref[key]++; ctx.fillRect(-w / 2, -w / 2, w, w); };
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const h = canvas.hash;
+            c.destroy();
+            return h;
+        };
+
+        it('dispatches more than one shape across particles in a single burst', () => {
+            const c = createConfetti(makeCanvas(), { seed: 7, maxParticles: 200 });
+            const n = { a: 0, b: 0 };
+            c.registerShape('ca', counter(n, 'a'));
+            c.registerShape('cb', counter(n, 'b'));
+            c.burst({ count: 60, shapes: ['ca', 'cb'], lifeMin: 5, lifeMax: 5 });
+            pump(1);
+            assert.equal(c.count, 60);
+            assert.ok(n.a > 0, 'first mixed shape never dispatched');
+            assert.ok(n.b > 0, 'second mixed shape never dispatched');
+            assert.equal(n.a + n.b, 60, 'every particle dispatches exactly one shape per frame');
+            c.destroy();
+        });
+
+        it('weights the mix by repetition (a 2:1 array skews toward the repeated shape)', () => {
+            const c = createConfetti(makeCanvas(), { seed: 4, maxParticles: 500 });
+            const n = { a: 0, b: 0 };
+            c.registerShape('s', counter(n, 'a'));
+            c.registerShape('o', counter(n, 'b'));
+            c.burst({ count: 300, shapes: ['s', 's', 'o'], lifeMin: 5, lifeMax: 5 });
+            pump(1);
+            assert.equal(n.a + n.b, 300);
+            assert.ok(n.a > n.b, 'the repeated shape should dominate a 2:1 mix');
+            c.destroy();
+        });
+
+        it("a single-entry mix equals the plain shape (shapes:['star'] == shape:'star')", () => {
+            assert.equal(run({ shapes: ['star'] }), run({ shape: 'star' }));
+            assert.equal(run({ shapes: ['rect'] }), run({ shape: 'rect' }));
+        });
+
+        it('omitting / empty / non-array shapes keeps the committed default fingerprint', () => {
+            assert.equal(run({ shape: 'rect' }), COMMITTED_HASH);
+            assert.equal(run({ shape: 'rect', shapes: [] }), COMMITTED_HASH);
+            assert.equal(run({ shape: 'rect', shapes: null }), COMMITTED_HASH);
+            assert.equal(run({ shape: 'rect', shapes: 'star' }), COMMITTED_HASH); // non-array ignored
+        });
+
+        it('all-unknown shapes fall back to the single `shape` path (fail closed)', () => {
+            assert.equal(run({ shape: 'rect', shapes: ['nope', 'gone'] }), COMMITTED_HASH);
+        });
+
+        it('drops unknown names but keeps the resolvable ones', () => {
+            // ['heart','nope'] -> [heart] (nope dropped) -> length 1 -> heart every particle
+            const c = createConfetti(makeCanvas(), { seed: 1, maxParticles: 100 });
+            const n = { a: 0 };
+            c.registerShape('heart', counter(n, 'a'));
+            c.burst({ count: 20, shapes: ['heart', 'nope'], lifeMin: 5, lifeMax: 5 });
+            pump(1);
+            assert.equal(c.count, 20);
+            assert.equal(n.a, 20, 'unknown name should be dropped; heart should paint every particle');
+            c.destroy();
+        });
+
+        it('matches a committed fingerprint for a canonical mixed burst', () => {
+            const h = run({ shapes: ['rect', 'circle', 'star'] });
+            if (MIXED_HASH === null) console.log('[mix] fingerprint =', h);
+            else assert.equal(h, MIXED_HASH, 'mixed-burst positions changed vs the committed baseline');
+            assert.notEqual(h, COMMITTED_HASH, 'the per-particle shape pick must shift the stream vs single-shape');
+        });
+
+        it('renders a mix on the reduced-motion static path without throwing', () => {
+            setReducedMotion(true);
+            try {
+                const c = createConfetti(makeCanvas(), { seed: 5 });
+                assert.doesNotThrow(() => c.burst({ count: 30, shapes: ['rect', 'circle', 'star'] }));
+                c.destroy();
+            } finally {
+                setReducedMotion(false);
+            }
+        });
+
+        it('spray() accepts a shapes mix too', () => {
+            const c = createConfetti(makeCanvas(), { seed: 2, maxParticles: 300 });
+            const n = { a: 0, b: 0 };
+            c.registerShape('sa', counter(n, 'a'));
+            c.registerShape('sb', counter(n, 'b'));
+            c.spray({ duration: 200, rate: 10, shapes: ['sa', 'sb'], lifeMin: 5, lifeMax: 5 });
+            pump(5, 16);
+            assert.ok(n.a > 0 && n.b > 0, 'spray did not mix shapes');
+            c.destroy();
         });
     });
 

@@ -101,6 +101,27 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- coercion left the render loop allocating');
     }
 
+    // (5) A pool filled from ONE multi-shape burst (shapes: []). The per-particle shape
+    // pick is a spawn-time rng draw + array index (no alloc), and it interleaves shape
+    // ids across the pool so update()'s indexed dispatch runs fully polymorphic every
+    // frame. Must still integrate at ~0 B/frame. Includes a custom vector + a sprite in
+    // the mix so all three dispatch kinds are hit from a single burst.
+    const cm = createConfetti(makeCanvas(), { seed: 5150, maxParticles: MAXP });
+    cm.registerShape('heart', (ctx, w) => { ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, Math.PI * 2); ctx.fill(); });
+    cm.registerShape('logo', { image: makeCanvas() });
+    cm.burst({
+        count: MAXP, shapes: ['rect', 'circle', 'star', 'triangle', 'emoji', 'heart', 'logo'],
+        lifeMin: 1e6, lifeMax: 1e6, sizeMin: 4, sizeMax: 12, sway: 0.5,
+    });
+    pump(1, 1000);
+    check(cm.count === MAXP, () => `T6: mixed-shape pool has ${cm.count} alive, expected ${MAXP}`);
+    const bpfMix = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    cm.destroy();
+    if (bpfMix > RETAIN_FLOOR_BPF) {
+        die('T6: multi-shape update() retains ' + bpfMix.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- shapes[] dispatch is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -111,6 +132,7 @@ export async function run() {
 
     log('  T6 ok -- update() ' + bpf.toFixed(2) + ' B/frame over ' + MAXP + ' particles ('
         + bpfCustom.toFixed(2) + ' B/frame custom vector+sprite+sway, '
-        + bpfPoison.toFixed(2) + ' B/frame from sanitised garbage inputs); '
+        + bpfPoison.toFixed(2) + ' B/frame from sanitised garbage inputs, '
+        + bpfMix.toFixed(2) + ' B/frame from a shapes[] mix); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

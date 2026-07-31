@@ -196,4 +196,51 @@ export function run() {
         A.destroy();
         B.destroy();
     }
+
+    // --- F5: multi-shape mixing (shapes: []) is DETERMINISTIC. Two same-seed instances
+    // register the same custom shape and run identical fuzzed bursts that pass a `shapes`
+    // MIX (built-ins + the custom id). The per-particle shape pick draws from the shared
+    // seeded rng, so the fingerprints must stay bit-identical frame for frame. A counter
+    // proves the mix actually dispatches the custom shape (the position hash can't). ----
+    {
+        const seed = 909090;
+        const ca = makeCanvas({ record: true });
+        const cb = makeCanvas({ record: true });
+        const A = createConfetti(ca, { seed, maxParticles: CAP });
+        const B = createConfetti(cb, { seed, maxParticles: CAP });
+
+        let mixCalls = 0;
+        A.registerShape('star2', (ctx, w) => { mixCalls++; ctx.fillRect(-w / 2, -w / 2, w, w); });
+        B.registerShape('star2', (ctx, w) => { ctx.fillRect(-w / 2, -w / 2, w, w); });
+
+        const MIXES = [
+            ['rect', 'circle'],
+            ['star', 'star', 'triangle', 'star2'], // repetition-weighted
+            ['rect', 'star2', 'emoji', 'circle'],
+        ];
+        const prng = makePrng(SEED ^ 0x7f4a7c15);
+        for (let i = 0; i < 1500; i++) {
+            const roll = prng() % 100;
+            if (roll < 50) {
+                pump(1, 8 + (prng() % 17));
+                check(ca.hash === cb.hash, () =>
+                    `T5 F5: op ${i} seed ${SEED}: same-seed mixed-shape instances diverged (A ${ca.hash} != B ${cb.hash})`);
+            } else {
+                const o = {
+                    count: 1 + (prng() % 200),
+                    shapes: MIXES[prng() % MIXES.length],
+                    speed: 100 + (prng() % 500),
+                    gravity: 200 + (prng() % 600),
+                    lifeMin: 0.5 + (prng() % 200) / 100,
+                    lifeMax: 2.5 + (prng() % 200) / 100,
+                };
+                A.burst(o);
+                B.burst(o);
+            }
+        }
+        check(mixCalls > 0, () =>
+            `T5 F5: the custom shape inside a shapes[] mix was never dispatched`);
+        A.destroy();
+        B.destroy();
+    }
 }

@@ -1,10 +1,14 @@
 /**
- * @zakkster/lite-confetti v1.3.1 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.4.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.4.0 adds: multi-shape mixing -- burst()/spray() accept a `shapes` array and pick
+ * a shape per particle (weighted by repetition), so one burst mixes stars + circles +
+ * custom registerShape() shapes. Opt-in: omit `shapes` and the single-`shape` path is
+ * byte-identical (the committed determinism fingerprint is preserved).
  * v1.3.1 adds: fail-closed input validation -- every non-finite/out-of-range numeric
  * option on burst()/spray() coerces to its documented default (no NaN positions, no
  * immortal particles); destroy() now zeroes the count getter.
@@ -108,6 +112,21 @@ function num(v, dflt) {
 function nonneg(v, dflt) {
     const n = Number.isFinite(v) ? v : dflt;
     return n < 0 ? 0 : n;
+}
+
+// Resolve a `shapes` mix option to an array of shape ids, or null to fall back to the
+// single-`shape` path. Fails closed like the rest of the suite: a non-array / empty
+// input, or one whose names all fail to resolve, returns null (single-shape path), and
+// individual unknown names are dropped rather than throwing -- a call-time typo in a mix
+// must not crash a running animation. Called once per burst/spray, never on any hot path.
+function resolveShapeIds(shapes, name2id) {
+    if (!Array.isArray(shapes) || shapes.length === 0) return null;
+    const ids = [];
+    for (let k = 0; k < shapes.length; k++) {
+        const id = name2id.get(shapes[k]);
+        if (id !== undefined) ids.push(id); // unknown names dropped (fail closed)
+    }
+    return ids.length ? ids : null; // nothing resolvable -> single-shape path
 }
 
 
@@ -479,7 +498,14 @@ export function createConfetti(canvas, {
         pool.drag[i] = config.drag;
         pool.flut[i] = config.flutter;
         pool.sway[i] = config.sway;
-        pool.shape[i] = config.shapeId;
+        // Multi-shape mixing: when a `shapes` mix is active, pick a shape per particle
+        // (weighted by repetition in the array). The single-shape branch takes NO rng
+        // draw, so a default burst's determinism fingerprint is byte-for-byte preserved;
+        // the mixed branch draws exactly one rng.next() at this fixed point (before the
+        // colour pick below), so a mixed burst is itself deterministic under a fixed seed.
+        pool.shape[i] = config.shapeIds
+            ? config.shapeIds[(rng.next() * config.shapeIds.length) | 0]
+            : config.shapeId;
         colors[i] = config.colorPick();
         emojis[i] = config.emoji || DEFAULT_EMOJI;
     }
@@ -566,7 +592,7 @@ export function createConfetti(canvas, {
     // Shows confetti pieces in their spread positions with no animation, holds ~1.5s,
     // then fades via a CSS opacity transition. Custom shapes render here too, through
     // the same shapeDraw/shapeBlit table as the animated path.
-    function renderStaticBurst(cx, cy, count, colors, shapeId, sizeMin, sizeMax, spread, emoji) {
+    function renderStaticBurst(cx, cy, count, colors, shapeId, sizeMin, sizeMax, spread, emoji, shapeIds) {
         ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
         for (let i = 0; i < Math.min(count, 40); i++) {
@@ -577,19 +603,22 @@ export function createConfetti(canvas, {
             const size = sizeMin + rng.next() * (sizeMax - sizeMin);
             const color = colors[Math.floor(rng.next() * colors.length)];
             const rotation = rng.next() * Math.PI * 2;
+            // Honour a `shapes` mix in the reduced-motion render too. Single-shape (null)
+            // takes no extra rng draw, so the non-mixed static render is unchanged.
+            const id = shapeIds ? shapeIds[(rng.next() * shapeIds.length) | 0] : shapeId;
 
             ctx.save();
             ctx.translate(px, py);
             ctx.rotate(rotation);
             ctx.globalAlpha = 0.85;
 
-            if (!shapeBlit[shapeId]) {
+            if (!shapeBlit[id]) {
                 ctx.fillStyle = color; // Already pre-parsed by burst()/spray()
             }
             // The built-in emoji glyph comes from the local `emoji` here (no pool row to
             // read); every other shape -- vector or sprite -- dispatches through the table.
-            if (shapeId === 4) Shapes.emoji(ctx, size, emoji);
-            else shapeDraw[shapeId](ctx, size, size * 0.6, -1);
+            if (id === 4) Shapes.emoji(ctx, size, emoji);
+            else shapeDraw[id](ctx, size, size * 0.6, -1);
 
             ctx.restore();
         }
@@ -627,6 +656,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.lifeMin=1.5]
          * @param {number} [options.lifeMax=3.0]
          * @param {string} [options.shape='rect'] 'rect','circle','star','triangle','emoji', or a registerShape() name
+         * @param {string[]} [options.shapes]    Mix of shape names, one chosen per particle (repetition weights it). Overrides `shape`; unknown names are dropped
          * @param {string} [options.emoji]       Emoji character (shape must be 'emoji'); defaults to a party popper
          * @param {number} [options.flutter=1]   Tumble depth 0..1 (0 rigid, 1 full wobble)
          * @param {number} [options.sway=0]      Horizontal drift 0..1 (0 straight fall)
@@ -647,6 +677,7 @@ export function createConfetti(canvas, {
                   lifeMin = 1.5,
                   lifeMax = 3.0,
                   shape = 'rect',
+                  shapes,
                   emoji = DEFAULT_EMOJI,
                   flutter = 1,
                   sway = 0,
@@ -678,9 +709,15 @@ export function createConfetti(canvas, {
             const cx = num(x, cw / 2);
             const cy = num(y, ch * 0.33);
             // Unknown shape names fail closed to rect (id 0), matching pre-1.3.0 behaviour.
-            const shapeId = shapeName2Id.get(shape) ?? 0;
-            // Rasterize the emoji glyph now (once), so the first frame has no hitch.
-            if (shapeId === 4) EmojiAtlas.prime(emoji || DEFAULT_EMOJI);
+            let shapeId = shapeName2Id.get(shape) ?? 0;
+            // Opt-in multi-shape mixing: resolve `shapes` to ids (null => single-shape path).
+            let shapeIds = resolveShapeIds(shapes, shapeName2Id);
+            // A single-entry mix is just that shape: collapse it onto the single-shape path
+            // (zero extra rng draw), so shapes:['star'] is byte-identical to shape:'star'.
+            if (shapeIds && shapeIds.length === 1) { shapeId = shapeIds[0]; shapeIds = null; }
+            // Rasterize the emoji glyph now (once), so the first frame has no hitch. Prime
+            // when the single shape is emoji OR the mix contains it.
+            if (shapeId === 4 || (shapeIds && shapeIds.indexOf(4) !== -1)) EmojiAtlas.prime(emoji || DEFAULT_EMOJI);
 
             // Pre-parse OKLCH objects to CSS strings ONCE per burst.
             // This keeps the render loop 100% zero-GC -- no toCssOklch() per frame.
@@ -688,14 +725,14 @@ export function createConfetti(canvas, {
 
             // Reduced motion: show static confetti, no animation
             if (respectReducedMotion && _prefersReducedMotion) {
-                renderStaticBurst(cx, cy, count, parsedColors, shapeId, sizeMin, sizeMax, spread, emoji);
+                renderStaticBurst(cx, cy, count, parsedColors, shapeId, sizeMin, sizeMax, spread, emoji, shapeIds);
                 if (onComplete) setTimeout(onComplete, 1500);
                 return;
             }
 
             const colorPick = () => rng.pick(parsedColors);
             const config = {
-                sizeMin, sizeMax, lifeMin, lifeMax, gravity, drag, shapeId, emoji, colorPick,
+                sizeMin, sizeMax, lifeMin, lifeMax, gravity, drag, shapeId, shapeIds, emoji, colorPick,
                 flutter: clamp01(flutter, 1), sway: clamp01(sway, 0),
             };
 
@@ -739,6 +776,7 @@ export function createConfetti(canvas, {
                   lifeMin = 1.2,
                   lifeMax = 2.5,
                   shape = 'rect',
+                  shapes,
                   emoji = DEFAULT_EMOJI,
                   flutter = 1,
                   sway = 0,
@@ -770,21 +808,27 @@ export function createConfetti(canvas, {
             const cx = x ?? cw / 2;
             const cy = y ?? ch * 0.33;
             // Unknown shape names fail closed to rect (id 0), matching pre-1.3.0 behaviour.
-            const shapeId = shapeName2Id.get(shape) ?? 0;
-            // Rasterize the emoji glyph now (once), so the first frame has no hitch.
-            if (shapeId === 4) EmojiAtlas.prime(emoji || DEFAULT_EMOJI);
+            let shapeId = shapeName2Id.get(shape) ?? 0;
+            // Opt-in multi-shape mixing: resolve `shapes` to ids (null => single-shape path).
+            let shapeIds = resolveShapeIds(shapes, shapeName2Id);
+            // A single-entry mix is just that shape: collapse it onto the single-shape path
+            // (zero extra rng draw), so shapes:['star'] is byte-identical to shape:'star'.
+            if (shapeIds && shapeIds.length === 1) { shapeId = shapeIds[0]; shapeIds = null; }
+            // Rasterize the emoji glyph now (once), so the first frame has no hitch. Prime
+            // when the single shape is emoji OR the mix contains it.
+            if (shapeId === 4 || (shapeIds && shapeIds.indexOf(4) !== -1)) EmojiAtlas.prime(emoji || DEFAULT_EMOJI);
 
             // Pre-parse OKLCH objects to CSS strings ONCE per spray.
             const parsedColors = colors.map(c => typeof c === 'string' ? c : toCssOklch(c));
 
             if (respectReducedMotion && _prefersReducedMotion) {
-                renderStaticBurst(cx, cy, 30, parsedColors, shapeId, sizeMin, sizeMax, spread, emoji);
+                renderStaticBurst(cx, cy, 30, parsedColors, shapeId, sizeMin, sizeMax, spread, emoji, shapeIds);
                 return;
             }
 
             const colorPick = () => rng.pick(parsedColors);
             const config = {
-                sizeMin, sizeMax, lifeMin, lifeMax, gravity, drag, shapeId, emoji, colorPick,
+                sizeMin, sizeMax, lifeMin, lifeMax, gravity, drag, shapeId, shapeIds, emoji, colorPick,
                 flutter: clamp01(flutter, 1), sway: clamp01(sway, 0),
             };
 

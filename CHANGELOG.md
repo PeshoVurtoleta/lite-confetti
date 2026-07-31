@@ -3,6 +3,42 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.4.0] - 2026-08-01
+
+Feature release: multi-shape mixing. Closes the last deferred feature from decisions
+0003 and 0004. Opt-in and fingerprint-safe -- omit `shapes` and the default look,
+default positions, and the committed determinism fingerprint (`1569828004`) are all
+byte-for-byte unchanged.
+
+### Added
+- **`shapes: string[]` on `burst()`/`spray()`** -- mix multiple shapes in a single
+  burst, chosen per-particle. `c.burst({ shapes: ['star', 'circle', 'rect'] })` fires
+  one burst of mixed shapes instead of three overlapping ones. Repetition weights the
+  mix (`['star', 'star', 'circle']` is ~2:1), matching how `colors` already picks per
+  particle. Custom `registerShape()` names compose for free
+  (`shapes: ['star', 'myLogo']`). `shapes` overrides the singular `shape`.
+
+### Changed
+- Nothing for existing callers. The single-`shape` path is untouched: when `shapes` is
+  omitted (or empty / not an array / all-unknown), the engine takes the exact pre-1.4.0
+  path with zero extra RNG draw, so seeded output is identical. A single-entry mix
+  (`shapes: ['star']`) collapses to `shape: 'star'`, also byte-identical.
+
+### Semantics (fail closed, per decision 0004)
+- Unknown names in a mix are **dropped** (a call-time typo must not crash a running
+  animation); an all-unknown or empty array falls back to the single `shape`. Mixing is
+  per-instance: a `shapes` entry naming another instance's custom shape is dropped, never
+  leaked (torture T8 X6).
+
+### Internal
+- `resolveShapeIds()` helper resolves `shapes` to ids once per call (never on the hot
+  path); `spawn()` gains one conditional, allocation-free per-particle pick that draws an
+  RNG value ONLY in the mixed lane. No new pool column -- `pool.shape[i]` already stored a
+  per-particle id. A canonical mixed burst has its own committed fingerprint
+  (`3132631460`).
+- Tests: 82 unit (was 73); torture extended -- T5 F5 mixed-shape determinism + dispatch,
+  T6 lane 5 (a `shapes[]` pool integrates at ~0 B/frame), T8 X6 cross-instance mix drop.
+
 ## [1.3.1] - 2026-07-31
 
 Hardening release. Closes the two correctness gaps flagged (and deferred) in

@@ -545,6 +545,9 @@
                 <button class="btn" id="sprayBtn">🌊 Spray</button>
             </div>
             <div class="btn-row">
+                <button class="btn" id="mixBtn">🎨 Mix shapes</button>
+            </div>
+            <div class="btn-row">
                 <button class="btn" id="followBtn" aria-pressed="false">🧲 Follow</button>
                 <button class="btn" id="clearBtn">✕ Clear</button>
             </div>
@@ -593,6 +596,7 @@
     const $codeBox  = document.getElementById('codeBox');
     const $burstBtn = document.getElementById('burstBtn');
     const $sprayBtn = document.getElementById('sprayBtn');
+    const $mixBtn   = document.getElementById('mixBtn');
     const $followBtn = document.getElementById('followBtn');
     const $clearBtn = document.getElementById('clearBtn');
     const $codeBtn  = document.getElementById('codeBtn');
@@ -799,6 +803,17 @@
         cfg.duration = 1500;
         cfg.rate = Math.max(1, Math.round(cfg.count / 20));
         c.spray(cfg);
+    });
+
+    // Multi-shape mixing (v1.4.0): one burst, a different shape per particle. Reuses the
+    // live physics sliders but swaps the single `shape` for a `shapes` array mixing all
+    // four built-in vectors with the two registered custom shapes.
+    $mixBtn.addEventListener('click', () => {
+        const cfg = getConfig();
+        delete cfg.shape;
+        delete cfg.emoji;
+        cfg.shapes = ['rect', 'circle', 'star', 'triangle', 'heart', 'hexagon'];
+        c.burst(cfg);
     });
 
     // Follow-spray: a continuous stream that chases the pointer (v1.2.0 followPointer).

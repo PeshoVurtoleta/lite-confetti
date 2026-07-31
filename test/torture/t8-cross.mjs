@@ -101,6 +101,36 @@ export async function run() {
             `T8 X5: instance B saw instance A's custom shape (heart-name hash ${bHash} != rect hash ${rHash}) -- registry leaked across instances`);
     }
 
+    // X6 -- the multi-shape MIX honours the same per-instance boundary. Instance B mixes
+    // shapes:['rect','heart'] but never registered 'heart' (A did). The resolver drops
+    // the foreign name, leaving ['rect'], which collapses to the single rect path -- so
+    // B's fingerprint is byte-identical to a control rect burst. A leak would let A's
+    // 'heart' into B's mix and diverge the hash. This is X5 for the shapes[] surface.
+    {
+        const heart = (ctx, w) => { ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, Math.PI * 2); ctx.fill(); };
+        const params = { x: 400, y: 300, count: 40, lifeMin: 100, lifeMax: 100, speed: 300 };
+
+        const a = createConfetti(makeCanvas(), { seed: 88, maxParticles: 128 });
+        a.registerShape('heart', heart);
+
+        const cvB = makeCanvas({ record: true });
+        const b = createConfetti(cvB, { seed: 88, maxParticles: 128 });
+        b.burst({ ...params, shapes: ['rect', 'heart'] }); // 'heart' unknown to B -> dropped
+        pump(1, 1000); pump(20, 16);
+        const bHash = cvB.hash;
+        b.destroy(); a.destroy();
+
+        const cvR = makeCanvas({ record: true });
+        const r = createConfetti(cvR, { seed: 88, maxParticles: 128 });
+        r.burst({ ...params, shape: 'rect' });
+        pump(1, 1000); pump(20, 16);
+        const rHash = cvR.hash;
+        r.destroy();
+
+        check(bHash === rHash, () =>
+            `T8 X6: a shapes[] mix leaked another instance's custom shape (mix hash ${bHash} != rect hash ${rHash})`);
+    }
+
     // X4 -- shared-ticker retention. Mirrors F0 Phase A.
     if (!HAS_GC) { log('  T8 X4 inconclusive -- run with node --expose-gc'); return; }
     const tracker = createLeakTracker({ name: 'lite-confetti-cross' });

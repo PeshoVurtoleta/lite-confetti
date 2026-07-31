@@ -1,6 +1,6 @@
 # @zakkster/lite-confetti
 
-> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), tunable flutter/sway, reduced-motion support, and timeline composability.
+> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, reduced-motion support, and timeline composability.
 
 ## Installation
 npm install @zakkster/lite-confetti
@@ -44,6 +44,7 @@ Full control instance bound to a specific canvas.
 | `lifeMin` | 1.5 | Minimum lifetime (seconds) |
 | `lifeMax` | 3.0 | Maximum lifetime (seconds) |
 | `shape` | 'rect' | 'rect', 'circle', 'star', 'triangle', 'emoji', or a registerShape() name (unknown -> rect) |
+| `shapes` | - | Array of shape names, one chosen per particle (repetition weights it). Overrides `shape`; unknown names dropped (v1.4.0) |
 | `emoji` | party popper | Emoji character (when shape is 'emoji') |
 | `flutter` | 1 | Tumble depth 0–1 (0 rigid, 1 classic wobble). Scale only — never moves a particle. |
 | `sway` | 0 | Horizontal drift 0–1 (0 straight fall). Opt-in side-to-side motion. |
@@ -196,3 +197,28 @@ back to rect (registerShape's throw-on-bad-def is unchanged; that is setup, not 
 per-call tunable). destroy() now zeroes the count getter (was left stale). Internals:
 num()/nonneg() coercion helpers beside clamp01 (once per burst, never on the hot path);
 a non-enumerable __stats() conservation probe for the torture gate. Tests: 73 unit.
+
+## v1.4.0 -- multi-shape mixing (shapes: [])
+
+Closes the last deferred feature from decisions 0003/0004. burst()/spray() accept a
+`shapes` array and pick a shape PER PARTICLE, so one burst mixes stars + circles + rect
+(and custom registerShape() names) instead of firing several overlapping bursts:
+c.burst({ shapes: ['star', 'circle', 'rect'] }). Repetition weights the mix
+(['star','star','circle'] is ~2:1 stars:circles), the same organic model `colors`
+already uses. `shapes` overrides the singular `shape`.
+
+Fail closed (per 0004): unknown names in the mix are DROPPED (a call-time typo must not
+crash a running animation); an empty / non-array / all-unknown `shapes` falls back to the
+single `shape` path. Per-instance: a `shapes` entry naming another instance's custom
+shape is dropped, never leaked. A single-entry mix (['star']) collapses to shape:'star'.
+
+Opt-in and fingerprint-safe: omit `shapes` and the engine takes the exact pre-1.4.0
+single-shape path with ZERO extra rng draw, so the committed default fingerprint
+(1569828004) is byte-for-byte preserved. The per-particle pick draws one rng value ONLY
+in the mixed lane, at a fixed point in spawn(), so a mixed burst is itself deterministic
+(canonical mixed fingerprint 3132631460). No new pool column -- pool.shape[i] already
+held a per-particle id; update()'s indexed dispatch was already per-particle. No hot-path
+cost: resolveShapeIds() runs once per call, the pick is a spawn-time array index.
+
+Tests: 82 unit (was 73); torture T5 F5 (mixed determinism + dispatch), T6 lane 5
+(shapes[] pool at ~0 B/frame), T8 X6 (cross-instance mix drop). No runtime dep change.

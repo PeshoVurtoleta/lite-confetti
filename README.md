@@ -8,7 +8,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
 Deterministic confetti engine with OKLCH colors, 5 built-in shapes plus custom
-`registerShape()` shapes (vector or image sprite), tunable flutter, and reduced-motion support.
+`registerShape()` shapes (vector or image sprite), per-particle multi-shape mixing,
+tunable flutter, and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -85,6 +86,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `lifeMin` | number | 1.5 | Minimum particle lifetime in seconds |
 | `lifeMax` | number | 3.0 | Maximum particle lifetime in seconds |
 | `shape` | string | `'rect'` | `'rect'`, `'circle'`, `'star'`, `'triangle'`, `'emoji'`, or a name from `registerShape()`. Unknown names fall back to `'rect'`. |
+| `shapes` | string[] | — | Mix multiple shapes in one burst, chosen per particle. Repetition weights the mix. Overrides `shape`; unknown names are dropped. See [Mixing shapes](#mixing-shapes). |
 | `emoji` | string | party popper | Emoji character (only used when `shape` is `'emoji'`) |
 | `flutter` | number | 1 | Tumble depth, 0–1. `1` = full wobble (classic), `0` = rigid. Affects scale only, never position. |
 | `sway` | number | 0 | Horizontal drift, 0–1. `0` = straight fall; higher values sway side-to-side like real paper. |
@@ -186,6 +188,23 @@ c.spray({ shape: 'logo', duration: 1500 });
 ```
 
 `registerShape` returns the assigned shape id (`>= 5`; built-ins keep `0–4`). Re-registering a custom name replaces it and keeps its id. It **fails closed** — an empty/non-string name, a built-in override (`'rect'`, `'emoji'`, …), or a malformed `def` throws. A typo'd `shape` name at `burst()` time does not throw; it falls back to `'rect'`.
+
+### Mixing shapes
+
+Pass `shapes` (plural) to mix several shapes in **one** burst — each particle picks its own, so you get a confetti spread of stars *and* circles *and* rectangles without firing three overlapping bursts:
+
+```js
+c.burst({ shapes: ['star', 'circle', 'rect'] });
+
+// Repetition weights the mix — this is ~2:1 stars to circles:
+c.burst({ shapes: ['star', 'star', 'circle'] });
+
+// Custom registerShape() names compose for free:
+c.registerShape('logo', { image: logo });
+c.burst({ shapes: ['rect', 'logo', 'star'] });
+```
+
+`shapes` overrides the singular `shape`. It **fails closed** the same way everything else does: unknown names are dropped, and an empty / non-array / all-unknown `shapes` falls back to `shape`. Mixing is deterministic under a seed and per-instance (a `shapes` entry naming another instance's custom shape is dropped, never borrowed). Omitting `shapes` is free — the single-shape path is byte-for-byte unchanged, committed fingerprint and all.
 
 Custom shapes go through the same zero-allocation dispatch as the built-ins — the torture gate proves a live pool of a custom vector shape + an image sprite renders at ~0 bytes/frame.
 
@@ -428,6 +447,12 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.4.0
+
+**Multi-shape mixing.** Opt-in and fingerprint-safe; the single-shape path and committed determinism fingerprint are byte-for-byte unchanged.
+
+- `shapes: string[]` on `burst()`/`spray()` — mix multiple shapes in one burst, chosen per particle (repetition weights the mix). Custom `registerShape()` names compose. Overrides `shape`; unknown names are dropped (fail closed). See [Mixing shapes](#mixing-shapes).
 
 ### v1.3.1
 

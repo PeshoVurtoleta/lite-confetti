@@ -23,6 +23,12 @@ export interface BurstOptions {
     speed?: number; speedVariance?: number; gravity?: number; drag?: number;
     sizeMin?: number; sizeMax?: number; lifeMin?: number; lifeMax?: number;
     shape?: ShapeName;
+    /**
+     * Mix multiple shapes in one burst/spray, chosen per-particle (repetition in the
+     * array weights the mix, e.g. ['star','star','circle'] is ~2:1). Overrides `shape`;
+     * unknown names are dropped, and an empty/all-unknown array falls back to `shape`.
+     */
+    shapes?: ShapeName[];
     emoji?: string; colors?: Array<OklchColor | string>;
     /** Tumble depth 0..1 (0 rigid, 1 full wobble). Default 1. Affects scale, not position. */
     flutter?: number;
