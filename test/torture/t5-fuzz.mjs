@@ -47,6 +47,8 @@ function genOp(prng, allowReseed) {
                 spread: (prng() % 300) / 100,
                 gravity: 200 + (prng() % 800),
                 wind: (prng() % 1000) - 500, // signed lateral wind, spans left..right
+                floor: (prng() % 3 === 0) ? Infinity : 50 + (prng() % 400), // 1/3 no floor, else reachable
+                bounce: (prng() % 101) / 100, // restitution 0..1 (settle .. elastic)
                 lifeMin: 0.5 + (prng() % 200) / 100,
                 lifeMax: 2.5 + (prng() % 200) / 100,
             },
@@ -58,6 +60,8 @@ function genOp(prng, allowReseed) {
             o: {
                 rate: 1 + (prng() % 8), duration: 100 + (prng() % 400),
                 speed: 100 + (prng() % 500), wind: (prng() % 800) - 400,
+                floor: (prng() % 3 === 0) ? Infinity : 50 + (prng() % 400),
+                bounce: (prng() % 101) / 100,
             },
         };
     }

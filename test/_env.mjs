@@ -104,6 +104,13 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     // DIRECTION (e.g. wind: +K drifts right => larger sumX than wind: -K), the analog of
     // "count dispatches, not positions": a bare hash proves determinism but not sign.
     let sumX = 0;
+    // Largest integer draw Y seen, accumulated ONLY in the record branch and kept out of
+    // the `hash` mix (so every committed fingerprint is byte-identical whether or not this
+    // is read). It measures the floor CONTAINMENT invariant a bare hash cannot see: a
+    // floored burst gives `maxY <= floor` (the boundary held), while the same seed with no
+    // floor gives `maxY > floor` (the floor actually did something) -- the Y-axis analog of
+    // `sumX`'s drift-direction proof.
+    let maxY = -Infinity;
     // Fingerprint INTEGER-pixel draw positions only. Rounding to whole pixels
     // absorbs the sub-pixel divergence libm sin/cos can show across platforms, so
     // a committed baseline is portable; rotations (radians) are deliberately not
@@ -125,6 +132,8 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
             hash = (Math.imul(hash ^ (Math.round(x) | 0), 16777619)) >>> 0;
             hash = (Math.imul(hash ^ (Math.round(y) | 0), 16777619)) >>> 0;
             sumX += Math.round(x) | 0; // drift-direction probe; does NOT feed `hash`
+            const ry = Math.round(y) | 0; // floor-containment probe; does NOT feed `hash`
+            if (ry > maxY) maxY = ry;
         }
         : null;
 
@@ -141,6 +150,7 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     c.getContext = () => ctx;
     Object.defineProperty(c, 'hash', { get() { return hash >>> 0; } });
     Object.defineProperty(c, 'sumX', { get() { return sumX; } });
+    Object.defineProperty(c, 'maxY', { get() { return maxY; } });
     return c;
 }
 

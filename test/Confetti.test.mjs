@@ -32,6 +32,15 @@ const MIXED_HASH = 3132631460;
 // draw is involved -- wind is pure physics -- so this holds cross-process.)
 const WIND_HASH = 2385225781;
 
+// Committed fingerprint for a canonical FLOORED burst (floor: 120, bounce: 0). A finite
+// floor clamps every particle that reaches it and reflects vy, shifting the stream, so
+// this deliberately differs from COMMITTED_HASH; it is its own deterministic-replay gate.
+// Like wind, the collision draws no rng (pure physics), so it holds cross-process.
+const FLOOR_HASH = 2679696825;
+// The floor Y used by the floor/bounce rig. The un-floored fall reaches maxY == 196 over
+// the pumped window, so 120 is genuinely crossed (the boundary actually fires).
+const FLOOR_Y = 120;
+
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
 function withSilencedWarn(fn) {
     const orig = console.warn;
@@ -723,6 +732,107 @@ describe('lite-confetti', () => {
                 }
             };
             assert.equal(staticHash({ wind: 500 }), staticHash({ wind: 0 }));
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    //  floor / bounce -- settle boundary (v1.6.0, decision 0007)
+    // -------------------------------------------------------------------------
+    describe('floor / bounce (settle boundary)', () => {
+        // Same seeded rig as the wind gate (so an un-floored run reproduces COMMITTED_HASH).
+        // `record` also exposes canvas.maxY -- the largest integer draw-Y, a CONTAINMENT
+        // probe kept out of the hash. A bare fingerprint proves the floored stream is
+        // deterministic but not that the boundary actually held; maxY gives the invariant.
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = { hash: canvas.hash, maxY: canvas.maxY };
+            c.destroy();
+            return out;
+        };
+
+        it('omitting / Infinity / non-finite floor keeps the committed default fingerprint', () => {
+            assert.equal(run({}).hash, COMMITTED_HASH);
+            assert.equal(run({ floor: Infinity }).hash, COMMITTED_HASH);   // explicit "no floor"
+            assert.equal(run({ floor: NaN }).hash, COMMITTED_HASH);        // fail closed -> Infinity
+            assert.equal(run({ floor: null }).hash, COMMITTED_HASH);       // fail closed -> Infinity
+            assert.equal(run({ floor: 'low' }).hash, COMMITTED_HASH);      // fail closed -> Infinity
+        });
+
+        it('an unreachable floor is inert (never crosses => byte-identical stream)', () => {
+            // The fall tops out at maxY == 196, so a floor at 500 is never touched.
+            assert.equal(run({ floor: 500 }).hash, COMMITTED_HASH);
+        });
+
+        it('matches a committed fingerprint for a canonical floored burst', () => {
+            const { hash } = run({ floor: FLOOR_Y, bounce: 0 });
+            if (FLOOR_HASH === null) console.log('[floor] fingerprint =', hash);
+            else assert.equal(hash, FLOOR_HASH, 'floored-burst positions changed vs the committed baseline');
+            assert.notEqual(hash, COMMITTED_HASH, 'a reachable floor must shift the stream vs no floor');
+        });
+
+        it('contains every particle at or above the floor (maxY invariant)', () => {
+            // The invariant a bare hash cannot see: floored <= floor, un-floored > floor.
+            assert.ok(run({ floor: FLOOR_Y, bounce: 0 }).maxY <= FLOOR_Y, 'a particle escaped below the floor');
+            assert.ok(run({ floor: FLOOR_Y, bounce: 0.7 }).maxY <= FLOOR_Y, 'bounce must not let a particle escape');
+            assert.ok(run({}).maxY > FLOOR_Y, 'without a floor the fall should pass the line (else the test is vacuous)');
+        });
+
+        it('restitution changes the trajectory (bounce shifts the fingerprint)', () => {
+            const settle = run({ floor: FLOOR_Y, bounce: 0 }).hash;
+            const bouncy = run({ floor: FLOOR_Y, bounce: 0.7 }).hash;
+            assert.notEqual(settle, bouncy, 'reflecting vy by restitution must change positions');
+        });
+
+        it('clamps out-of-range bounce (negative -> rest, >1 -> elastic, no runaway)', () => {
+            // bounce is clamp01: -5 behaves as 0 (rest), 9 behaves as 1 (elastic).
+            assert.equal(run({ floor: FLOOR_Y, bounce: -5 }).hash, run({ floor: FLOOR_Y, bounce: 0 }).hash);
+            assert.equal(run({ floor: FLOOR_Y, bounce: 9 }).hash,  run({ floor: FLOOR_Y, bounce: 1 }).hash);
+        });
+
+        it('keeps positions finite under an elastic bounce + strong gravity (no NaN)', () => {
+            const canvas = makeCanvas({ assertFinite: true });
+            const c = createConfetti(canvas, { seed: 3 });
+            assert.doesNotThrow(() => {
+                c.burst({ count: 60, floor: 50, bounce: 1, gravity: 4000, lifeMin: 5, lifeMax: 5 });
+                pump(40, 16);
+            });
+            c.destroy();
+        });
+
+        it('spray() honours floor (contains the spray at the boundary)', () => {
+            const sprayMaxY = (floor) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 200, rate: 10, floor, bounce: 0, y: 0, lifeMin: 5, lifeMax: 5 });
+                pump(1, 1000); pump(60, 16); // spray rises first, then falls; give it time to cross
+                const m = canvas.maxY;
+                c.destroy();
+                return m;
+            };
+            const bounded = sprayMaxY(40);
+            const free = sprayMaxY(Infinity);
+            assert.ok(bounded <= 40, 'spray floor did not contain the particles');
+            assert.ok(free > 40, 'un-floored spray should pass the line (else the test is vacuous)');
+        });
+
+        it('has no effect under reduced motion (static path is floor-inert)', () => {
+            const staticHash = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 30, ...opts });
+                    const h = canvas.hash;
+                    c.destroy();
+                    return h;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            assert.equal(staticHash({ floor: 10, bounce: 0.5 }), staticHash({}));
         });
     });
 

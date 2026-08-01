@@ -28,6 +28,21 @@ export interface BurstOptions {
      * positions byte-identical); no effect under reduced motion.
      */
     wind?: number;
+    /**
+     * Settle-boundary Y coordinate in CSS px. A particle that reaches it is clamped onto
+     * the line and its vertical velocity is reflected (scaled by `bounce`), so confetti
+     * lands instead of falling forever. Default `Infinity` (no floor). Opt-in and
+     * fingerprint-safe (the default never fires the collision branch, so seeded positions
+     * stay byte-identical); draws no rng; no effect under reduced motion.
+     */
+    floor?: number;
+    /**
+     * Restitution 0..1 applied to vertical velocity on floor contact: 0 rests (settle /
+     * pile-up), 1 is perfectly elastic. Values outside 0..1 clamp; a rebound can never add
+     * energy, and drag still damps each frame, so motion always settles. Only meaningful
+     * when `floor` is finite. Default 0.
+     */
+    bounce?: number;
     sizeMin?: number; sizeMax?: number; lifeMin?: number; lifeMax?: number;
     shape?: ShapeName;
     /**

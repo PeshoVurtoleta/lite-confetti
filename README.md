@@ -9,7 +9,7 @@
 
 Deterministic confetti engine with OKLCH colors, 5 built-in shapes plus custom
 `registerShape()` shapes (vector or image sprite), per-particle multi-shape mixing,
-tunable flutter, lateral wind, and reduced-motion support.
+tunable flutter, lateral wind, a settle floor with bounce, and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -81,6 +81,8 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `speedVariance` | number | 200 | Speed randomness range. Actual speed: `speed ± speedVariance` |
 | `gravity` | number | 600 | Downward acceleration in px/s². Higher = falls faster. |
 | `wind` | number | 0 | Lateral acceleration in px/s² — the sideways mirror of `gravity`. Positive drifts right, negative left. Opt-in; `0` = straight down. See [Wind](#wind--lateral-drift). |
+| `floor` | number | Infinity | Settle-boundary Y in CSS px. Particles that reach it land on the line instead of falling forever. Opt-in; `Infinity` = no floor. See [Floor](#floor--settle--bounce). |
+| `bounce` | number | 0 | Restitution `0–1` on floor contact: `0` rests (pile-up), `1` is perfectly elastic. Only with a finite `floor`. |
 | `drag` | number | 0.98 | Per-frame velocity retention, clamped to `0–1`. 0.98 = 2% speed loss per frame. |
 | `sizeMin` | number | 5 | Minimum particle width in CSS pixels |
 | `sizeMax` | number | 12 | Maximum particle width in CSS pixels |
@@ -122,15 +124,16 @@ Spray accepts all burst options plus:
 Every frame, each alive particle runs through this pipeline:
 
 ```
-1. GRAVITY     vy += gravity × dt        (downward acceleration)
-2. WIND        vx += wind × dt           (opt-in lateral acceleration)
-3. DRAG        vx *= drag, vy *= drag    (air resistance)
-4. POSITION    x += vx × dt, y += vy × dt
-5. SWAY        x += sin(tiltPhase) × sway × dt   (opt-in horizontal drift)
-6. SPIN        rotation += spinVelocity × dt
-7. TILT        tiltPhase += tiltSpeed × dt
-8. OPACITY     fade to 0 in last 30% of life
-9. RENDER      translate → rotate → flutter-scale → draw shape
+1.  GRAVITY     vy += gravity × dt        (downward acceleration)
+2.  WIND        vx += wind × dt           (opt-in lateral acceleration)
+3.  DRAG        vx *= drag, vy *= drag    (air resistance)
+4.  POSITION    x += vx × dt, y += vy × dt
+5.  FLOOR       if y > floor: y = floor, vy = −vy × bounce   (opt-in settle boundary)
+6.  SWAY        x += sin(tiltPhase) × sway × dt   (opt-in horizontal drift)
+7.  SPIN        rotation += spinVelocity × dt
+8.  TILT        tiltPhase += tiltSpeed × dt
+9.  OPACITY     fade to 0 in last 30% of life
+10. RENDER      translate → rotate → flutter-scale → draw shape
 ```
 
 ### Rotation & 3D Tumbling
@@ -156,6 +159,18 @@ c.burst({ ...presets.snow, wind: 60 });    // snow on a gentle breeze
 ```
 
 Wind is applied *before* drag, so — exactly like gravity's terminal fall speed — a particle approaches a terminal lateral velocity rather than accelerating forever. It defaults to `0` and the integrator skips the term entirely at `0`, so a default burst does no extra work and its seeded positions stay byte-identical (the committed determinism fingerprint is preserved). A windy burst draws no random values, so it too replays identically under a fixed seed. Wind has no effect under reduced motion (the static render has no velocity to push).
+
+### Floor / settle & bounce
+
+Where `gravity` and `wind` set the *force*, **`floor`** (added in v1.6.0) sets the *boundary*: a settle line, given as an absolute Y in CSS px, that a falling particle lands on instead of dropping forever. **`bounce`** is its restitution — `0` rests the piece on the line (confetti piles up), `1` reflects its vertical velocity perfectly (a lively rebound), anything between damps out.
+
+```js
+c.burst({ y: 0, floor: innerHeight - 20 });                 // confetti settles at the bottom
+c.burst({ y: 0, floor: innerHeight - 20, bounce: 0.5 });    // …and bounces on the way down
+c.spray({ floor: 400, bounce: 0.3, duration: 1500 });       // a spray that piles up on a shelf
+```
+
+On contact the particle is clamped onto the floor and its `vy` is reflected, scaled by `bounce`. Restitution is clamped to `0–1` so a rebound can never *add* energy, and drag still damps `vy` every frame, so even `bounce: 1` loses energy and eventually rests — never a runaway. `floor` defaults to `Infinity`, and the integrator's collision branch (`if (y > floor)`) can never fire at that default, so a floor-less burst does no extra work and its seeded positions stay byte-identical (the committed determinism fingerprint is preserved). Like wind, the collision draws no random values, so a floored burst replays identically under a fixed seed. Floor has no effect under reduced motion (the static render does no integration to collide).
 
 ### Canvas Sizing
 
@@ -461,6 +476,13 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.6.0
+
+**Floor / settle & bounce.** Opt-in and fingerprint-safe; the fall-forever default and committed determinism fingerprint are byte-for-byte unchanged.
+
+- `floor: number` on `burst()`/`spray()` — a settle-boundary Y in CSS px; a particle that reaches it is clamped onto the line instead of falling forever (default `Infinity` = no floor).
+- `bounce: number` — restitution `0–1` reflecting `vy` on floor contact (`0` rests/piles up, `1` elastic); clamped so a rebound can never add energy, and drag still damps it to rest. Draws no rng; fails closed (garbage `floor` → `Infinity`); no effect under reduced motion. See [Floor](#floor--settle--bounce).
 
 ### v1.5.0
 

@@ -1,6 +1,6 @@
 # @zakkster/lite-confetti
 
-> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, reduced-motion support, and timeline composability.
+> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, a settle floor with bounce, reduced-motion support, and timeline composability.
 
 ## Installation
 npm install @zakkster/lite-confetti
@@ -39,6 +39,8 @@ Full control instance bound to a specific canvas.
 | `speedVariance` | 200 | Speed randomness |
 | `gravity` | 600 | Downward acceleration (px/s²) |
 | `wind` | 0 | Lateral acceleration (px/s²), the X mirror of gravity. Positive = right, negative = left. Opt-in; fingerprint-safe (v1.5.0) |
+| `floor` | Infinity | Settle-boundary Y (CSS px); particles clamp onto it instead of falling forever. Opt-in; fingerprint-safe (v1.6.0) |
+| `bounce` | 0 | Restitution 0..1 on floor contact (0 rests/piles up, 1 elastic). Only with a finite `floor` (v1.6.0) |
 | `drag` | 0.98 | Per-frame velocity retention (0–1) |
 | `sizeMin` | 5 | Minimum particle size |
 | `sizeMax` | 12 | Maximum particle size |
@@ -56,7 +58,7 @@ Full control instance bound to a specific canvas.
 Spray-only: `duration` (ms, default 1000), `rate` (particles/frame, default 5)
 
 ## Particle Physics
-Each particle has: position (x, y), velocity (vx, vy), gravity, wind, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame: gravity → wind (guarded, opt-in) → drag → position update → spin → tilt.
+Each particle has: position (x, y), velocity (vx, vy), gravity, wind, floor, bounce, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame: gravity → wind (guarded, opt-in) → drag → position update → floor collision (guarded, opt-in: clamp + reflect vy) → spin → tilt.
 
 ## Rotation
 Particles rotate via `spin` (angular velocity applied each frame). The `spinV` is randomized per particle at spawn: `(rng.next() - 0.5) * 10` radians/sec. Combined with `tilt` wobble (cosine-driven X-scale oscillation), this produces realistic 3D tumbling.
@@ -65,7 +67,7 @@ Particles rotate via `spin` (angular velocity applied each frame). The `spinV` i
 - SoA flat TypedArrays for cache-friendly particle physics
 - Deterministic: `seed(42)` produces identical output every time
 - 5 built-in shapes (rect, circle, star, triangle, emoji) + `registerShape()` for custom vector/sprite shapes
-- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift), all deterministic
+- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + floor/bounce (settle boundary), all deterministic
 - OKLCH colors (perceptually uniform — every piece looks equally vibrant)
 - Reduced motion: auto-detects `prefers-reduced-motion: reduce`, renders static spread, fades out
 - ResizeObserver (not polling) for canvas sizing — zero layout thrashing
@@ -247,3 +249,31 @@ proves the SIGN (+wind drifts right, -wind left) that a bare fingerprint can't; 
 fuzzes signed wind through the differential stream, T6 lane 5 arms the wind FMA in the
 alloc gate, T1 adds wind poison cases under the finite-position detector. See decision 0006.
 No runtime dep change.
+
+## v1.6.0 -- floor / bounce (settle boundary)
+
+Adds the missing Y-axis boundary. Where gravity + wind set the FORCE, `floor` (an absolute
+Y in CSS px) + `bounce` (restitution 0..1) set WHERE and HOW a particle comes to rest, so
+confetti can land instead of falling forever: c.burst({ y: 0, floor: innerHeight - 20 })
+piles up at the bottom; add bounce: 0.5 for a rebound. On contact the particle is clamped
+onto the floor and its vy is reflected, scaled by bounce (0 rests / piles up, 1 elastic).
+
+Opt-in and fingerprint-safe: the integrator guards the collision on the floor value
+(`if (y > floor) { y = floor; vy = -vy * bounce; }`), and the default floor is Infinity, so
+`y > Infinity` is always false -- the branch can never fire by default, so the default burst
+does no extra work and seeded positions are byte-identical (the committed default fingerprint
+1569828004 is preserved). Like wind, the collision draws NO rng (pure physics), so a floored
+burst replays identically (canonical floored fingerprint 2679696825). Damped, never a
+runaway: bounce is clamp01 (a rebound can't add energy) and drag still damps vy each frame,
+so even bounce 1 settles; particles still expire on the life countdown. Fail closed: a
+non-finite/garbage floor coerces to Infinity (no floor), an out-of-range bounce clamps to
+0..1. Two new per-particle pool columns (`floor`, `bounce`, mirroring `grav`/`wind`) so a
+floored burst and a floor-less burst coexist in one pool; no hot-path alloc. No effect under
+reduced motion (static render does no integration to collide).
+
+Tests: 97 unit (was 88); a `maxY` containment probe on the mock ctx (hash-neutral) proves
+the invariant a bare fingerprint can't -- floored maxY <= floor (the boundary held), while
+the same seed with no floor gives maxY > floor (the floor actually did something); torture T5
+fuzzes finite/Infinity floor + bounce through the differential stream, T6 lane 5 arms the
+guarded collision for a full resting pool in the alloc gate, T1 adds floor/bounce poison cases
+under the finite-position detector. See decision 0007. No runtime dep change.

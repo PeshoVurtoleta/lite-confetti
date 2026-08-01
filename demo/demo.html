@@ -401,6 +401,7 @@
         <span class="badge">oklch-native</span>
         <span class="badge">5 + custom shapes</span>
         <span class="badge">flutter + sway + wind</span>
+        <span class="badge">floor + bounce</span>
         <span class="badge">reduced-motion</span>
         <span class="badge">< 4KB</span>
     </div>
@@ -541,6 +542,17 @@
                                                                                         id="windVal">0</span></div>
                 <input type="range" id="wind" min="-600" max="600" value="0" step="25">
             </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">floor</span><span class="control-val"
+                                                                                         id="floorVal">off</span></div>
+                <input type="range" id="floor" min="0" max="100" value="0" step="5">
+            </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">bounce</span><span class="control-val"
+                                                                                          id="bounceVal">0.00</span>
+                </div>
+                <input type="range" id="bounce" min="0" max="1" value="0" step="0.05">
+            </div>
         </div>
 
         <div class="section">
@@ -607,7 +619,7 @@
     const $codeBtn  = document.getElementById('codeBtn');
     const $seedBtn  = document.getElementById('seedBtn');
 
-    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind'];
+    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'floor', 'bounce'];
     const $in = {};   // id -> input element
     const $out = {};  // id -> value-display element
     for (const id of SLIDERS) { $in[id] = document.getElementById(id); $out[id] = document.getElementById(id + 'Val'); }
@@ -684,6 +696,7 @@
     // the object.
     function getConfig() {
         const shape = $shape.value;
+        const floorPct = +$in.floor.value; // slider is a % of viewport height; 0 = OFF (no floor)
         return {
             count: +$in.count.value,
             spread: +$in.spread.value,
@@ -701,6 +714,8 @@
             flutter: +$in.flutter.value,
             sway: +$in.sway.value,
             wind: +$in.wind.value,
+            floor: floorPct === 0 ? Infinity : window.innerHeight * floorPct / 100,
+            bounce: +$in.bounce.value,
         };
     }
 
@@ -713,13 +728,14 @@
     // ── Slider value displays. toFixed here is fine: 'input' fires at interaction
     //    rate and stops the instant the drag ends -- it is not a per-frame cost. ────
     const FIXED1 = new Set(['spread', 'lifeMin', 'lifeMax']);
-    const FIXED2 = new Set(['flutter', 'sway']);
+    const FIXED2 = new Set(['flutter', 'sway', 'bounce']);
     for (const id of SLIDERS) {
         const el = $in[id], out = $out[id];
         if (!el || !out) continue;
         el.addEventListener('input', () => {
             const raw = el.value;
             out.textContent = id === 'drag' ? (+raw).toFixed(3)
+                : id === 'floor' ? (+raw === 0 ? 'off' : raw + '%')  // 0 = no floor (Infinity)
                 : FIXED2.has(id) ? (+raw).toFixed(2)
                 : FIXED1.has(id) ? (+raw).toFixed(1) : raw;
         });

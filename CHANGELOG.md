@@ -3,6 +3,50 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.6.0] - 2026-08-01
+
+Feature release: `floor` + `bounce`. Adds the missing Y-axis boundary to the physics --
+an opt-in settle line that particles land on instead of falling forever. `gravity` and
+`wind` set the force; `floor` (an absolute CSS-px Y) and `bounce` (restitution `0..1`) set
+where and how they come to rest, so confetti can pile up or bounce. Opt-in and
+fingerprint-safe -- omit `floor` (default `Infinity`) and the default look, default
+positions, and the committed determinism fingerprint (`1569828004`) are all byte-for-byte
+unchanged.
+
+### Added
+- **`floor: number` on `burst()`/`spray()`** -- a settle-boundary Y in CSS px. A particle
+  that reaches it is clamped onto the line; default `Infinity` (no floor).
+  `c.burst({ floor: innerHeight - 20 })` lands confetti at the bottom of the viewport.
+- **`bounce: number` on `burst()`/`spray()`** -- restitution `0..1` applied to vertical
+  velocity on floor contact: `0` rests (settle / pile-up), `1` is perfectly elastic;
+  default `0`. Only meaningful with a finite `floor`. `{ floor: y, bounce: 0.4 }` gives a
+  lively rebound that damps out.
+
+### Semantics
+- **Opt-in, zero-cost by default.** The integrator guards the collision on the floor value
+  (`if (y > floor)`), and the default `floor` is `Infinity`, so the branch can never fire
+  by default -- a default burst does no extra work and its seeded positions are
+  byte-identical (the committed fingerprint is preserved). A floored burst is itself fully
+  deterministic under a fixed seed (it draws no rng; the collision is pure physics), with
+  its own committed fingerprint in the test suite.
+- **Damped, never a runaway.** `bounce` is clamped to `0..1`, so a rebound can never add
+  energy, and drag still damps `vy` each frame, so even `bounce: 1` loses energy and
+  settles. Particles still expire on the life countdown -- a floor never makes one immortal.
+- **Fail closed.** A non-finite/garbage `floor` (`NaN`, `Infinity`, a string) coerces to
+  `Infinity` (no floor), never a NaN position; an out-of-range `bounce` clamps to `0..1`.
+- **No effect under reduced motion.** The static reduced-motion render does no integration
+  and has no velocity, so a collision boundary is inert there, like `wind`/`sway`.
+
+### Internal
+- Two new per-particle pool columns (`floor`, `bounce`, mirroring `grav`/`wind`), so a
+  floored burst and a floor-less burst coexist correctly in one pool. Zero new hot-path
+  allocation (T6 measures a full mixed pool under wind + reachable floor/bounce at
+  ~0 B/frame). New unit `describe('floor / bounce (settle boundary)')` (committed
+  `FLOOR_HASH`, a hash-neutral `maxY` containment proof, restitution-shifts-trajectory,
+  fail-closed + spray + reduced-motion); torture T5 fuzzes finite/Infinity floor + bounce
+  through the differential stream, T1 adds `floor`/`bounce` poison cases under the
+  finite-position detector. See `decisions/0007-floor-bounce.md`.
+
 ## [1.5.0] - 2026-08-01
 
 Feature release: `wind`. Adds the missing lateral dimension to the physics -- a
