@@ -26,6 +26,12 @@ const COMMITTED_HASH = 1569828004;
 // deliberately differs from COMMITTED_HASH; it is its own deterministic-replay gate.
 const MIXED_HASH = 3132631460;
 
+// Committed fingerprint for a canonical WINDY burst (wind: 300). A non-zero wind adds a
+// lateral acceleration to every particle, shifting the stream, so this deliberately
+// differs from COMMITTED_HASH; it is its own deterministic-replay gate. (No extra rng
+// draw is involved -- wind is pure physics -- so this holds cross-process.)
+const WIND_HASH = 2385225781;
+
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
 function withSilencedWarn(fn) {
     const orig = console.warn;
@@ -635,6 +641,88 @@ describe('lite-confetti', () => {
             pump(5, 16);
             assert.ok(n.a > 0 && n.b > 0, 'spray did not mix shapes');
             c.destroy();
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    //  wind -- lateral drift (v1.5.0, decision 0006)
+    // -------------------------------------------------------------------------
+    describe('wind (lateral drift)', () => {
+        // Same seeded rig as the determinism gate. `record` also exposes canvas.sumX --
+        // the net signed sum of integer draw-X, a drift-DIRECTION probe kept out of the
+        // hash. A bare fingerprint proves the windy stream is deterministic but not which
+        // way it leans; sumX gives the sign.
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = { hash: canvas.hash, sumX: canvas.sumX };
+            c.destroy();
+            return out;
+        };
+
+        it('omitting / zero / non-finite wind keeps the committed default fingerprint', () => {
+            assert.equal(run({}).hash, COMMITTED_HASH);
+            assert.equal(run({ wind: 0 }).hash, COMMITTED_HASH);
+            assert.equal(run({ wind: NaN }).hash, COMMITTED_HASH);       // fail closed -> 0
+            assert.equal(run({ wind: Infinity }).hash, COMMITTED_HASH);  // fail closed -> 0
+            assert.equal(run({ wind: 'gale' }).hash, COMMITTED_HASH);    // fail closed -> 0
+        });
+
+        it('matches a committed fingerprint for a canonical windy burst', () => {
+            const { hash } = run({ wind: 300 });
+            if (WIND_HASH === null) console.log('[wind] fingerprint =', hash);
+            else assert.equal(hash, WIND_HASH, 'windy-burst positions changed vs the committed baseline');
+            assert.notEqual(hash, COMMITTED_HASH, 'a non-zero wind must shift the stream vs no wind');
+        });
+
+        it('drifts right for positive wind, left for negative (sumX ordering)', () => {
+            const right = run({ wind: 400 }).sumX;
+            const still = run({ wind: 0 }).sumX;
+            const left  = run({ wind: -400 }).sumX;
+            assert.ok(right > still, 'positive wind should push the net draw-X right');
+            assert.ok(left  < still, 'negative wind should push the net draw-X left');
+        });
+
+        it('keeps positions finite under a strong negative wind (no NaN drift)', () => {
+            const canvas = makeCanvas({ assertFinite: true });
+            const c = createConfetti(canvas, { seed: 3 });
+            assert.doesNotThrow(() => {
+                c.burst({ count: 60, wind: -900, lifeMin: 5, lifeMax: 5 });
+                pump(10, 16);
+            });
+            c.destroy();
+        });
+
+        it('spray() honours wind (drifts right for positive vs negative)', () => {
+            const sprayDrift = (wind) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 200, rate: 10, wind, lifeMin: 5, lifeMax: 5 });
+                pump(1, 1000); pump(20, 16);
+                const s = canvas.sumX;
+                c.destroy();
+                return s;
+            };
+            assert.ok(sprayDrift(400) > sprayDrift(-400), 'spray wind should drift right vs left');
+        });
+
+        it('has no effect under reduced motion (static path is wind-inert)', () => {
+            const staticHash = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 30, ...opts });
+                    const h = canvas.hash;
+                    c.destroy();
+                    return h;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            assert.equal(staticHash({ wind: 500 }), staticHash({ wind: 0 }));
         });
     });
 

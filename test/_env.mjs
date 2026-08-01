@@ -98,6 +98,12 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     c.remove = () => {};
 
     let hash = 0 >>> 0;
+    // Net signed sum of integer draw X positions, accumulated ONLY in the record branch
+    // and kept entirely out of the `hash` mix -- so every committed fingerprint is
+    // byte-identical whether or not this is read. It lets a test measure net drift
+    // DIRECTION (e.g. wind: +K drifts right => larger sumX than wind: -K), the analog of
+    // "count dispatches, not positions": a bare hash proves determinism but not sign.
+    let sumX = 0;
     // Fingerprint INTEGER-pixel draw positions only. Rounding to whole pixels
     // absorbs the sub-pixel divergence libm sin/cos can show across platforms, so
     // a committed baseline is portable; rotations (radians) are deliberately not
@@ -118,6 +124,7 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
             if (!record) return;
             hash = (Math.imul(hash ^ (Math.round(x) | 0), 16777619)) >>> 0;
             hash = (Math.imul(hash ^ (Math.round(y) | 0), 16777619)) >>> 0;
+            sumX += Math.round(x) | 0; // drift-direction probe; does NOT feed `hash`
         }
         : null;
 
@@ -133,6 +140,7 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     };
     c.getContext = () => ctx;
     Object.defineProperty(c, 'hash', { get() { return hash >>> 0; } });
+    Object.defineProperty(c, 'sumX', { get() { return sumX; } });
     return c;
 }
 

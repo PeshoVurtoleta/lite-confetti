@@ -46,6 +46,7 @@ function genOp(prng, allowReseed) {
                 speedVariance: prng() % 300,
                 spread: (prng() % 300) / 100,
                 gravity: 200 + (prng() % 800),
+                wind: (prng() % 1000) - 500, // signed lateral wind, spans left..right
                 lifeMin: 0.5 + (prng() % 200) / 100,
                 lifeMax: 2.5 + (prng() % 200) / 100,
             },
@@ -54,7 +55,10 @@ function genOp(prng, allowReseed) {
     if (roll < 88) {
         return {
             kind: 'spray',
-            o: { rate: 1 + (prng() % 8), duration: 100 + (prng() % 400), speed: 100 + (prng() % 500) },
+            o: {
+                rate: 1 + (prng() % 8), duration: 100 + (prng() % 400),
+                speed: 100 + (prng() % 500), wind: (prng() % 800) - 400,
+            },
         };
     }
     if (roll < 94) return { kind: 'clear' };

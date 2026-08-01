@@ -3,6 +3,41 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.5.0] - 2026-08-01
+
+Feature release: `wind`. Adds the missing lateral dimension to the physics -- a
+sustained horizontal acceleration, the X-axis mirror of `gravity`, so `gravity` (down)
+and `wind` (across) together express a 2D force vector. Opt-in and fingerprint-safe --
+omit `wind` (or pass `0`) and the default look, default positions, and the committed
+determinism fingerprint (`1569828004`) are all byte-for-byte unchanged.
+
+### Added
+- **`wind: number` on `burst()`/`spray()`** -- lateral acceleration in px/s^2. Positive
+  drifts right, negative left; default `0`. `c.burst({ wind: 300 })` slants a burst
+  sideways; `{ ...presets.snow, wind: 60 }` makes snow drift on a breeze. Applied before
+  drag, so wind is damped toward a terminal lateral velocity exactly as gravity is toward
+  a terminal fall speed.
+
+### Semantics
+- **Opt-in, zero-cost by default.** The integrator guards the wind term
+  (`if (wind !== 0) vx += wind * dt`), so a default burst does no extra work and its
+  seeded positions are byte-identical -- the committed fingerprint is preserved. A windy
+  burst is itself fully deterministic under a fixed seed (it draws no rng; wind is pure
+  physics), with its own committed fingerprint in the test suite.
+- **Fail closed.** A non-finite/garbage `wind` (`NaN`, `Infinity`, a string) coerces to
+  `0` (no wind), never a NaN position. Negatives are valid (leftward), so `wind` uses the
+  signed `num()` coercion, not the non-negative one.
+- **No effect under reduced motion.** The static reduced-motion render has no velocity to
+  act on, so `wind` is inert there, like `sway`/`flutter`.
+
+### Internal
+- New per-particle `wind` pool column (mirrors `grav`), so a windy burst and a still burst
+  coexist correctly in one pool. Zero new hot-path allocation (T6 measures a full windy +
+  mixed pool at ~0 B/frame). New unit `describe('wind (lateral drift)')` (committed
+  `WIND_HASH`, `sumX` drift-direction proof, fail-closed + spray + reduced-motion); torture
+  T5 fuzzes signed wind through the differential stream, T1 adds `wind` poison cases under
+  the finite-position detector. See `decisions/0006-wind.md`.
+
 ## [1.4.0] - 2026-08-01
 
 Feature release: multi-shape mixing. Closes the last deferred feature from decisions

@@ -1,6 +1,6 @@
 # @zakkster/lite-confetti
 
-> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, reduced-motion support, and timeline composability.
+> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, reduced-motion support, and timeline composability.
 
 ## Installation
 npm install @zakkster/lite-confetti
@@ -38,6 +38,7 @@ Full control instance bound to a specific canvas.
 | `speed` | 400 | Initial speed center |
 | `speedVariance` | 200 | Speed randomness |
 | `gravity` | 600 | Downward acceleration (px/s²) |
+| `wind` | 0 | Lateral acceleration (px/s²), the X mirror of gravity. Positive = right, negative = left. Opt-in; fingerprint-safe (v1.5.0) |
 | `drag` | 0.98 | Per-frame velocity retention (0–1) |
 | `sizeMin` | 5 | Minimum particle size |
 | `sizeMax` | 12 | Maximum particle size |
@@ -55,7 +56,7 @@ Full control instance bound to a specific canvas.
 Spray-only: `duration` (ms, default 1000), `rate` (particles/frame, default 5)
 
 ## Particle Physics
-Each particle has: position (x, y), velocity (vx, vy), gravity, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame: gravity → drag → position update → spin → tilt.
+Each particle has: position (x, y), velocity (vx, vy), gravity, wind, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame: gravity → wind (guarded, opt-in) → drag → position update → spin → tilt.
 
 ## Rotation
 Particles rotate via `spin` (angular velocity applied each frame). The `spinV` is randomized per particle at spawn: `(rng.next() - 0.5) * 10` radians/sec. Combined with `tilt` wobble (cosine-driven X-scale oscillation), this produces realistic 3D tumbling.
@@ -64,7 +65,7 @@ Particles rotate via `spin` (angular velocity applied each frame). The `spinV` i
 - SoA flat TypedArrays for cache-friendly particle physics
 - Deterministic: `seed(42)` produces identical output every time
 - 5 built-in shapes (rect, circle, star, triangle, emoji) + `registerShape()` for custom vector/sprite shapes
-- Tunable flutter (tumble depth) + sway (horizontal drift), both deterministic
+- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift), all deterministic
 - OKLCH colors (perceptually uniform — every piece looks equally vibrant)
 - Reduced motion: auto-detects `prefers-reduced-motion: reduce`, renders static spread, fades out
 - ResizeObserver (not polling) for canvas sizing — zero layout thrashing
@@ -222,3 +223,27 @@ cost: resolveShapeIds() runs once per call, the pick is a spawn-time array index
 
 Tests: 82 unit (was 73); torture T5 F5 (mixed determinism + dispatch), T6 lane 5
 (shapes[] pool at ~0 B/frame), T8 X6 (cross-instance mix drop). No runtime dep change.
+
+## v1.5.0 -- wind (lateral drift)
+
+Adds the missing lateral force. `wind` is a horizontal acceleration in px/s^2 -- the
+X-axis mirror of `gravity` -- so gravity (down) + wind (across) form a 2D force vector:
+c.burst({ wind: 300 }). Positive drifts right, negative left. Where `sway` OSCILLATES
+around the fall line (nets to zero), `wind` is a SUSTAINED force (the whole burst drifts).
+Applied before drag, so a particle approaches a terminal lateral velocity, exactly as
+gravity gives a terminal fall speed.
+
+Opt-in and fingerprint-safe: the integrator guards the term (`if (wind !== 0) vx += wind *
+dt`), so the default (wind 0) does no extra work and seeded positions are byte-identical --
+the committed default fingerprint (1569828004) is preserved. A windy burst draws NO rng
+(wind is pure physics), so it too replays identically (canonical windy fingerprint
+2385225781). Fail closed: a non-finite/garbage wind coerces to 0 (signed num(), not nonneg,
+because negatives are valid). New per-particle `wind` pool column (mirrors `grav`) so a
+windy burst and a still burst coexist in one pool; no hot-path alloc (the guarded FMA is
+one multiply-add). No effect under reduced motion (static render has no velocity).
+
+Tests: 88 unit (was 82); a `sumX` drift-direction probe on the mock ctx (hash-neutral)
+proves the SIGN (+wind drifts right, -wind left) that a bare fingerprint can't; torture T5
+fuzzes signed wind through the differential stream, T6 lane 5 arms the wind FMA in the
+alloc gate, T1 adds wind poison cases under the finite-position detector. See decision 0006.
+No runtime dep change.

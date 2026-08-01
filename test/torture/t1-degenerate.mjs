@@ -70,6 +70,8 @@ export function run() {
         ['speedVariance:Infinity', { count: 60, speedVariance: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
         ['gravity:Infinity', { count: 60, gravity: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
         ['gravity:-Infinity', { count: 60, gravity: -Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['wind:NaN', { count: 60, wind: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['wind:-Infinity', { count: 60, wind: -Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],

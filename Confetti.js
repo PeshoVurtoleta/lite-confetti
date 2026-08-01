@@ -1,10 +1,13 @@
 /**
- * @zakkster/lite-confetti v1.4.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.5.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.5.0 adds: `wind` -- a lateral acceleration (px/sec^2), the X-axis mirror of
+ * gravity, so `gravity` (down) + `wind` (across) form a 2D force vector. Opt-in and
+ * fingerprint-safe: default 0 leaves positions byte-identical.
  * v1.4.0 adds: multi-shape mixing -- burst()/spray() accept a `shapes` array and pick
  * a shape per particle (weighted by repetition), so one burst mixes stars + circles +
  * custom registerShape() shapes. Opt-in: omit `shapes` and the single-`shape` path is
@@ -405,6 +408,7 @@ export function createConfetti(canvas, {
         life:  new Float32Array(maxParticles),
         maxL:  new Float32Array(maxParticles),
         grav:  new Float32Array(maxParticles),   // per-particle gravity
+        wind:  new Float32Array(maxParticles),   // per-particle lateral wind accel (px/sec^2)
         drag:  new Float32Array(maxParticles),
         flut:  new Float32Array(maxParticles),   // flutter: tumble depth 0..1 (X-scale wobble)
         sway:  new Float32Array(maxParticles),   // sway: horizontal drift amplitude 0..1
@@ -495,6 +499,7 @@ export function createConfetti(canvas, {
         pool.life[i] = config.lifeMin + rng.next() * (config.lifeMax - config.lifeMin);
         pool.maxL[i] = pool.life[i];
         pool.grav[i] = config.gravity;
+        pool.wind[i] = config.wind;
         pool.drag[i] = config.drag;
         pool.flut[i] = config.flutter;
         pool.sway[i] = config.sway;
@@ -530,6 +535,13 @@ export function createConfetti(canvas, {
 
             // Physics
             pool.vy[i] += pool.grav[i] * dtSec;
+            // Wind: sustained lateral drift, the X-axis mirror of gravity. Guarded so the
+            // default (wind == 0) leaves vx byte-identical -- gravity is unguarded only
+            // because its default is non-zero; wind defaults to 0, so it follows the sway
+            // discipline (the committed fingerprint depends on this branch never firing by
+            // default). Applied before drag, so wind is damped toward a terminal lateral
+            // velocity exactly as gravity is toward a terminal fall speed.
+            if (pool.wind[i] !== 0) pool.vx[i] += pool.wind[i] * dtSec;
             pool.vx[i] *= pool.drag[i];
             pool.vy[i] *= pool.drag[i];
             pool.x[i] += pool.vx[i] * dtSec;
@@ -650,6 +662,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.speed=400]   Initial speed range center
          * @param {number} [options.speedVariance=200] Speed randomness
          * @param {number} [options.gravity=600] Downward acceleration
+         * @param {number} [options.wind=0]     Lateral acceleration px/sec^2, the X mirror of gravity (negative = leftward). Opt-in
          * @param {number} [options.drag=0.98]   Per-frame velocity retention
          * @param {number} [options.sizeMin=5]
          * @param {number} [options.sizeMax=12]
@@ -671,6 +684,7 @@ export function createConfetti(canvas, {
                   speed = 400,
                   speedVariance = 200,
                   gravity = 600,
+                  wind = 0,
                   drag = 0.98,
                   sizeMin = 5,
                   sizeMax = 12,
@@ -697,6 +711,7 @@ export function createConfetti(canvas, {
             speed = num(speed, 400);
             speedVariance = num(speedVariance, 200);
             gravity = num(gravity, 600);
+            wind = num(wind, 0); // signed: negative wind drifts left, so num (not nonneg)
             drag = clamp01(drag, 0.98);
             sizeMin = nonneg(sizeMin, 5);
             sizeMax = nonneg(sizeMax, 12);
@@ -732,7 +747,7 @@ export function createConfetti(canvas, {
 
             const colorPick = () => rng.pick(parsedColors);
             const config = {
-                sizeMin, sizeMax, lifeMin, lifeMax, gravity, drag, shapeId, shapeIds, emoji, colorPick,
+                sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, drag, shapeId, shapeIds, emoji, colorPick,
                 flutter: clamp01(flutter, 1), sway: clamp01(sway, 0),
             };
 
@@ -759,6 +774,7 @@ export function createConfetti(canvas, {
          * @param {Object} [options]    Same as burst, plus:
          * @param {number} [options.duration=1000]  Spray duration in ms
          * @param {number} [options.rate=5]         Particles per frame
+         * @param {number} [options.wind=0]         Lateral acceleration px/sec^2 (negative = leftward)
          * @param {number} [options.flutter=1]      Tumble depth 0..1
          * @param {number} [options.sway=0]         Horizontal drift 0..1
          */
@@ -770,6 +786,7 @@ export function createConfetti(canvas, {
                   speed = 300,
                   speedVariance = 150,
                   gravity = 500,
+                  wind = 0,
                   drag = 0.98,
                   sizeMin = 4,
                   sizeMax = 10,
@@ -795,6 +812,7 @@ export function createConfetti(canvas, {
             speed = num(speed, 300);
             speedVariance = num(speedVariance, 150);
             gravity = num(gravity, 500);
+            wind = num(wind, 0); // signed: negative wind drifts left, so num (not nonneg)
             drag = clamp01(drag, 0.98);
             sizeMin = nonneg(sizeMin, 4);
             sizeMax = nonneg(sizeMax, 10);
@@ -828,7 +846,7 @@ export function createConfetti(canvas, {
 
             const colorPick = () => rng.pick(parsedColors);
             const config = {
-                sizeMin, sizeMax, lifeMin, lifeMax, gravity, drag, shapeId, shapeIds, emoji, colorPick,
+                sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, drag, shapeId, shapeIds, emoji, colorPick,
                 flutter: clamp01(flutter, 1), sway: clamp01(sway, 0),
             };
 

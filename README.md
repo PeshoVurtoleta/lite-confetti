@@ -9,7 +9,7 @@
 
 Deterministic confetti engine with OKLCH colors, 5 built-in shapes plus custom
 `registerShape()` shapes (vector or image sprite), per-particle multi-shape mixing,
-tunable flutter, and reduced-motion support.
+tunable flutter, lateral wind, and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -80,6 +80,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `speed` | number | 400 | Initial particle speed center (px/s) |
 | `speedVariance` | number | 200 | Speed randomness range. Actual speed: `speed ± speedVariance` |
 | `gravity` | number | 600 | Downward acceleration in px/s². Higher = falls faster. |
+| `wind` | number | 0 | Lateral acceleration in px/s² — the sideways mirror of `gravity`. Positive drifts right, negative left. Opt-in; `0` = straight down. See [Wind](#wind--lateral-drift). |
 | `drag` | number | 0.98 | Per-frame velocity retention, clamped to `0–1`. 0.98 = 2% speed loss per frame. |
 | `sizeMin` | number | 5 | Minimum particle width in CSS pixels |
 | `sizeMax` | number | 12 | Maximum particle width in CSS pixels |
@@ -122,13 +123,14 @@ Every frame, each alive particle runs through this pipeline:
 
 ```
 1. GRAVITY     vy += gravity × dt        (downward acceleration)
-2. DRAG        vx *= drag, vy *= drag    (air resistance)
-3. POSITION    x += vx × dt, y += vy × dt
-4. SWAY        x += sin(tiltPhase) × sway × dt   (opt-in horizontal drift)
-5. SPIN        rotation += spinVelocity × dt
-6. TILT        tiltPhase += tiltSpeed × dt
-7. OPACITY     fade to 0 in last 30% of life
-8. RENDER      translate → rotate → flutter-scale → draw shape
+2. WIND        vx += wind × dt           (opt-in lateral acceleration)
+3. DRAG        vx *= drag, vy *= drag    (air resistance)
+4. POSITION    x += vx × dt, y += vy × dt
+5. SWAY        x += sin(tiltPhase) × sway × dt   (opt-in horizontal drift)
+6. SPIN        rotation += spinVelocity × dt
+7. TILT        tiltPhase += tiltSpeed × dt
+8. OPACITY     fade to 0 in last 30% of life
+9. RENDER      translate → rotate → flutter-scale → draw shape
 ```
 
 ### Rotation & 3D Tumbling
@@ -142,6 +144,18 @@ Each particle has two rotational properties:
 **Sway** — the opt-in **`sway`** option adds a horizontal drift driven by the same tilt phase, so pieces drift side-to-side as they fall (real confetti rarely falls straight). It defaults to `0`, which keeps the exact straight-fall positions of earlier versions.
 
 The combination of spin rotation + flutter wobble (+ optional sway) produces the realistic confetti tumbling you see in the real world.
+
+### Wind / lateral drift
+
+**`wind`** (added in v1.5.0) is a lateral acceleration in px/s² — the sideways mirror of `gravity`. Where `sway` *oscillates* around the fall line and nets to zero, `wind` is a sustained force: the whole burst drifts. Because it shares gravity's units, `gravity` (down) and `wind` (across) read as one 2D force vector.
+
+```js
+c.burst({ wind: 300 });                    // a burst slanting to the right
+c.burst({ wind: -200, gravity: 250 });     // drifting left as it falls
+c.burst({ ...presets.snow, wind: 60 });    // snow on a gentle breeze
+```
+
+Wind is applied *before* drag, so — exactly like gravity's terminal fall speed — a particle approaches a terminal lateral velocity rather than accelerating forever. It defaults to `0` and the integrator skips the term entirely at `0`, so a default burst does no extra work and its seeded positions stay byte-identical (the committed determinism fingerprint is preserved). A windy burst draws no random values, so it too replays identically under a fixed seed. Wind has no effect under reduced motion (the static render has no velocity to push).
 
 ### Canvas Sizing
 
@@ -447,6 +461,12 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.5.0
+
+**Wind / lateral drift.** Opt-in and fingerprint-safe; the straight-fall default and committed determinism fingerprint are byte-for-byte unchanged.
+
+- `wind: number` on `burst()`/`spray()` — a sustained lateral acceleration in px/s², the sideways mirror of `gravity` (positive drifts right, negative left). Applied before drag, so it approaches a terminal lateral velocity. Fails closed (garbage → `0`); no effect under reduced motion. See [Wind](#wind--lateral-drift).
 
 ### v1.4.0
 

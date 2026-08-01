@@ -21,6 +21,13 @@ export type ShapeDef =
 export interface BurstOptions {
     x?: number; y?: number; count?: number; spread?: number;
     speed?: number; speedVariance?: number; gravity?: number; drag?: number;
+    /**
+     * Lateral wind acceleration in px/sec^2 -- the X-axis mirror of `gravity`, so
+     * `gravity` (down) + `wind` (across) form a 2D force vector. Default 0; positive
+     * drifts right, negative left. Opt-in and fingerprint-safe (default leaves seeded
+     * positions byte-identical); no effect under reduced motion.
+     */
+    wind?: number;
     sizeMin?: number; sizeMax?: number; lifeMin?: number; lifeMax?: number;
     shape?: ShapeName;
     /**
