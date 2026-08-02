@@ -75,6 +75,14 @@ export interface BurstOptions {
     flutter?: number;
     /** Horizontal drift 0..1 (0 straight fall). Default 0. */
     sway?: number;
+    /** Per-particle turbulence: a rotating acceleration (px/sec^2) that makes each particle
+     *  wander organically. Default 0 (none). Opt-in, fingerprint-safe, draws no RNG; no effect
+     *  under reduced motion. */
+    turbulence?: number;
+    /** Gust: a global, sinusoidally-oscillating horizontal acceleration (px/sec^2) layered on
+     *  `wind` -- the whole burst swells one way then the other in ~3s waves. Default 0 (none).
+     *  Opt-in, fingerprint-safe, draws no RNG. */
+    gust?: number;
     angle?: number; onComplete?: () => void;
 }
 export interface SprayOptions extends Omit<BurstOptions, 'onComplete'> {

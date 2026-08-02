@@ -9,8 +9,8 @@
 
 Deterministic confetti engine with OKLCH colors, 5 built-in shapes plus custom
 `registerShape()` shapes (vector or image sprite), per-particle multi-shape mixing,
-tunable flutter, lateral wind, a full bounding box (floor, walls, ceiling) with bounce,
-and reduced-motion support.
+tunable flutter, lateral wind, turbulence + gust (living-air forces), a full bounding box
+(floor, walls, ceiling) with bounce, and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -97,6 +97,8 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `emoji` | string | party popper | Emoji character (only used when `shape` is `'emoji'`) |
 | `flutter` | number | 1 | Tumble depth, 0–1. `1` = full wobble (classic), `0` = rigid. Affects scale only, never position. |
 | `sway` | number | 0 | Horizontal drift, 0–1. `0` = straight fall; higher values sway side-to-side like real paper. |
+| `turbulence` | number | 0 | Per-particle rotating acceleration in px/s² — organic wander, so a burst fans out and mills. Opt-in; `0` = none. Draws no rng. See [Living air](#living-air). |
+| `gust` | number | 0 | Global oscillating horizontal acceleration in px/s² layered on `wind` — the whole burst swells side to side in ~3s waves. Opt-in; `0` = none. See [Living air](#living-air). |
 | `colors` | Array | 7 OKLCH defaults | Array of OKLCH objects `{ l, c, h }` or CSS strings |
 | `angle` | number | `-Math.PI / 2` | Center angle of emission cone in radians. -π/2 = upward. |
 | `onComplete` | Function | — | Called when all burst particles have died |
@@ -130,17 +132,19 @@ Every frame, each alive particle runs through this pipeline:
 ```
 1.  GRAVITY     vy += gravity × dt        (downward acceleration)
 2.  WIND        vx += wind × dt           (opt-in lateral acceleration)
-3.  DRAG        vx *= drag, vy *= drag    (air resistance)
-4.  POSITION    x += vx × dt, y += vy × dt
-5.  FLOOR       if y > floor:   y = floor,   vy = −vy × bounce   (opt-in, box Y-max)
-6.  CEILING     if y < ceiling: y = ceiling, vy = −vy × bounce   (opt-in, box Y-min)
-7.  SWAY        x += sin(tiltPhase) × sway × dt   (opt-in horizontal drift)
-8.  WALLS       if x < wallLeft:  x = wallLeft,  vx = −vx × bounce   (opt-in, box X-min)
+3.  TURBULENCE  vx += cos(p) × turb × dt, vy += sin(p) × turb × dt   (opt-in, p = tilt+spin phase)
+4.  GUST        vx += sin(elapsed × GUST_HZ) × gust × dt   (opt-in, global oscillating wind)
+5.  DRAG        vx *= drag, vy *= drag    (air resistance)
+6.  POSITION    x += vx × dt, y += vy × dt
+7.  FLOOR       if y > floor:   y = floor,   vy = −vy × bounce   (opt-in, box Y-max)
+8.  CEILING     if y < ceiling: y = ceiling, vy = −vy × bounce   (opt-in, box Y-min)
+9.  SWAY        x += sin(tiltPhase) × sway × dt   (opt-in horizontal drift)
+10. WALLS       if x < wallLeft:  x = wallLeft,  vx = −vx × bounce   (opt-in, box X-min)
                 if x > wallRight: x = wallRight, vx = −vx × bounce   (opt-in, box X-max)
-9.  SPIN        rotation += spinVelocity × dt
-10. TILT        tiltPhase += tiltSpeed × dt
-11. OPACITY     fade to 0 in last 30% of life
-12. RENDER      translate → rotate → flutter-scale → draw shape
+11. SPIN        rotation += spinVelocity × dt
+12. TILT        tiltPhase += tiltSpeed × dt
+13. OPACITY     fade to 0 in last 30% of life
+14. RENDER      translate → rotate → flutter-scale → draw shape
 ```
 
 ### Rotation & 3D Tumbling
@@ -190,6 +194,20 @@ c.burst({ x: w / 2, y: h / 2, ceiling: 0, floor: h, wallLeft: 0, wallRight: w, b
 ```
 
 Each edge defaults to an infinity sentinel (`-Infinity` for `wallLeft`/`ceiling`, `Infinity` for `wallRight`), and its guard (`x < wallLeft`, `x > wallRight`, `y < ceiling`) can never fire at that default — so a box-less burst does no extra work and its seeded positions stay byte-identical. **Both** committed fingerprints — the default *and* the v1.6.0 floored — are preserved. The wall clamp runs *after* `sway` (the frame's last horizontal move), so a swaying particle is still contained. Like the floor, the box draws no random values (a boxed burst replays identically under a fixed seed), `bounce` stays clamped so no edge can add energy (an elastic particle in a tight box never escapes), a degenerate inverted box clamps deterministically without a NaN, and the box has no effect under reduced motion.
+
+### Living air
+
+Every force so far is *constant in time* — a fixed `gravity`, a fixed `wind` — so a wide fall reads like parallel rain. **`turbulence`** and **`gust`** (added in v1.8.0) are the first **time-varying** forces, and they read as moving air:
+
+- **`turbulence`** is a per-particle *rotating* acceleration (px/s²). Each particle's push direction curls at its own rate, so a burst fans out and mills instead of falling in lockstep. Unlike `sway` (which oscillates on one axis and nets to zero), turbulence drives both axes and genuinely spreads the pool.
+- **`gust`** is a *global*, sinusoidally-oscillating horizontal acceleration (px/s²) layered on `wind`. The whole burst shares one phase, so it swells one way then the other in ~3s waves — a breeze gusting, not per-particle noise.
+
+```js
+c.burst({ turbulence: 400, gust: 250 });
+// confetti drifting on living air — each piece wandering, the whole pool breathing side to side
+```
+
+Both draw **zero random values**: `turbulence` is a pure function of the seeded tumble phases the engine already advances, and `gust` of a shared elapsed-time clock — so a turbulent/gusty burst replays identically under a fixed seed (with its own committed fingerprints in the test suite), while the default `0` keeps every prior fingerprint (default, floored, and box) byte-for-byte unchanged. Both are accelerations applied *before* drag, exactly like `wind`, so they damp toward a terminal velocity and never run away; inside a [bounding box](#bounding-box) the edge clamps still hold, so a turbulent burst stays contained. Garbage fails closed to `0`; negatives are allowed (they flip direction). Neither has any effect under reduced motion.
 
 ### Canvas Sizing
 
@@ -495,6 +513,13 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.8.0
+
+**Living air (turbulence + gust).** The first *time-varying* forces; opt-in and fingerprint-safe — the default, v1.6.0 floored, and v1.7.0 box determinism fingerprints are all byte-for-byte unchanged.
+
+- `turbulence: number` on `burst()`/`spray()` — a per-particle rotating acceleration (px/s²) for organic wander, so a burst fans out and mills (default `0` = none).
+- `gust: number` — a global, sinusoidally-oscillating horizontal acceleration (px/s²) layered on `wind`, so the whole burst swells side to side in ~3s waves (default `0` = none). Both draw no rng (turbulence reuses the seeded tumble phases, gust a shared elapsed clock), so a forced burst replays identically; both damp like `wind` and stay contained inside a box; fail closed; no effect under reduced motion. See [Living air](#living-air).
 
 ### v1.7.0
 

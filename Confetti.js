@@ -1,10 +1,16 @@
 /**
- * @zakkster/lite-confetti v1.7.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.8.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.8.0 adds: `turbulence` + `gust` -- the first TIME-VARYING forces. `turbulence` is a
+ * per-particle rotating acceleration (organic wander) reusing the seeded tilt/spin phases;
+ * `gust` is a global sinusoidal horizontal acceleration (a coherent breeze, ~3s waves)
+ * layered on `wind`. Both draw ZERO rng -- a pure deterministic function of state the engine
+ * already advances -- so default `0` is byte-identical (all three prior fingerprints preserved)
+ * and a turbulent/gusty burst is reproducible for free.
  * v1.7.0 adds: `wallLeft` + `wallRight` + `ceiling` -- the three remaining edges that
  * complete `floor` into a full opt-in bounding box. A particle reaching any edge (an
  * absolute CSS-px coord) clamps onto it and reflects its velocity scaled by `bounce`
@@ -106,6 +112,11 @@ const DEFAULT_EMOJI = String.fromCodePoint(0x1F389);
 
 // Peak horizontal sway speed (CSS px/sec) at sway == 1. Amplitude scales with the knob.
 const SWAY_PX = 60;
+
+// Angular frequency of the global `gust` oscillation: one full swell-and-return every ~3s.
+// The whole pool shares this phase (driven by the instance `_elapsed` clock), so gust reads
+// as a coherent breeze rather than per-particle noise.
+const GUST_HZ = 2 * Math.PI / 3;
 
 // Clamp a numeric option into [0,1], failing closed to `dflt` for non-finite input
 // (NaN/Infinity coerce to the default rather than poisoning a particle -- "null is not
@@ -427,6 +438,8 @@ export function createConfetti(canvas, {
         drag:  new Float32Array(maxParticles),
         flut:  new Float32Array(maxParticles),   // flutter: tumble depth 0..1 (X-scale wobble)
         sway:  new Float32Array(maxParticles),   // sway: horizontal drift amplitude 0..1
+        turb:  new Float32Array(maxParticles),   // turbulence accel magnitude (px/sec^2); 0 = none
+        gust:  new Float32Array(maxParticles),   // gust accel magnitude (px/sec^2); 0 = none
         shape: new Uint8Array(maxParticles),     // 0..4 built-in, 5+ = registerShape() custom
     };
 
@@ -436,6 +449,13 @@ export function createConfetti(canvas, {
 
     let head = 0;
     let aliveCount = 0;
+
+    // Instance wall-clock (seconds), advanced once per update(). The shared phase for the
+    // global `gust` oscillation. Read ONLY inside the gust guard, so it never perturbs a
+    // gust-free burst (every committed fingerprint is unaffected by its existence). Never
+    // reset -- a pure function of frames elapsed stays deterministic; a fresh instance (as
+    // every unit test uses) starts at 0.
+    let _elapsed = 0;
 
     // -- Pointer-follow state (v1.2.0), per-instance --------------------------
     // Opt-in: nothing is bound until spray({ followPointer:true }) runs, so a page
@@ -523,6 +543,8 @@ export function createConfetti(canvas, {
         pool.drag[i] = config.drag;
         pool.flut[i] = config.flutter;
         pool.sway[i] = config.sway;
+        pool.turb[i] = config.turbulence;
+        pool.gust[i] = config.gust;
         // Multi-shape mixing: when a `shapes` mix is active, pick a shape per particle
         // (weighted by repetition in the array). The single-shape branch takes NO rng
         // draw, so a default burst's determinism fingerprint is byte-for-byte preserved;
@@ -538,6 +560,7 @@ export function createConfetti(canvas, {
     // -- Render loop --
     function update(dt) {
         const dtSec = dt / 1000;
+        _elapsed += dtSec;   // instance clock: the shared phase for the global `gust` swell
         const W = canvas.width;
         const H = canvas.height;
 
@@ -562,6 +585,23 @@ export function createConfetti(canvas, {
             // default). Applied before drag, so wind is damped toward a terminal lateral
             // velocity exactly as gravity is toward a terminal fall speed.
             if (pool.wind[i] !== 0) pool.vx[i] += pool.wind[i] * dtSec;
+            // Turbulence: a per-particle rotating acceleration for organic wander. Reuses the
+            // tilt + spin phases (already advanced every frame, seeded once at spawn) so it
+            // draws NO rng -- the curl direction is a pure deterministic function of seeded
+            // state, hence a turbulent burst is reproducible for free. Guarded so turb == 0
+            // leaves vx/vy byte-identical (the committed fingerprints depend on this branch
+            // never firing by default). Decorrelated from `sway` (a position offset from
+            // sin(tilt)) by mixing spin in and driving BOTH axes.
+            if (pool.turb[i] !== 0) {
+                const tp = pool.tilt[i] * 1.7 + pool.spin[i];
+                pool.vx[i] += Math.cos(tp) * pool.turb[i] * dtSec;
+                pool.vy[i] += Math.sin(tp) * pool.turb[i] * dtSec;
+            }
+            // Gust: a global sinusoidal horizontal acceleration (a coherent breeze), layered
+            // on wind. Phase is the shared `_elapsed` clock so the whole pool swells together;
+            // amplitude is per-particle. Guarded so gust == 0 is byte-identical. Applied
+            // before drag, like wind, so it too damps toward a terminal velocity.
+            if (pool.gust[i] !== 0) pool.vx[i] += Math.sin(_elapsed * GUST_HZ) * pool.gust[i] * dtSec;
             pool.vx[i] *= pool.drag[i];
             pool.vy[i] *= pool.drag[i];
             pool.x[i] += pool.vx[i] * dtSec;
@@ -740,6 +780,8 @@ export function createConfetti(canvas, {
          * @param {string} [options.emoji]       Emoji character (shape must be 'emoji'); defaults to a party popper
          * @param {number} [options.flutter=1]   Tumble depth 0..1 (0 rigid, 1 full wobble)
          * @param {number} [options.sway=0]      Horizontal drift 0..1 (0 straight fall)
+         * @param {number} [options.turbulence=0] Per-particle rotating accel px/sec^2 (organic wander). Opt-in, zero-rng, fingerprint-safe
+         * @param {number} [options.gust=0]      Global oscillating horizontal accel px/sec^2 layered on wind (~3s swells). Opt-in, zero-rng
          * @param {Array}  [options.colors]      Array of OKLCH objects or CSS strings
          * @param {number} [options.angle=-Math.PI/2] Center angle of emission cone
          * @param {Function} [options.onComplete] Called when all burst particles die
@@ -767,6 +809,8 @@ export function createConfetti(canvas, {
                   emoji = DEFAULT_EMOJI,
                   flutter = 1,
                   sway = 0,
+                  turbulence = 0,
+                  gust = 0,
                   colors = DEFAULT_COLORS,
                   angle = -Math.PI / 2,
                   onComplete,
@@ -784,6 +828,8 @@ export function createConfetti(canvas, {
             speedVariance = num(speedVariance, 200);
             gravity = num(gravity, 600);
             wind = num(wind, 0); // signed: negative wind drifts left, so num (not nonneg)
+            turbulence = num(turbulence, 0); // signed accel (px/sec^2); non-finite => 0 (off)
+            gust = num(gust, 0);             // signed accel (px/sec^2); non-finite => 0 (off)
             floor = num(floor, Infinity);  // opt-in: undefined/NaN/Infinity/string all => no floor
             bounce = clamp01(bounce, 0);   // restitution 0..1; a rebound can never add energy
             wallLeft = num(wallLeft, -Infinity);   // opt-in box edge; non-finite => no left wall
@@ -825,7 +871,7 @@ export function createConfetti(canvas, {
             const colorPick = () => rng.pick(parsedColors);
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0),
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), turbulence, gust,
             };
 
             for (let i = 0; i < count; i++) {
@@ -859,6 +905,8 @@ export function createConfetti(canvas, {
          * @param {number} [options.ceiling=-Infinity]   Ceiling Y in CSS px (default none). Opt-in
          * @param {number} [options.flutter=1]      Tumble depth 0..1
          * @param {number} [options.sway=0]         Horizontal drift 0..1
+         * @param {number} [options.turbulence=0]   Per-particle rotating accel px/sec^2 (organic wander). Opt-in, zero-rng
+         * @param {number} [options.gust=0]         Global oscillating horizontal accel px/sec^2 layered on wind. Opt-in, zero-rng
          */
         spray({
                   duration = 1000,
@@ -884,6 +932,8 @@ export function createConfetti(canvas, {
                   emoji = DEFAULT_EMOJI,
                   flutter = 1,
                   sway = 0,
+                  turbulence = 0,
+                  gust = 0,
                   colors = DEFAULT_COLORS,
                   angle = -Math.PI / 2,
                   followPointer = false,
@@ -900,6 +950,8 @@ export function createConfetti(canvas, {
             speedVariance = num(speedVariance, 150);
             gravity = num(gravity, 500);
             wind = num(wind, 0); // signed: negative wind drifts left, so num (not nonneg)
+            turbulence = num(turbulence, 0); // signed accel (px/sec^2); non-finite => 0 (off)
+            gust = num(gust, 0);             // signed accel (px/sec^2); non-finite => 0 (off)
             floor = num(floor, Infinity);  // opt-in: undefined/NaN/Infinity/string all => no floor
             bounce = clamp01(bounce, 0);   // restitution 0..1; a rebound can never add energy
             wallLeft = num(wallLeft, -Infinity);   // opt-in box edge; non-finite => no left wall
@@ -939,7 +991,7 @@ export function createConfetti(canvas, {
             const colorPick = () => rng.pick(parsedColors);
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0),
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), turbulence, gust,
             };
 
             // Pointer-follow is opt-in and, by nature, NON-DETERMINISTIC: it injects

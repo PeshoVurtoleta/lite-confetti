@@ -401,6 +401,7 @@
         <span class="badge">oklch-native</span>
         <span class="badge">5 + custom shapes</span>
         <span class="badge">flutter + sway + wind</span>
+        <span class="badge">living air</span>
         <span class="badge">bounding box</span>
         <span class="badge">reduced-motion</span>
         <span class="badge">< 4KB</span>
@@ -543,6 +544,16 @@
                 <input type="range" id="wind" min="-600" max="600" value="0" step="25">
             </div>
             <div class="control">
+                <div class="control-header"><span class="control-name">turbulence</span><span class="control-val"
+                                                                                        id="turbulenceVal">off</span></div>
+                <input type="range" id="turbulence" min="0" max="800" value="0" step="25">
+            </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">gust</span><span class="control-val"
+                                                                                        id="gustVal">off</span></div>
+                <input type="range" id="gust" min="0" max="800" value="0" step="25">
+            </div>
+            <div class="control">
                 <div class="control-header"><span class="control-name">floor</span><span class="control-val"
                                                                                          id="floorVal">off</span></div>
                 <input type="range" id="floor" min="0" max="100" value="0" step="5">
@@ -624,7 +635,7 @@
     const $codeBtn  = document.getElementById('codeBtn');
     const $seedBtn  = document.getElementById('seedBtn');
 
-    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'floor', 'bounce', 'box'];
+    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'floor', 'bounce', 'box'];
     const $in = {};   // id -> input element
     const $out = {};  // id -> value-display element
     for (const id of SLIDERS) { $in[id] = document.getElementById(id); $out[id] = document.getElementById(id + 'Val'); }
@@ -720,6 +731,8 @@
             flutter: +$in.flutter.value,
             sway: +$in.sway.value,
             wind: +$in.wind.value,
+            turbulence: +$in.turbulence.value, // v1.8.0: per-particle wander (0 = off)
+            gust: +$in.gust.value,             // v1.8.0: global oscillating breeze (0 = off)
             floor: floorPct === 0 ? Infinity : window.innerHeight * floorPct / 100,
             bounce: +$in.bounce.value,
         };
@@ -753,6 +766,7 @@
             out.textContent = id === 'drag' ? (+raw).toFixed(3)
                 : id === 'floor' ? (+raw === 0 ? 'off' : raw + '%')  // 0 = no floor (Infinity)
                 : id === 'box' ? (+raw === 0 ? 'off' : 'on')         // 0 = no walls/ceiling
+                : (id === 'turbulence' || id === 'gust') ? (+raw === 0 ? 'off' : raw)  // 0 = no force
                 : FIXED2.has(id) ? (+raw).toFixed(2)
                 : FIXED1.has(id) ? (+raw).toFixed(1) : raw;
         });
@@ -922,6 +936,8 @@
             if (cfg.shape === 'emoji') code += `\n${indent}emoji: <span class="str">'${cfg.emoji}'</span>,`;
             if (cfg.flutter !== 1) code += `\n${indent}flutter: <span class="num">${cfg.flutter.toFixed(2)}</span>,`;
             if (cfg.sway !== 0) code += `\n${indent}sway: <span class="num">${cfg.sway.toFixed(2)}</span>,`;
+            if (cfg.turbulence !== 0) code += `\n${indent}turbulence: <span class="num">${cfg.turbulence}</span>,`;
+            if (cfg.gust !== 0) code += `\n${indent}gust: <span class="num">${cfg.gust}</span>,`;
             code += `\n${indent}lifeMin: <span class="num">${cfg.lifeMin}</span>, lifeMax: <span class="num">${cfg.lifeMax}</span>,`;
             code += `\n});`;
             $codeBox.innerHTML = code;

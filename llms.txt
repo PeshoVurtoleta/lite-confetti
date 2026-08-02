@@ -1,6 +1,6 @@
 # @zakkster/lite-confetti
 
-> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, a full bounding box (floor + walls + ceiling) with bounce, reduced-motion support, and timeline composability.
+> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, turbulence + gust (time-varying living-air forces), a full bounding box (floor + walls + ceiling) with bounce, reduced-motion support, and timeline composability.
 
 ## Installation
 npm install @zakkster/lite-confetti
@@ -54,6 +54,8 @@ Full control instance bound to a specific canvas.
 | `emoji` | party popper | Emoji character (when shape is 'emoji') |
 | `flutter` | 1 | Tumble depth 0–1 (0 rigid, 1 classic wobble). Scale only — never moves a particle. |
 | `sway` | 0 | Horizontal drift 0–1 (0 straight fall). Opt-in side-to-side motion. |
+| `turbulence` | 0 | Per-particle rotating acceleration (px/s²) for organic wander (fans the pool). Opt-in; zero-rng; fingerprint-safe (v1.8.0) |
+| `gust` | 0 | Global sinusoidal horizontal acceleration (px/s²) layered on wind (~3s swells). Opt-in; zero-rng; fingerprint-safe (v1.8.0) |
 | `colors` | 7 OKLCH defaults | Array of OKLCH objects `{ l, c, h }` or CSS strings |
 | `angle` | -π/2 (upward) | Center angle of emission cone (radians) |
 | `onComplete` | — | Called when all burst particles die |
@@ -61,7 +63,7 @@ Full control instance bound to a specific canvas.
 Spray-only: `duration` (ms, default 1000), `rate` (particles/frame, default 5)
 
 ## Particle Physics
-Each particle has: position (x, y), velocity (vx, vy), gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame: gravity → wind (guarded, opt-in) → drag → position update → floor + ceiling collision (guarded, opt-in: clamp + reflect vy) → spin → tilt → sway → wall collision (guarded, opt-in, after sway: clamp + reflect vx). The floor/ceiling/wall collisions together form an opt-in axis-aligned bounding box; each edge draws no rng.
+Each particle has: position (x, y), velocity (vx, vy), gravity, wind, turbulence, gust, floor, bounce, wallLeft, wallRight, ceiling, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame: gravity → wind (guarded, opt-in) → turbulence (guarded, opt-in: per-particle rotating accel from the tilt+spin phases, both axes) → gust (guarded, opt-in: global sin(elapsed*GUST_HZ) horizontal accel) → drag → position update → floor + ceiling collision (guarded, opt-in: clamp + reflect vy) → spin → tilt → sway → wall collision (guarded, opt-in, after sway: clamp + reflect vx). The floor/ceiling/wall collisions together form an opt-in axis-aligned bounding box; turbulence + gust are time-varying forces; every force and edge draws no rng.
 
 ## Rotation
 Particles rotate via `spin` (angular velocity applied each frame). The `spinV` is randomized per particle at spawn: `(rng.next() - 0.5) * 10` radians/sec. Combined with `tilt` wobble (cosine-driven X-scale oscillation), this produces realistic 3D tumbling.
@@ -70,7 +72,7 @@ Particles rotate via `spin` (angular velocity applied each frame). The `spinV` i
 - SoA flat TypedArrays for cache-friendly particle physics
 - Deterministic: `seed(42)` produces identical output every time
 - 5 built-in shapes (rect, circle, star, triangle, emoji) + `registerShape()` for custom vector/sprite shapes
-- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + a full bounding box (floor/walls/ceiling) with bounce, all deterministic
+- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + turbulence/gust (time-varying living-air forces) + a full bounding box (floor/walls/ceiling) with bounce, all deterministic
 - OKLCH colors (perceptually uniform — every piece looks equally vibrant)
 - Reduced motion: auto-detects `prefers-reduced-motion: reduce`, renders static spread, fades out
 - ResizeObserver (not polling) for canvas sizing — zero layout thrashing
@@ -313,3 +315,34 @@ a dedicated case proving the ceiling alone catches an upward launch and a no-esc
 finite/Infinity walls + ceiling through the differential stream, T6 lane 5 arms the full box
 for a resting pool in the alloc gate, T1 adds wall/ceiling + inverted-box poison cases under
 the finite-position detector. See decision 0008. No runtime dep change.
+
+## v1.8.0 -- turbulence + gust (living air)
+
+Adds the first TIME-VARYING forces. Until now every force was constant, so a wide fall read
+like parallel rain. `turbulence` is a per-particle ROTATING acceleration (px/s^2): each
+particle curls at its own rate, so a burst fans out and mills -- c.burst({ turbulence: 400 }).
+`gust` is a GLOBAL sinusoidal horizontal acceleration (px/s^2) layered on wind: the whole pool
+swells one way then the other in ~3s waves -- c.burst({ gust: 250 }). Both are accelerations
+applied before drag (like wind), so they damp toward a terminal velocity and never run away;
+inside a bounding box the edge clamps still contain them.
+
+Opt-in and fingerprint-safe: the integrator guards each term (`if (turb !== 0) ...`,
+`if (gust !== 0) ...`), so the defaults (0/0) do no extra work and seeded positions are
+byte-identical -- ALL THREE prior committed fingerprints (default 1569828004, floored
+2679696825, box 804161759) are preserved. Crucially both draw ZERO rng: `turbulence` reuses
+the seeded per-particle tilt+spin phases (already advanced every frame) as its curl direction
+(vx += cos(p)*turb*dt, vy += sin(p)*turb*dt, p = tilt*1.7 + spin), and `gust` reuses a new
+instance-level `_elapsed` clock (sum of dt, one add per frame, read only inside the gust guard)
+as its shared phase (vx += sin(_elapsed*GUST_HZ)*gust*dt, GUST_HZ = 2*pi/3). So a turbulent/
+gusty burst replays identically under a fixed seed, with its own committed fingerprints
+(turbulence 1630588936, gust 4074438162, both 15761758 -- all distinct). Fail closed: garbage
+coerces to 0 via signed num() (negatives valid -- they flip direction). Two new per-particle
+pool columns (`turb`, `gust`, 8 B/particle) so a forced burst and a calm burst coexist; no
+hot-path alloc (the guarded trig FMAs de-opt nothing). No reduced-motion effect (the static
+render has no velocity to perturb). The unit gate asserts opt-in/fail-closed == the default
+hash, re-asserts the floored + box hashes are untouched, pins the three new hashes, and proves
+NON-VACUOUS perturbation a bare hash can't see (turbulence widens the x-extent; gust displaces
+the summed x); torture T5 fuzzes signed turbulence + gust through the differential stream (also
+proving the shared clock is deterministic across instances), T6 lane 5 arms both on a live pool
+in the alloc gate, T1 adds turbulence/gust poison cases under the finite-position detector.
+See decision 0009. No runtime dep change. Unit suite 106 -> 113.

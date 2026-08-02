@@ -3,6 +3,50 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.8.0] - 2026-08-02
+
+Feature release: `turbulence` + `gust` -- the first **time-varying** forces. Until now every
+force was constant, so a wide fall looked like parallel rain. `turbulence` gives each particle
+a rotating acceleration (organic wander, so a burst fans out and mills); `gust` adds a global
+sinusoidal horizontal acceleration layered on `wind` (the whole pool swells one way then the
+other, in ~3s waves). Both draw **zero rng** -- a pure deterministic function of state the
+engine already advances -- so default `0` is byte-identical (the committed `1569828004`, the
+v1.6.0 floored `2679696825`, AND the v1.7.0 box `804161759` fingerprints are all unchanged),
+and a turbulent/gusty burst is reproducible for free.
+
+### Added
+- **`turbulence: number` on `burst()`/`spray()`** -- a per-particle rotating acceleration
+  (px/sec^2) that makes each particle wander organically. The curl direction reuses the seeded
+  `tilt`/`spin` phases the engine already advances, so no rng is drawn. Default `0` (none).
+- **`gust: number` on `burst()`/`spray()`** -- a global, sinusoidally-oscillating horizontal
+  acceleration (px/sec^2) layered on `wind`. The whole burst shares one phase (a new
+  instance-level elapsed-time clock), so it reads as a coherent breeze rather than noise.
+  Default `0` (none).
+
+### Semantics
+- **Opt-in, zero-cost by default.** Each force is guarded on its value (`turb !== 0`,
+  `gust !== 0`), so no branch fires by default -- a calm burst does no extra work and its
+  seeded positions are byte-identical. All three prior committed fingerprints are preserved.
+- **Deterministic when on.** Neither force draws rng: `turbulence` is a pure function of the
+  per-particle `tilt`/`spin` phases (seeded once at spawn), `gust` of the shared `_elapsed`
+  clock. A turbulent/gusty burst replays identically under a fixed seed, with its own committed
+  fingerprints in the test suite (turbulence-only, gust-only, and combined, all distinct).
+- **Bounded, finite, contained.** Both are accelerations applied before `drag`, exactly like
+  `wind`, so they damp toward a terminal velocity and never run away; particles still expire on
+  the life countdown. Inside a bounding box the edge clamps still hold -- a burst under strong
+  turbulence + gust + wind + gravity in a tight elastic box stays finite AND contained (verified).
+- **Fail closed.** A non-finite/garbage value coerces to `0` (off) via `num()`; negatives are
+  allowed (they flip the curl / gust direction) and stay finite and deterministic.
+
+### Internal
+- New per-particle columns `turb` + `gust` (Float32, 8 B/particle), assigned at spawn like
+  every other physics knob; a new instance-level `_elapsed` accumulator (one add per frame,
+  read only inside the gust guard); a `GUST_HZ` module constant (~3s period).
+- Torture: t5 fuzz threads `turbulence`/`gust` into the burst+spray differential op-stream
+  (two same-seed instances stay bit-identical, proving the shared clock is deterministic); t6
+  lane 5 carries both forces on the live pool (still ~0 B/frame); t1 adds
+  `turbulence:NaN`/`-Infinity` + `gust:Infinity` poison rows. Unit suite 106 -> 113.
+
 ## [1.7.0] - 2026-08-02
 
 Feature release: `wallLeft` + `wallRight` + `ceiling`. Completes the boundary `floor`

@@ -52,6 +52,8 @@ function genOp(prng, allowReseed) {
                 wallLeft: (prng() % 2 === 0) ? -Infinity : 100 + (prng() % 200),  // box edges, half off
                 wallRight: (prng() % 2 === 0) ? Infinity : 400 + (prng() % 300),
                 ceiling: (prng() % 2 === 0) ? -Infinity : 20 + (prng() % 150),
+                turbulence: (prng() % 2 === 0) ? 0 : (prng() % 800) - 400, // signed wander, half off
+                gust: (prng() % 2 === 0) ? 0 : (prng() % 600) - 300,       // signed gust, half off
                 lifeMin: 0.5 + (prng() % 200) / 100,
                 lifeMax: 2.5 + (prng() % 200) / 100,
             },
@@ -68,6 +70,8 @@ function genOp(prng, allowReseed) {
                 wallLeft: (prng() % 2 === 0) ? -Infinity : 100 + (prng() % 200),
                 wallRight: (prng() % 2 === 0) ? Infinity : 400 + (prng() % 300),
                 ceiling: (prng() % 2 === 0) ? -Infinity : 20 + (prng() % 150),
+                turbulence: (prng() % 2 === 0) ? 0 : (prng() % 800) - 400,
+                gust: (prng() % 2 === 0) ? 0 : (prng() % 600) - 300,
             },
         };
     }

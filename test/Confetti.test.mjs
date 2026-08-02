@@ -51,6 +51,14 @@ const BOX_HASH = 804161759;
 // and (see the dedicated ceiling case) an upward launch is caught by a ceiling.
 const BOX = { wallLeft: 300, wallRight: 500, ceiling: 80, floor: 180 };
 
+// Committed fingerprints for the time-varying forces (v1.8.0). Both turbulence and gust draw
+// NO rng -- turbulence is a pure function of the seeded tilt/spin phases, gust of the shared
+// _elapsed clock -- so, like the box, each is cross-process stable and its own replay gate.
+// All differ from COMMITTED_HASH and from each other (probed on the seed-12345 rig below).
+const TURB_HASH = 1630588936;   // turbulence: 500
+const GUST_HASH = 4074438162;   // gust: 400
+const TURBGUST_HASH = 15761758; // turbulence: 500 + gust: 400
+
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
 function withSilencedWarn(fn) {
     const orig = console.warn;
@@ -975,6 +983,124 @@ describe('lite-confetti', () => {
                 }
             };
             assert.equal(staticHash({ wallLeft: 10, wallRight: 20, ceiling: 5, bounce: 0.5 }), staticHash({}));
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    //  turbulence / gust -- living air (v1.8.0)
+    // -------------------------------------------------------------------------
+    describe('turbulence / gust (living air)', () => {
+        // Same seeded rig as the floor/box gates (an un-forced run reproduces COMMITTED_HASH).
+        // The record canvas also exposes sumX (drift-direction sum) and minX/maxX (extent) --
+        // turbulence FANS the pool (wider extent), gust PUSHES it (displaced sumX); neither is
+        // visible to a bare fingerprint, so both are asserted directly.
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = {
+                hash: canvas.hash, sumX: canvas.sumX,
+                minX: canvas.minX, maxX: canvas.maxX, spread: canvas.maxX - canvas.minX,
+            };
+            c.destroy();
+            return out;
+        };
+
+        it('omitting / zero / non-finite forces keep the committed default fingerprint', () => {
+            assert.equal(run({}).hash, COMMITTED_HASH);
+            assert.equal(run({ turbulence: 0 }).hash, COMMITTED_HASH);
+            assert.equal(run({ gust: 0 }).hash, COMMITTED_HASH);
+            assert.equal(run({ turbulence: 0, gust: 0 }).hash, COMMITTED_HASH);
+            // Fail closed on garbage -> 0 (num coercion), for each knob.
+            assert.equal(run({ turbulence: NaN, gust: NaN }).hash, COMMITTED_HASH);
+            assert.equal(run({ turbulence: null, gust: null }).hash, COMMITTED_HASH);
+            assert.equal(run({ turbulence: 't', gust: 'g' }).hash, COMMITTED_HASH);
+        });
+
+        it('leaves the floor-only and box fingerprints byte-identical (new guards never fire)', () => {
+            // The v1.8.0 blocks must not perturb any prior committed stream. Re-assert both.
+            const floorHash = run({ floor: FLOOR_Y }).hash;
+            if (FLOOR_HASH !== null) assert.equal(floorHash, FLOOR_HASH, 'floor-only fingerprint drifted');
+            assert.equal(run({ ...BOX, bounce: 0 }).hash, BOX_HASH, 'box fingerprint drifted');
+        });
+
+        it('matches committed fingerprints for turbulence, gust, and both (deterministic, distinct)', () => {
+            const t = run({ turbulence: 500 });
+            const g = run({ gust: 400 });
+            const b = run({ turbulence: 500, gust: 400 });
+            if (TURB_HASH === null) console.log('[turb] fingerprint =', t.hash);
+            else assert.equal(t.hash, TURB_HASH, 'turbulence stream changed vs the committed baseline');
+            if (GUST_HASH === null) console.log('[gust] fingerprint =', g.hash);
+            else assert.equal(g.hash, GUST_HASH, 'gust stream changed vs the committed baseline');
+            if (TURBGUST_HASH === null) console.log('[turbgust] fingerprint =', b.hash);
+            else assert.equal(b.hash, TURBGUST_HASH, 'combined stream changed vs the committed baseline');
+            // Each force perturbs, and the three are mutually distinct and distinct from calm.
+            const hashes = new Set([COMMITTED_HASH, t.hash, g.hash, b.hash]);
+            assert.equal(hashes.size, 4, 'turbulence/gust/both must each shift the stream distinctly');
+            // Deterministic replay: no rng means same seed -> same hash on a second run.
+            assert.equal(run({ turbulence: 500 }).hash, t.hash, 'turbulence is not deterministic on replay');
+            assert.equal(run({ turbulence: 500, gust: 400 }).hash, b.hash, 'combined is not deterministic on replay');
+        });
+
+        it('turbulence fans the pool wider; gust displaces it sideways (non-vacuous)', () => {
+            const plain = run({});
+            const t = run({ turbulence: 500 });
+            const g = run({ gust: 400 });
+            // Turbulence: decorrelated per-particle wander => a strictly wider x-extent.
+            assert.ok(t.spread > plain.spread, 'turbulence did not widen the pool (else vacuous)');
+            // Gust: a coherent horizontal push => a materially displaced summed x.
+            assert.ok(Math.abs(g.sumX - plain.sumX) > 1000, 'gust did not displace the pool (else vacuous)');
+        });
+
+        it('keeps positions finite under strong turbulence + gust + wind + gravity in a box', () => {
+            // Time-varying accels layered on wind/gravity inside an elastic box: an energy leak
+            // would NaN out or escape. assertFinite catches NaN; the clamp catches escape.
+            const canvas = makeCanvas({ record: true, assertFinite: true });
+            const c = createConfetti(canvas, { seed: 3 });
+            assert.doesNotThrow(() => {
+                c.burst({
+                    x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 5, lifeMax: 5,
+                    wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350,
+                    bounce: 1, wind: 2000, gravity: 4000, turbulence: 3000, gust: 2500,
+                });
+                pump(1, 1000); pump(80, 16);
+            });
+            assert.ok(canvas.minX >= 350 && canvas.maxX <= 450, 'a particle escaped a wall under turbulence/gust');
+            c.destroy();
+        });
+
+        it('spray() honours turbulence + gust (deterministic, perturbing stream)', () => {
+            const sprayRun = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 200, rate: 10, x: 400, y: 300, spread: 2.0, lifeMin: 5, lifeMax: 5, ...opts });
+                pump(1, 1000); pump(60, 16);
+                const h = canvas.hash;
+                c.destroy();
+                return h;
+            };
+            const calm = sprayRun({});
+            assert.equal(sprayRun({}), calm, 'calm spray not deterministic');
+            assert.notEqual(sprayRun({ turbulence: 400, gust: 300 }), calm, 'spray ignored turbulence/gust');
+            assert.equal(sprayRun({ turbulence: 400, gust: 300 }), sprayRun({ turbulence: 400, gust: 300 }), 'forced spray not deterministic');
+        });
+
+        it('has no effect under reduced motion (static path has no velocity to perturb)', () => {
+            const staticHash = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 30, ...opts });
+                    const h = canvas.hash;
+                    c.destroy();
+                    return h;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            assert.equal(staticHash({ turbulence: 800, gust: 600 }), staticHash({}));
         });
     });
 
