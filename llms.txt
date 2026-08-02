@@ -1,6 +1,6 @@
 # @zakkster/lite-confetti
 
-> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, a settle floor with bounce, reduced-motion support, and timeline composability.
+> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, a full bounding box (floor + walls + ceiling) with bounce, reduced-motion support, and timeline composability.
 
 ## Installation
 npm install @zakkster/lite-confetti
@@ -40,7 +40,10 @@ Full control instance bound to a specific canvas.
 | `gravity` | 600 | Downward acceleration (px/s²) |
 | `wind` | 0 | Lateral acceleration (px/s²), the X mirror of gravity. Positive = right, negative = left. Opt-in; fingerprint-safe (v1.5.0) |
 | `floor` | Infinity | Settle-boundary Y (CSS px); particles clamp onto it instead of falling forever. Opt-in; fingerprint-safe (v1.6.0) |
-| `bounce` | 0 | Restitution 0..1 on floor contact (0 rests/piles up, 1 elastic). Only with a finite `floor` (v1.6.0) |
+| `bounce` | 0 | Restitution 0..1 on ANY boundary contact (0 rests/piles up, 1 elastic); shared by floor + walls + ceiling (v1.6.0/v1.7.0) |
+| `wallLeft` | -Infinity | Left wall X (CSS px); the X-min edge of the bounding box. Particles clamp and reflect vx. Opt-in; fingerprint-safe (v1.7.0) |
+| `wallRight` | Infinity | Right wall X (CSS px); the X-max edge. Opt-in; fingerprint-safe (v1.7.0) |
+| `ceiling` | -Infinity | Ceiling Y (CSS px); the Y-min edge, mirror of `floor`. Particles clamp and reflect vy. Opt-in; fingerprint-safe (v1.7.0) |
 | `drag` | 0.98 | Per-frame velocity retention (0–1) |
 | `sizeMin` | 5 | Minimum particle size |
 | `sizeMax` | 12 | Maximum particle size |
@@ -58,7 +61,7 @@ Full control instance bound to a specific canvas.
 Spray-only: `duration` (ms, default 1000), `rate` (particles/frame, default 5)
 
 ## Particle Physics
-Each particle has: position (x, y), velocity (vx, vy), gravity, wind, floor, bounce, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame: gravity → wind (guarded, opt-in) → drag → position update → floor collision (guarded, opt-in: clamp + reflect vy) → spin → tilt.
+Each particle has: position (x, y), velocity (vx, vy), gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame: gravity → wind (guarded, opt-in) → drag → position update → floor + ceiling collision (guarded, opt-in: clamp + reflect vy) → spin → tilt → sway → wall collision (guarded, opt-in, after sway: clamp + reflect vx). The floor/ceiling/wall collisions together form an opt-in axis-aligned bounding box; each edge draws no rng.
 
 ## Rotation
 Particles rotate via `spin` (angular velocity applied each frame). The `spinV` is randomized per particle at spawn: `(rng.next() - 0.5) * 10` radians/sec. Combined with `tilt` wobble (cosine-driven X-scale oscillation), this produces realistic 3D tumbling.
@@ -67,7 +70,7 @@ Particles rotate via `spin` (angular velocity applied each frame). The `spinV` i
 - SoA flat TypedArrays for cache-friendly particle physics
 - Deterministic: `seed(42)` produces identical output every time
 - 5 built-in shapes (rect, circle, star, triangle, emoji) + `registerShape()` for custom vector/sprite shapes
-- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + floor/bounce (settle boundary), all deterministic
+- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + a full bounding box (floor/walls/ceiling) with bounce, all deterministic
 - OKLCH colors (perceptually uniform — every piece looks equally vibrant)
 - Reduced motion: auto-detects `prefers-reduced-motion: reduce`, renders static spread, fades out
 - ResizeObserver (not polling) for canvas sizing — zero layout thrashing
@@ -277,3 +280,36 @@ the same seed with no floor gives maxY > floor (the floor actually did something
 fuzzes finite/Infinity floor + bounce through the differential stream, T6 lane 5 arms the
 guarded collision for a full resting pool in the alloc gate, T1 adds floor/bounce poison cases
 under the finite-position detector. See decision 0007. No runtime dep change.
+
+## v1.7.0 -- walls / ceiling (bounding box)
+
+Completes the boundary `floor` started into a full axis-aligned BOUNDING BOX. Adds the three
+remaining edges -- `wallLeft` (X-min), `wallRight` (X-max), `ceiling` (Y-min, the mirror of
+`floor`) -- each an absolute CSS-px coordinate. A particle reaching an edge is clamped onto it
+and its perpendicular velocity reflected. Restitution reuses the existing `bounce` (one
+bounciness for the whole box): c.burst({ ceiling: 0, floor: h, wallLeft: 0, wallRight: w,
+bounce: 0.4 }) keeps a burst fully inside the viewport, reflecting off every side.
+
+Opt-in and fingerprint-safe: each edge's collision is guarded against an infinity sentinel
+(`y < ceiling` after the floor block; `x < wallLeft` / `else x > wallRight` after the sway
+block), and each edge defaults to the sentinel that makes its guard always false
+(-Infinity / +Infinity / -Infinity), so no branch can fire by default. A box-less burst does
+no extra work and its seeded positions are byte-identical -- BOTH the committed default
+fingerprint 1569828004 AND the v1.6.0 floored fingerprint 2679696825 are preserved. Like the
+floor, the box draws NO rng (pure physics), so a boxed burst replays identically (canonical
+boxed fingerprint 804161759). The wall clamp runs AFTER sway (x's last mutation) so a swaying
+particle is still contained. Damped, no escape: bounce stays clamp01 so no edge adds energy,
+and drag damps every frame, so an elastic particle in a tight box never escapes and always
+settles. Fail closed: a non-finite/garbage edge coerces to its "off" sentinel (a wrong-signed
+infinity can't turn an edge on backwards); an inverted box clamps deterministically, never a
+NaN. Three new per-particle pool columns (`wallL`, `wallR`, `ceil`, mirroring `floor`) so a
+boxed burst and a box-less burst coexist in one pool; no hot-path alloc. No effect under
+reduced motion (static render does no integration to collide).
+
+Tests: 106 unit (was 97); hash-neutral `minX`/`maxX`/`minY` containment probes on the mock
+ctx prove each edge held (boxed within every edge; the same seed un-boxed breaches each), plus
+a dedicated case proving the ceiling alone catches an upward launch and a no-escape case
+(elastic tight box under strong wind + gravity stays contained and finite); torture T5 fuzzes
+finite/Infinity walls + ceiling through the differential stream, T6 lane 5 arms the full box
+for a resting pool in the alloc gate, T1 adds wall/ceiling + inverted-box poison cases under
+the finite-position detector. See decision 0008. No runtime dep change.

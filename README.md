@@ -9,7 +9,8 @@
 
 Deterministic confetti engine with OKLCH colors, 5 built-in shapes plus custom
 `registerShape()` shapes (vector or image sprite), per-particle multi-shape mixing,
-tunable flutter, lateral wind, a settle floor with bounce, and reduced-motion support.
+tunable flutter, lateral wind, a full bounding box (floor, walls, ceiling) with bounce,
+and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -82,7 +83,10 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `gravity` | number | 600 | Downward acceleration in px/s². Higher = falls faster. |
 | `wind` | number | 0 | Lateral acceleration in px/s² — the sideways mirror of `gravity`. Positive drifts right, negative left. Opt-in; `0` = straight down. See [Wind](#wind--lateral-drift). |
 | `floor` | number | Infinity | Settle-boundary Y in CSS px. Particles that reach it land on the line instead of falling forever. Opt-in; `Infinity` = no floor. See [Floor](#floor--settle--bounce). |
-| `bounce` | number | 0 | Restitution `0–1` on floor contact: `0` rests (pile-up), `1` is perfectly elastic. Only with a finite `floor`. |
+| `bounce` | number | 0 | Restitution `0–1` on **any** boundary contact (floor and walls alike): `0` rests (pile-up), `1` is perfectly elastic. Shared by the whole [bounding box](#bounding-box). |
+| `wallLeft` | number | -Infinity | Left wall X in CSS px — the X-min edge of the [bounding box](#bounding-box). Particles reaching it clamp and reflect `vx`. Opt-in; `-Infinity` = no wall. |
+| `wallRight` | number | Infinity | Right wall X in CSS px — the X-max edge. Opt-in; `Infinity` = no wall. |
+| `ceiling` | number | -Infinity | Ceiling Y in CSS px — the Y-min edge, the mirror of `floor`. Particles rising past it clamp and reflect `vy`. Opt-in; `-Infinity` = no ceiling. |
 | `drag` | number | 0.98 | Per-frame velocity retention, clamped to `0–1`. 0.98 = 2% speed loss per frame. |
 | `sizeMin` | number | 5 | Minimum particle width in CSS pixels |
 | `sizeMax` | number | 12 | Maximum particle width in CSS pixels |
@@ -128,12 +132,15 @@ Every frame, each alive particle runs through this pipeline:
 2.  WIND        vx += wind × dt           (opt-in lateral acceleration)
 3.  DRAG        vx *= drag, vy *= drag    (air resistance)
 4.  POSITION    x += vx × dt, y += vy × dt
-5.  FLOOR       if y > floor: y = floor, vy = −vy × bounce   (opt-in settle boundary)
-6.  SWAY        x += sin(tiltPhase) × sway × dt   (opt-in horizontal drift)
-7.  SPIN        rotation += spinVelocity × dt
-8.  TILT        tiltPhase += tiltSpeed × dt
-9.  OPACITY     fade to 0 in last 30% of life
-10. RENDER      translate → rotate → flutter-scale → draw shape
+5.  FLOOR       if y > floor:   y = floor,   vy = −vy × bounce   (opt-in, box Y-max)
+6.  CEILING     if y < ceiling: y = ceiling, vy = −vy × bounce   (opt-in, box Y-min)
+7.  SWAY        x += sin(tiltPhase) × sway × dt   (opt-in horizontal drift)
+8.  WALLS       if x < wallLeft:  x = wallLeft,  vx = −vx × bounce   (opt-in, box X-min)
+                if x > wallRight: x = wallRight, vx = −vx × bounce   (opt-in, box X-max)
+9.  SPIN        rotation += spinVelocity × dt
+10. TILT        tiltPhase += tiltSpeed × dt
+11. OPACITY     fade to 0 in last 30% of life
+12. RENDER      translate → rotate → flutter-scale → draw shape
 ```
 
 ### Rotation & 3D Tumbling
@@ -171,6 +178,18 @@ c.spray({ floor: 400, bounce: 0.3, duration: 1500 });       // a spray that pile
 ```
 
 On contact the particle is clamped onto the floor and its `vy` is reflected, scaled by `bounce`. Restitution is clamped to `0–1` so a rebound can never *add* energy, and drag still damps `vy` every frame, so even `bounce: 1` loses energy and eventually rests — never a runaway. `floor` defaults to `Infinity`, and the integrator's collision branch (`if (y > floor)`) can never fire at that default, so a floor-less burst does no extra work and its seeded positions stay byte-identical (the committed determinism fingerprint is preserved). Like wind, the collision draws no random values, so a floored burst replays identically under a fixed seed. Floor has no effect under reduced motion (the static render does no integration to collide).
+
+### Bounding box
+
+**`wallLeft`**, **`wallRight`**, and **`ceiling`** (added in v1.7.0) are the three remaining edges that complete `floor` into a full axis-aligned **bounding box** — an X-min wall, an X-max wall, and a Y-min ceiling (the mirror of the `floor` Y-max). Each is an absolute CSS-px coordinate; a particle reaching an edge is clamped onto it and the perpendicular velocity component reflected. Restitution reuses the same **`bounce`**, so the whole box shares one bounciness.
+
+```js
+const w = innerWidth, h = innerHeight;
+c.burst({ x: w / 2, y: h / 2, ceiling: 0, floor: h, wallLeft: 0, wallRight: w, bounce: 0.4 });
+// a burst that stays fully inside the viewport, bouncing off every edge
+```
+
+Each edge defaults to an infinity sentinel (`-Infinity` for `wallLeft`/`ceiling`, `Infinity` for `wallRight`), and its guard (`x < wallLeft`, `x > wallRight`, `y < ceiling`) can never fire at that default — so a box-less burst does no extra work and its seeded positions stay byte-identical. **Both** committed fingerprints — the default *and* the v1.6.0 floored — are preserved. The wall clamp runs *after* `sway` (the frame's last horizontal move), so a swaying particle is still contained. Like the floor, the box draws no random values (a boxed burst replays identically under a fixed seed), `bounce` stays clamped so no edge can add energy (an elastic particle in a tight box never escapes), a degenerate inverted box clamps deterministically without a NaN, and the box has no effect under reduced motion.
 
 ### Canvas Sizing
 
@@ -476,6 +495,13 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.7.0
+
+**Bounding box (walls + ceiling).** Completes `floor` into a full axis-aligned box; opt-in and fingerprint-safe — both the default *and* the v1.6.0 floored determinism fingerprints are byte-for-byte unchanged.
+
+- `wallLeft` / `wallRight: number` on `burst()`/`spray()` — the X-min / X-max edges; a particle reaching a wall clamps and reflects `vx` (defaults `-Infinity` / `Infinity` = no wall).
+- `ceiling: number` — the Y-min edge, the mirror of `floor`; a particle rising past it clamps and reflects `vy` (default `-Infinity` = no ceiling). Restitution reuses `bounce` for the whole box; draws no rng; fails closed; no escape from a tight elastic box; no effect under reduced motion. See [Bounding box](#bounding-box).
 
 ### v1.6.0
 

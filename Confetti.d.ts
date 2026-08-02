@@ -37,12 +37,31 @@ export interface BurstOptions {
      */
     floor?: number;
     /**
-     * Restitution 0..1 applied to vertical velocity on floor contact: 0 rests (settle /
-     * pile-up), 1 is perfectly elastic. Values outside 0..1 clamp; a rebound can never add
-     * energy, and drag still damps each frame, so motion always settles. Only meaningful
-     * when `floor` is finite. Default 0.
+     * Restitution 0..1 applied on ANY boundary contact -- shared by `floor` and the
+     * `wallLeft`/`wallRight`/`ceiling` box edges: 0 rests (settle / pile-up), 1 is
+     * perfectly elastic. Values outside 0..1 clamp; a rebound can never add energy, and
+     * drag still damps each frame, so motion always settles. Only meaningful when at least
+     * one boundary is finite. Default 0.
      */
     bounce?: number;
+    /**
+     * Left wall X coordinate in CSS px -- the X-min edge of the bounding box. A particle
+     * reaching it is clamped and its horizontal velocity reflected (scaled by `bounce`).
+     * Default `-Infinity` (no wall). Opt-in and fingerprint-safe (the default never fires
+     * the collision branch); draws no rng; no effect under reduced motion.
+     */
+    wallLeft?: number;
+    /**
+     * Right wall X coordinate in CSS px -- the X-max edge of the bounding box (see
+     * `wallLeft`). Default `Infinity` (no wall).
+     */
+    wallRight?: number;
+    /**
+     * Ceiling Y coordinate in CSS px -- the Y-min edge of the bounding box and the mirror
+     * of `floor`. A particle rising past it is clamped and its vertical velocity reflected
+     * (scaled by `bounce`). Default `-Infinity` (no ceiling). Opt-in and fingerprint-safe.
+     */
+    ceiling?: number;
     sizeMin?: number; sizeMax?: number; lifeMin?: number; lifeMax?: number;
     shape?: ShapeName;
     /**

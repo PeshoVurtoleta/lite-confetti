@@ -102,21 +102,22 @@ export async function run() {
     }
 
     // (5) A pool filled from ONE multi-shape burst (shapes: []), ALSO under a non-zero
-    // `wind` AND a reachable `floor` + `bounce`. The per-particle shape pick is a spawn-time
-    // rng draw + array index (no alloc); it interleaves shape ids so update()'s indexed
-    // dispatch runs fully polymorphic every frame; wind != 0 arms the guarded lateral-accel
-    // FMA (`vx += wind*dt`); and the finite floor arms the guarded collision block
-    // (`y > floor` -> clamp + reflect) -- once a particle lands, gravity re-crosses it every
-    // frame, so the branch keeps firing for every resting particle. All must still integrate
-    // at ~0 B/frame. Includes a custom vector + a sprite in the mix so all three dispatch
-    // kinds are hit from a single burst.
+    // `wind` AND a reachable full bounding box (`floor` + `wallLeft`/`wallRight`/`ceiling`
+    // + `bounce`). The per-particle shape pick is a spawn-time rng draw + array index (no
+    // alloc); it interleaves shape ids so update()'s indexed dispatch runs fully polymorphic
+    // every frame; wind != 0 arms the guarded lateral-accel FMA (`vx += wind*dt`); and every
+    // finite box edge arms its guarded collision block -- the floor + ceiling clamps and the
+    // wall if/else-if. Wind drives the pool into the right wall and the floor pins it, so once
+    // a particle lands/leans it re-crosses an edge every frame and the branches keep firing for
+    // the whole resting pool. All must still integrate at ~0 B/frame. Includes a custom vector
+    // + a sprite in the mix so all three dispatch kinds are hit from a single burst.
     const cm = createConfetti(makeCanvas(), { seed: 5150, maxParticles: MAXP });
     cm.registerShape('heart', (ctx, w) => { ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, Math.PI * 2); ctx.fill(); });
     cm.registerShape('logo', { image: makeCanvas() });
     cm.burst({
         count: MAXP, shapes: ['rect', 'circle', 'star', 'triangle', 'emoji', 'heart', 'logo'],
         lifeMin: 1e6, lifeMax: 1e6, sizeMin: 4, sizeMax: 12, sway: 0.5, wind: 300,
-        floor: 150, bounce: 0.4,
+        floor: 150, bounce: 0.4, wallLeft: 200, wallRight: 600, ceiling: 100,
     });
     pump(1, 1000);
     check(cm.count === MAXP, () => `T6: mixed-shape pool has ${cm.count} alive, expected ${MAXP}`);
@@ -138,6 +139,6 @@ export async function run() {
     log('  T6 ok -- update() ' + bpf.toFixed(2) + ' B/frame over ' + MAXP + ' particles ('
         + bpfCustom.toFixed(2) + ' B/frame custom vector+sprite+sway, '
         + bpfPoison.toFixed(2) + ' B/frame from sanitised garbage inputs, '
-        + bpfMix.toFixed(2) + ' B/frame from a shapes[] mix under wind + floor/bounce); '
+        + bpfMix.toFixed(2) + ' B/frame from a shapes[] mix under wind + full bounding box); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

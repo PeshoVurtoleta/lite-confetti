@@ -49,6 +49,9 @@ function genOp(prng, allowReseed) {
                 wind: (prng() % 1000) - 500, // signed lateral wind, spans left..right
                 floor: (prng() % 3 === 0) ? Infinity : 50 + (prng() % 400), // 1/3 no floor, else reachable
                 bounce: (prng() % 101) / 100, // restitution 0..1 (settle .. elastic)
+                wallLeft: (prng() % 2 === 0) ? -Infinity : 100 + (prng() % 200),  // box edges, half off
+                wallRight: (prng() % 2 === 0) ? Infinity : 400 + (prng() % 300),
+                ceiling: (prng() % 2 === 0) ? -Infinity : 20 + (prng() % 150),
                 lifeMin: 0.5 + (prng() % 200) / 100,
                 lifeMax: 2.5 + (prng() % 200) / 100,
             },
@@ -62,6 +65,9 @@ function genOp(prng, allowReseed) {
                 speed: 100 + (prng() % 500), wind: (prng() % 800) - 400,
                 floor: (prng() % 3 === 0) ? Infinity : 50 + (prng() % 400),
                 bounce: (prng() % 101) / 100,
+                wallLeft: (prng() % 2 === 0) ? -Infinity : 100 + (prng() % 200),
+                wallRight: (prng() % 2 === 0) ? Infinity : 400 + (prng() % 300),
+                ceiling: (prng() % 2 === 0) ? -Infinity : 20 + (prng() % 150),
             },
         };
     }

@@ -41,6 +41,16 @@ const FLOOR_HASH = 2679696825;
 // the pumped window, so 120 is genuinely crossed (the boundary actually fires).
 const FLOOR_Y = 120;
 
+// Committed fingerprint for a canonical BOXED burst (the full bounding box below). Like the
+// floor, every box edge is pure physics (no rng), so this holds cross-process and differs
+// from both COMMITTED_HASH and FLOOR_HASH -- its own deterministic-replay gate.
+const BOX_HASH = 804161759;
+// The canonical box for the walls/ceiling rig. The seed-12345 burst is centered at (400,198)
+// and, un-boxed, spans x in [249,540] and y in [43,196], so every edge below sits strictly
+// inside that spread and is genuinely crossed: left/right walls clamp x, the floor pins y,
+// and (see the dedicated ceiling case) an upward launch is caught by a ceiling.
+const BOX = { wallLeft: 300, wallRight: 500, ceiling: 80, floor: 180 };
+
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
 function withSilencedWarn(fn) {
     const orig = console.warn;
@@ -833,6 +843,138 @@ describe('lite-confetti', () => {
                 }
             };
             assert.equal(staticHash({ floor: 10, bounce: 0.5 }), staticHash({}));
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    //  walls / ceiling -- bounding box (v1.7.0, decision 0008)
+    // -------------------------------------------------------------------------
+    describe('walls / ceiling (bounding box)', () => {
+        // Same seeded rig as the floor gate (an un-boxed run reproduces COMMITTED_HASH). The
+        // record canvas also exposes minX/maxX/minY -- the X/Y-min CONTAINMENT probes kept out
+        // of the hash, the box analogs of maxY: they prove each edge actually held, which a
+        // bare fingerprint cannot.
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = {
+                hash: canvas.hash,
+                minX: canvas.minX, maxX: canvas.maxX,
+                minY: canvas.minY, maxY: canvas.maxY,
+            };
+            c.destroy();
+            return out;
+        };
+
+        it('omitting / infinity / non-finite edges keep the committed default fingerprint', () => {
+            assert.equal(run({}).hash, COMMITTED_HASH);
+            // Each edge at its explicit "off" sentinel.
+            assert.equal(run({ wallLeft: -Infinity }).hash, COMMITTED_HASH);
+            assert.equal(run({ wallRight: Infinity }).hash, COMMITTED_HASH);
+            assert.equal(run({ ceiling: -Infinity }).hash, COMMITTED_HASH);
+            // Each edge fails closed on garbage -> its "off" sentinel (num coercion).
+            assert.equal(run({ wallLeft: NaN, wallRight: NaN, ceiling: NaN }).hash, COMMITTED_HASH);
+            assert.equal(run({ wallLeft: null, wallRight: null, ceiling: null }).hash, COMMITTED_HASH);
+            assert.equal(run({ wallLeft: 'l', wallRight: 'r', ceiling: 'c' }).hash, COMMITTED_HASH);
+            // A wrong-signed infinity can never turn an edge ON in the wrong direction.
+            assert.equal(run({ wallLeft: Infinity, wallRight: -Infinity, ceiling: Infinity }).hash, COMMITTED_HASH);
+        });
+
+        it('a box entirely outside the spread is inert (never crossed => byte-identical)', () => {
+            // The seed-12345 burst lives in x[249,540] y[43,196]; this box encloses it loosely.
+            assert.equal(run({ wallLeft: -1000, wallRight: 2000, ceiling: -1000, floor: 2000 }).hash, COMMITTED_HASH);
+        });
+
+        it('matches a committed fingerprint for a canonical boxed burst', () => {
+            const { hash } = run({ ...BOX, bounce: 0 });
+            if (BOX_HASH === null) console.log('[box] fingerprint =', hash);
+            else assert.equal(hash, BOX_HASH, 'boxed-burst positions changed vs the committed baseline');
+            assert.notEqual(hash, COMMITTED_HASH, 'a reachable box must shift the stream vs no box');
+            assert.notEqual(hash, FLOOR_HASH, 'a full box must differ from a floor-only burst');
+        });
+
+        it('contains every particle inside all four edges (minX/maxX/minY/maxY invariant)', () => {
+            // The invariant a bare hash cannot see: boxed within every edge, un-boxed breaches each.
+            const boxed = run({ ...BOX, bounce: 0 });
+            assert.ok(boxed.minX >= BOX.wallLeft,  'a particle escaped left of wallLeft');
+            assert.ok(boxed.maxX <= BOX.wallRight, 'a particle escaped right of wallRight');
+            assert.ok(boxed.minY >= BOX.ceiling,   'a particle escaped above the ceiling');
+            assert.ok(boxed.maxY <= BOX.floor,     'a particle escaped below the floor');
+            // A bounced box (energy-adding would breach) still contains.
+            const bouncy = run({ ...BOX, bounce: 0.7 });
+            assert.ok(bouncy.minX >= BOX.wallLeft && bouncy.maxX <= BOX.wallRight, 'bounce let a particle through a wall');
+            assert.ok(bouncy.minY >= BOX.ceiling && bouncy.maxY <= BOX.floor, 'bounce let a particle through floor/ceiling');
+            // Non-vacuous: without the box, the same seed breaches every edge.
+            const free = run({});
+            assert.ok(free.minX < BOX.wallLeft,  'un-boxed run should pass wallLeft (else vacuous)');
+            assert.ok(free.maxX > BOX.wallRight, 'un-boxed run should pass wallRight (else vacuous)');
+            assert.ok(free.minY < BOX.ceiling,   'un-boxed run should pass the ceiling (else vacuous)');
+            assert.ok(free.maxY > BOX.floor,     'un-boxed run should pass the floor (else vacuous)');
+        });
+
+        it('the ceiling alone catches the upward launch (no floor pinning it)', () => {
+            // With no floor, particles launch up and are the only thing the ceiling can catch;
+            // this proves the ceiling edge fires on its own, not merely via the floor clamp.
+            const CEIL = 80;
+            assert.ok(run({ ceiling: CEIL }).minY >= CEIL, 'ceiling did not contain the upward launch');
+            assert.ok(run({}).minY < CEIL, 'un-ceilinged launch should rise past the line (else vacuous)');
+        });
+
+        it('restitution changes the trajectory (bounce shifts the boxed fingerprint)', () => {
+            assert.notEqual(run({ ...BOX, bounce: 0 }).hash, run({ ...BOX, bounce: 0.7 }).hash);
+        });
+
+        it('keeps positions finite AND contained in a tight box (bounce 1 + wind + gravity)', () => {
+            // Elastic walls + strong lateral wind + strong gravity: an energy leak would either
+            // NaN out or escape the box. assertFinite catches the NaN; the clamp catches escape.
+            const canvas = makeCanvas({ record: true, assertFinite: true });
+            const c = createConfetti(canvas, { seed: 3 });
+            assert.doesNotThrow(() => {
+                c.burst({
+                    x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 5, lifeMax: 5,
+                    wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350,
+                    bounce: 1, wind: 3000, gravity: 4000,
+                });
+                pump(1, 1000); pump(80, 16);
+            });
+            assert.ok(canvas.minX >= 350 && canvas.maxX <= 450, 'an elastic particle escaped a wall');
+            assert.ok(canvas.minY >= 250 && canvas.maxY <= 350, 'an elastic particle escaped floor/ceiling');
+            c.destroy();
+        });
+
+        it('spray() honours the walls (contains the spray between them)', () => {
+            const sprayX = (wall) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 200, rate: 10, x: 400, y: 300, spread: 2.0, lifeMin: 5, lifeMax: 5, ...wall });
+                pump(1, 1000); pump(60, 16);
+                const out = { minX: canvas.minX, maxX: canvas.maxX };
+                c.destroy();
+                return out;
+            };
+            const bounded = sprayX({ wallLeft: 360, wallRight: 440 });
+            const free = sprayX({});
+            assert.ok(bounded.minX >= 360 && bounded.maxX <= 440, 'spray walls did not contain the stream');
+            assert.ok(free.minX < 360 || free.maxX > 440, 'un-walled spray should pass a wall (else vacuous)');
+        });
+
+        it('has no effect under reduced motion (static path is box-inert)', () => {
+            const staticHash = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 30, ...opts });
+                    const h = canvas.hash;
+                    c.destroy();
+                    return h;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            assert.equal(staticHash({ wallLeft: 10, wallRight: 20, ceiling: 5, bounce: 0.5 }), staticHash({}));
         });
     });
 

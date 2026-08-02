@@ -111,6 +111,15 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     // floor gives `maxY > floor` (the floor actually did something) -- the Y-axis analog of
     // `sumX`'s drift-direction proof.
     let maxY = -Infinity;
+    // Bounding-box CONTAINMENT probes (v1.7.0): the smallest/largest integer draw X and the
+    // smallest draw Y, accumulated ONLY in the record branch and kept out of the `hash` mix
+    // (fingerprints stay byte-identical whether or not these are read). They measure the
+    // invariant a bare hash cannot see -- the X/Y-min analogs of `maxY`: a walled/ceilinged
+    // burst gives `maxX <= wallRight`, `minX >= wallLeft`, `minY >= ceiling` (each edge held),
+    // while the same seed with no box breaches each (the edge actually did something).
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
     // Fingerprint INTEGER-pixel draw positions only. Rounding to whole pixels
     // absorbs the sub-pixel divergence libm sin/cos can show across platforms, so
     // a committed baseline is portable; rotations (radians) are deliberately not
@@ -131,9 +140,13 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
             if (!record) return;
             hash = (Math.imul(hash ^ (Math.round(x) | 0), 16777619)) >>> 0;
             hash = (Math.imul(hash ^ (Math.round(y) | 0), 16777619)) >>> 0;
-            sumX += Math.round(x) | 0; // drift-direction probe; does NOT feed `hash`
-            const ry = Math.round(y) | 0; // floor-containment probe; does NOT feed `hash`
+            const rx = Math.round(x) | 0; // wind drift + wall-containment probes; NOT hashed
+            sumX += rx; // drift-direction probe; does NOT feed `hash`
+            if (rx < minX) minX = rx;
+            if (rx > maxX) maxX = rx;
+            const ry = Math.round(y) | 0; // floor/ceiling-containment probe; does NOT feed `hash`
             if (ry > maxY) maxY = ry;
+            if (ry < minY) minY = ry;
         }
         : null;
 
@@ -151,6 +164,9 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     Object.defineProperty(c, 'hash', { get() { return hash >>> 0; } });
     Object.defineProperty(c, 'sumX', { get() { return sumX; } });
     Object.defineProperty(c, 'maxY', { get() { return maxY; } });
+    Object.defineProperty(c, 'minX', { get() { return minX; } });
+    Object.defineProperty(c, 'maxX', { get() { return maxX; } });
+    Object.defineProperty(c, 'minY', { get() { return minY; } });
     return c;
 }
 

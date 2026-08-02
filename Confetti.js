@@ -1,10 +1,16 @@
 /**
- * @zakkster/lite-confetti v1.6.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.7.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.7.0 adds: `wallLeft` + `wallRight` + `ceiling` -- the three remaining edges that
+ * complete `floor` into a full opt-in bounding box. A particle reaching any edge (an
+ * absolute CSS-px coord) clamps onto it and reflects its velocity scaled by `bounce`
+ * (now the shared box restitution), so confetti can be fully contained. Fingerprint-safe:
+ * each edge defaults to an infinity sentinel whose guard can never fire, so BOTH the
+ * default and the v1.6.0 floored fingerprints are byte-for-byte preserved.
  * v1.6.0 adds: `floor` + `bounce` -- an opt-in settle boundary on the Y axis. Particles
  * that reach `floor` (a CSS-px Y) clamp to it and reflect vy scaled by `bounce`
  * (restitution 0..1: 0 rests/piles up, 1 elastic), so confetti can land instead of
@@ -414,7 +420,10 @@ export function createConfetti(canvas, {
         grav:  new Float32Array(maxParticles),   // per-particle gravity
         wind:  new Float32Array(maxParticles),   // per-particle lateral wind accel (px/sec^2)
         floor: new Float32Array(maxParticles),   // settle boundary Y (CSS px); Infinity = none
-        bounce:new Float32Array(maxParticles),   // restitution 0..1 applied to vy on floor contact
+        bounce:new Float32Array(maxParticles),   // restitution 0..1 applied on any boundary contact
+        wallL: new Float32Array(maxParticles),   // left wall X (CSS px); -Infinity = none
+        wallR: new Float32Array(maxParticles),   // right wall X (CSS px); +Infinity = none
+        ceil:  new Float32Array(maxParticles),   // ceiling Y (CSS px); -Infinity = none
         drag:  new Float32Array(maxParticles),
         flut:  new Float32Array(maxParticles),   // flutter: tumble depth 0..1 (X-scale wobble)
         sway:  new Float32Array(maxParticles),   // sway: horizontal drift amplitude 0..1
@@ -508,6 +517,9 @@ export function createConfetti(canvas, {
         pool.wind[i] = config.wind;
         pool.floor[i] = config.floor;
         pool.bounce[i] = config.bounce;
+        pool.wallL[i] = config.wallLeft;
+        pool.wallR[i] = config.wallRight;
+        pool.ceil[i] = config.ceiling;
         pool.drag[i] = config.drag;
         pool.flut[i] = config.flutter;
         pool.sway[i] = config.sway;
@@ -569,6 +581,18 @@ export function createConfetti(canvas, {
                 pool.vy[i] = -pool.vy[i] * pool.bounce[i];
             }
 
+            // Ceiling: the Y-min edge of the bounding box (v1.7.0), the mirror of `floor`.
+            // Guarded so the default (ceil == -Infinity) NEVER fires -- `y < -Infinity` is
+            // always false -- so it is byte-identical to pre-1.7.0 and BOTH committed
+            // fingerprints (default + the v1.6.0 floored) are preserved. Separate from the
+            // floor `if` above (not an else) so the floor block stays literally unchanged; for
+            // a valid box (ceil < floor) a single y can't trip both in one frame anyway.
+            // Reuses `bounce` as the shared box restitution; draws no rng (pure physics).
+            if (pool.y[i] < pool.ceil[i]) {
+                pool.y[i] = pool.ceil[i];
+                pool.vy[i] = -pool.vy[i] * pool.bounce[i];
+            }
+
             // Spin + wobble
             pool.spin[i] += pool.spinV[i] * dtSec;
             pool.tilt[i] += pool.tiltV[i] * dtSec;
@@ -578,6 +602,22 @@ export function createConfetti(canvas, {
             // determinism fingerprint depends on this branch never firing by default.
             if (pool.sway[i] !== 0) {
                 pool.x[i] += Math.sin(pool.tilt[i]) * pool.sway[i] * SWAY_PX * dtSec;
+            }
+
+            // Walls: the X-min / X-max edges of the bounding box (v1.7.0), the X-axis mirror
+            // of `floor`/`ceiling`. Placed AFTER the sway block on purpose -- x is mutated by
+            // BOTH the vx integration above AND sway, so the clamp must be the frame's LAST x
+            // write to actually contain a swaying particle. Guarded so the defaults
+            // (wallL == -Infinity, wallR == +Infinity) NEVER fire -- `x < -Infinity` and
+            // `x > +Infinity` are always false -- so both committed fingerprints are preserved.
+            // if/else-if because a particle can't breach both walls in one frame. Reuses
+            // `bounce` as the shared box restitution; draws no rng (pure physics).
+            if (pool.x[i] < pool.wallL[i]) {
+                pool.x[i] = pool.wallL[i];
+                pool.vx[i] = -pool.vx[i] * pool.bounce[i];
+            } else if (pool.x[i] > pool.wallR[i]) {
+                pool.x[i] = pool.wallR[i];
+                pool.vx[i] = -pool.vx[i] * pool.bounce[i];
             }
 
             // Opacity fade in last 30% of life
@@ -686,7 +726,10 @@ export function createConfetti(canvas, {
          * @param {number} [options.gravity=600] Downward acceleration
          * @param {number} [options.wind=0]     Lateral acceleration px/sec^2, the X mirror of gravity (negative = leftward). Opt-in
          * @param {number} [options.floor=Infinity] Settle-boundary Y in CSS px; particles clamp to it and reflect vy. Default none. Opt-in
-         * @param {number} [options.bounce=0]    Restitution 0..1 on floor contact (0 rests/pile-up, 1 elastic); only with a finite `floor`
+         * @param {number} [options.bounce=0]    Restitution 0..1 on any boundary contact (0 rests/pile-up, 1 elastic); shared by floor and walls
+         * @param {number} [options.wallLeft=-Infinity]  Left wall X in CSS px; a particle reaching it clamps and reflects vx. Default none. Opt-in
+         * @param {number} [options.wallRight=Infinity]  Right wall X in CSS px (see `wallLeft`). Default none. Opt-in
+         * @param {number} [options.ceiling=-Infinity]   Ceiling Y in CSS px; a particle rising past it clamps and reflects vy. Default none. Opt-in
          * @param {number} [options.drag=0.98]   Per-frame velocity retention
          * @param {number} [options.sizeMin=5]
          * @param {number} [options.sizeMax=12]
@@ -711,6 +754,9 @@ export function createConfetti(canvas, {
                   wind = 0,
                   floor = Infinity,
                   bounce = 0,
+                  wallLeft = -Infinity,
+                  wallRight = Infinity,
+                  ceiling = -Infinity,
                   drag = 0.98,
                   sizeMin = 5,
                   sizeMax = 12,
@@ -740,6 +786,9 @@ export function createConfetti(canvas, {
             wind = num(wind, 0); // signed: negative wind drifts left, so num (not nonneg)
             floor = num(floor, Infinity);  // opt-in: undefined/NaN/Infinity/string all => no floor
             bounce = clamp01(bounce, 0);   // restitution 0..1; a rebound can never add energy
+            wallLeft = num(wallLeft, -Infinity);   // opt-in box edge; non-finite => no left wall
+            wallRight = num(wallRight, Infinity);  // opt-in box edge; non-finite => no right wall
+            ceiling = num(ceiling, -Infinity);     // opt-in box edge; non-finite => no ceiling
             drag = clamp01(drag, 0.98);
             sizeMin = nonneg(sizeMin, 5);
             sizeMax = nonneg(sizeMax, 12);
@@ -775,7 +824,7 @@ export function createConfetti(canvas, {
 
             const colorPick = () => rng.pick(parsedColors);
             const config = {
-                sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, drag, shapeId, shapeIds, emoji, colorPick,
+                sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
                 flutter: clamp01(flutter, 1), sway: clamp01(sway, 0),
             };
 
@@ -804,7 +853,10 @@ export function createConfetti(canvas, {
          * @param {number} [options.rate=5]         Particles per frame
          * @param {number} [options.wind=0]         Lateral acceleration px/sec^2 (negative = leftward)
          * @param {number} [options.floor=Infinity] Settle-boundary Y in CSS px (default none). Opt-in
-         * @param {number} [options.bounce=0]       Restitution 0..1 on floor contact (0 rests, 1 elastic)
+         * @param {number} [options.bounce=0]       Restitution 0..1 on any boundary contact (0 rests, 1 elastic); shared by floor and walls
+         * @param {number} [options.wallLeft=-Infinity]  Left wall X in CSS px (default none). Opt-in
+         * @param {number} [options.wallRight=Infinity]  Right wall X in CSS px (default none). Opt-in
+         * @param {number} [options.ceiling=-Infinity]   Ceiling Y in CSS px (default none). Opt-in
          * @param {number} [options.flutter=1]      Tumble depth 0..1
          * @param {number} [options.sway=0]         Horizontal drift 0..1
          */
@@ -819,6 +871,9 @@ export function createConfetti(canvas, {
                   wind = 0,
                   floor = Infinity,
                   bounce = 0,
+                  wallLeft = -Infinity,
+                  wallRight = Infinity,
+                  ceiling = -Infinity,
                   drag = 0.98,
                   sizeMin = 4,
                   sizeMax = 10,
@@ -847,6 +902,9 @@ export function createConfetti(canvas, {
             wind = num(wind, 0); // signed: negative wind drifts left, so num (not nonneg)
             floor = num(floor, Infinity);  // opt-in: undefined/NaN/Infinity/string all => no floor
             bounce = clamp01(bounce, 0);   // restitution 0..1; a rebound can never add energy
+            wallLeft = num(wallLeft, -Infinity);   // opt-in box edge; non-finite => no left wall
+            wallRight = num(wallRight, Infinity);  // opt-in box edge; non-finite => no right wall
+            ceiling = num(ceiling, -Infinity);     // opt-in box edge; non-finite => no ceiling
             drag = clamp01(drag, 0.98);
             sizeMin = nonneg(sizeMin, 4);
             sizeMax = nonneg(sizeMax, 10);
@@ -880,7 +938,7 @@ export function createConfetti(canvas, {
 
             const colorPick = () => rng.pick(parsedColors);
             const config = {
-                sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, drag, shapeId, shapeIds, emoji, colorPick,
+                sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
                 flutter: clamp01(flutter, 1), sway: clamp01(sway, 0),
             };
 

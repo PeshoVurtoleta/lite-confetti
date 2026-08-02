@@ -3,6 +3,55 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.7.0] - 2026-08-02
+
+Feature release: `wallLeft` + `wallRight` + `ceiling`. Completes the boundary `floor`
+started into a full opt-in **bounding box** -- the three remaining edges of an axis-aligned
+box that a particle reflects off instead of drifting through. Every edge is an absolute
+CSS-px coordinate; restitution reuses the existing `bounce` (one bounciness for the whole
+box). Opt-in and fingerprint-safe -- omit the edges (each defaults to an infinity sentinel)
+and the default look, default positions, the committed determinism fingerprint
+(`1569828004`), AND the v1.6.0 floored fingerprint (`2679696825`) are all byte-for-byte
+unchanged.
+
+### Added
+- **`wallLeft: number` / `wallRight: number` on `burst()`/`spray()`** -- the X-min / X-max
+  edges of the bounding box, absolute CSS-px X coordinates. A particle reaching a wall is
+  clamped onto it and its horizontal velocity reflected (scaled by `bounce`). Defaults
+  `-Infinity` / `Infinity` (no wall).
+- **`ceiling: number` on `burst()`/`spray()`** -- the Y-min edge, the mirror of `floor`. A
+  particle rising past it is clamped and its vertical velocity reflected. Default `-Infinity`
+  (no ceiling). Together with `floor`, `c.burst({ ceiling: 0, floor: h, wallLeft: 0,
+  wallRight: w, bounce: 0.4 })` fully contains a burst inside the viewport.
+
+### Semantics
+- **Opt-in, zero-cost by default.** Each edge's collision is guarded on its value against an
+  infinity sentinel (`x < -Infinity`, `x > Infinity`, `y < -Infinity` are all always false),
+  so no branch can fire by default -- a box-less burst does no extra work and its seeded
+  positions are byte-identical. Both committed fingerprints (default + v1.6.0 floored) are
+  preserved. A boxed burst is itself fully deterministic under a fixed seed (it draws no rng;
+  the collisions are pure physics), with its own committed fingerprint in the test suite.
+- **Shared restitution.** `bounce` now applies to every edge -- floor, walls, and ceiling
+  alike -- a single-material box. It stays clamped to `0..1`, so no edge can add energy, and
+  drag still damps each frame, so even `bounce: 1` settles. No escape: an elastic particle in
+  a tight box under strong wind + gravity stays contained (verified).
+- **Fail closed.** A non-finite/garbage edge coerces to its "off" sentinel (a wrong-signed
+  infinity can never turn an edge on in the wrong direction); an inverted box (e.g.
+  `ceiling > floor`) clamps deterministically and finitely, never a NaN or a crash.
+- **No effect under reduced motion.** The static reduced-motion render does no integration
+  and has no velocity, so the box edges are inert there, like `floor`/`wind`/`sway`.
+
+### Internal
+- Three new per-particle pool columns (`wallL`, `wallR`, `ceil`, mirroring `floor`), so a
+  boxed burst and a box-less burst coexist correctly in one pool. Zero new hot-path
+  allocation (T6 measures a full mixed pool under wind + a reachable full box at ~0 B/frame).
+  New unit `describe('walls / ceiling (bounding box)')` (committed `BOX_HASH`; hash-neutral
+  `minX`/`maxX`/`minY` containment proofs plus a dedicated ceiling-catches-the-launch case;
+  restitution-shifts-trajectory; fail-closed + no-escape + spray + reduced-motion); torture
+  T5 fuzzes finite/Infinity walls + ceiling through the differential stream, T6 lane 5 arms
+  the full box for a resting pool, T1 adds wall/ceiling + inverted-box poison cases under the
+  finite-position detector. See `decisions/0008-walls-box.md`.
+
 ## [1.6.0] - 2026-08-01
 
 Feature release: `floor` + `bounce`. Adds the missing Y-axis boundary to the physics --

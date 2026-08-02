@@ -401,7 +401,7 @@
         <span class="badge">oklch-native</span>
         <span class="badge">5 + custom shapes</span>
         <span class="badge">flutter + sway + wind</span>
-        <span class="badge">floor + bounce</span>
+        <span class="badge">bounding box</span>
         <span class="badge">reduced-motion</span>
         <span class="badge">< 4KB</span>
     </div>
@@ -553,6 +553,11 @@
                 </div>
                 <input type="range" id="bounce" min="0" max="1" value="0" step="0.05">
             </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">box</span><span class="control-val"
+                                                                                       id="boxVal">off</span></div>
+                <input type="range" id="box" min="0" max="1" value="0" step="1">
+            </div>
         </div>
 
         <div class="section">
@@ -619,7 +624,7 @@
     const $codeBtn  = document.getElementById('codeBtn');
     const $seedBtn  = document.getElementById('seedBtn');
 
-    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'floor', 'bounce'];
+    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'floor', 'bounce', 'box'];
     const $in = {};   // id -> input element
     const $out = {};  // id -> value-display element
     for (const id of SLIDERS) { $in[id] = document.getElementById(id); $out[id] = document.getElementById(id + 'Val'); }
@@ -697,7 +702,8 @@
     function getConfig() {
         const shape = $shape.value;
         const floorPct = +$in.floor.value; // slider is a % of viewport height; 0 = OFF (no floor)
-        return {
+        const boxed = (+$in.box.value) === 1; // box toggle: enclose the burst in the viewport
+        const cfg = {
             count: +$in.count.value,
             spread: +$in.spread.value,
             angle: (+$in.angle.value) * Math.PI / 180,
@@ -717,6 +723,16 @@
             floor: floorPct === 0 ? Infinity : window.innerHeight * floorPct / 100,
             bounce: +$in.bounce.value,
         };
+        if (boxed) {
+            // The three v1.7.0 edges, mapped to the viewport, composed with the floor slider:
+            // left/right/ceiling enclose the sides + top; if the floor slider is OFF, close the
+            // bottom too so the box is fully sealed (the floor slider can still raise it).
+            cfg.wallLeft = 0;
+            cfg.wallRight = window.innerWidth;
+            cfg.ceiling = 0;
+            if (floorPct === 0) cfg.floor = window.innerHeight;
+        }
+        return cfg;
     }
 
     function burst(x, y) {
@@ -736,6 +752,7 @@
             const raw = el.value;
             out.textContent = id === 'drag' ? (+raw).toFixed(3)
                 : id === 'floor' ? (+raw === 0 ? 'off' : raw + '%')  // 0 = no floor (Infinity)
+                : id === 'box' ? (+raw === 0 ? 'off' : 'on')         // 0 = no walls/ceiling
                 : FIXED2.has(id) ? (+raw).toFixed(2)
                 : FIXED1.has(id) ? (+raw).toFixed(1) : raw;
         });
