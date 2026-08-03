@@ -83,6 +83,12 @@ export interface BurstOptions {
      *  `wind` -- the whole burst swells one way then the other in ~3s waves. Default 0 (none).
      *  Opt-in, fingerprint-safe, draws no RNG. */
     gust?: number;
+    /** Per-particle motion-trail length: how many recent world positions this burst's ribbon
+     *  spans, in `0..capacity`. Requires a construction `trail` budget (see `createConfetti`);
+     *  ignored on an instance created without one. Default: the full capacity. `0` opts a burst
+     *  out. Trails are a pure RENDER overlay -- every committed physics fingerprint is preserved
+     *  at any depth -- and have no effect under reduced motion. */
+    trail?: number;
     angle?: number; onComplete?: () => void;
 }
 export interface SprayOptions extends Omit<BurstOptions, 'onComplete'> {
@@ -156,6 +162,17 @@ export interface ConfettiInstance {
     registerShape(name: string, def: ShapeDef): number;
     destroy(): void;
 }
-export function createConfetti(canvas: HTMLCanvasElement, options?: { seed?: number; maxParticles?: number; respectReducedMotion?: boolean }): ConfettiInstance;
+export function createConfetti(canvas: HTMLCanvasElement, options?: {
+    seed?: number;
+    maxParticles?: number;
+    respectReducedMotion?: boolean;
+    /** Motion-trail capacity: ring-buffer depth (samples of recent world positions) for the
+     *  per-particle ribbon. Sizes the buffer ONCE (zero-GC -- no lazy growth), so it must be set
+     *  here, not per burst. Default 0 = off (no buffers; byte-identical to no trails). Capped at
+     *  64; fails closed to 0 on non-finite/negative input. A per-burst `trail` (0..this) then
+     *  shortens or opts a burst out. Pure render overlay: every committed physics fingerprint is
+     *  preserved. */
+    trail?: number;
+}): ConfettiInstance;
 export function confetti(options?: BurstOptions & { seed?: number }): ConfettiInstance;
 export default confetti;

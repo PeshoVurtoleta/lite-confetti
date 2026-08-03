@@ -1,10 +1,18 @@
 /**
- * @zakkster/lite-confetti v1.8.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.9.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.9.0 adds: motion `trail`s -- the first RENDER-path feature (every prior chapter extended
+ * the physics). Opt in at construction with `createConfetti(canvas, { trail: N })` to give each
+ * particle a fading ribbon through its last N world positions; a per-burst `trail` (0..N) then
+ * shortens or opts a single burst out. The ribbon is a PURE OVERLAY: it draws in world space
+ * (moveTo/lineTo/stroke, never translate) and never reads or writes physics state, so every
+ * committed physics fingerprint is preserved byte-for-byte at any depth -- the new gate is the
+ * trail GEOMETRY itself. Storage is a fixed ring buffer allocated ONCE at construction (zero-GC:
+ * no lazy growth), so `trail: 0` (the default) allocates nothing and is byte-identical to v1.8.0.
  * v1.8.0 adds: `turbulence` + `gust` -- the first TIME-VARYING forces. `turbulence` is a
  * per-particle rotating acceleration (organic wander) reusing the seeded tilt/spin phases;
  * `gust` is a global sinusoidal horizontal acceleration (a coherent breeze, ~3s waves)
@@ -117,6 +125,18 @@ const SWAY_PX = 60;
 // The whole pool shares this phase (driven by the instance `_elapsed` clock), so gust reads
 // as a coherent breeze rather than per-particle noise.
 const GUST_HZ = 2 * Math.PI / 3;
+
+// Motion trails (v1.9.0). A trail is a fixed-size ring buffer of a particle's recent world
+// positions, stroked as a tapered "comet" ribbon (alpha + width fade from full at the head, at
+// the particle, to ~0 at the tail). TRAIL_MAX bounds the one-time buffer allocation (`trail`
+// capacity is clamped to it); TRAIL_ALPHA is the ribbon's HEAD opacity relative to the body's
+// life-fade (the tail fades to 0); TRAIL_WIDTH is the head line width as a fraction of the
+// particle's min(w,h). The trail is a pure RENDER overlay -- it draws in world space
+// (moveTo/lineTo/stroke, never translate) and never touches physics state, so every committed
+// physics fingerprint is preserved at any depth.
+const TRAIL_MAX = 64;
+const TRAIL_ALPHA = 0.5;
+const TRAIL_WIDTH = 0.55;
 
 // Clamp a numeric option into [0,1], failing closed to `dflt` for non-finite input
 // (NaN/Infinity coerce to the default rather than poisoning a particle -- "null is not
@@ -355,11 +375,17 @@ const SpriteAtlas = (() => {
  * @param {number} [options.seed]            RNG seed for deterministic output
  * @param {number} [options.maxParticles=500] Pool size
  * @param {boolean} [options.respectReducedMotion=true]  Honor prefers-reduced-motion
+ * @param {number} [options.trail=0]         Motion-trail capacity: ring-buffer depth (samples of
+ *   recent world positions) for the per-particle ribbon. 0 = off (no buffers, byte-identical to
+ *   no trails). Capped at 64; fail-closed to 0. Sizes the buffer ONCE (zero-GC, no lazy growth) --
+ *   a per-burst `trail` (0..this) then shortens or opts a burst out. Pure render overlay: every
+ *   committed physics fingerprint is preserved. No effect under reduced motion.
  */
 export function createConfetti(canvas, {
     seed,
     maxParticles = 500,
     respectReducedMotion = true,
+    trail = 0,
 } = {}) {
     if (!canvas) {
         console.warn('@zakkster/lite-confetti: canvas required');
@@ -446,6 +472,26 @@ export function createConfetti(canvas, {
     // Color and emoji stored as arrays (can't go in TypedArrays)
     const colors = new Array(maxParticles);
     const emojis = new Array(maxParticles);
+
+    // -- Motion-trail ring buffer (v1.9.0), allocated ONCE at construction ---------------
+    // `trail` is the capacity: how many recent world positions each particle remembers. It
+    // MUST be fixed here -- a zero-GC ring buffer cannot grow lazily -- so it is a construction
+    // option, coerced fail-closed (NaN/Infinity/negative/string -> 0 = off; over-large -> capped
+    // at TRAIL_MAX so a typo can't request a gigabyte). trailCap === 0 allocates nothing and the
+    // whole feature is absent: no buffers, `_trailHead` never advances, no stroke() is ever
+    // emitted, so the draw path is byte-identical to an engine without trails.
+    const trailCap = Math.min(TRAIL_MAX, Math.floor(nonneg(trail, 0)));
+    // Interleaved-by-column SoA, matching the pool: trailX[i*trailCap + ring], same for Y. Two
+    // Uint8 per-particle columns: trailN is the live sample count (grows from 0 at spawn, capped
+    // at this particle's trailLen), trailLen is its per-burst draw length. Only allocated when
+    // trails are on, so a default instance pays zero extra bytes.
+    const trailX = trailCap ? new Float32Array(maxParticles * trailCap) : null;
+    const trailY = trailCap ? new Float32Array(maxParticles * trailCap) : null;
+    const trailN = trailCap ? new Uint8Array(maxParticles) : null;
+    const trailLen = trailCap ? new Uint8Array(maxParticles) : null;
+    // Global write cursor, advanced once per frame (all alive particles append to the same ring
+    // slot each frame). Read ONLY inside trail code, so it can never perturb a fingerprint.
+    let _trailHead = 0;
 
     let head = 0;
     let aliveCount = 0;
@@ -545,6 +591,13 @@ export function createConfetti(canvas, {
         pool.sway[i] = config.sway;
         pool.turb[i] = config.turbulence;
         pool.gust[i] = config.gust;
+        // Motion trail: reset the live sample count to 0 and stamp this burst's draw length.
+        // Resetting trailN is the fail-closed guard on pool reuse -- the recycled ring slots
+        // still hold the DEAD particle's positions, but we only ever read the last trailN of
+        // them, and trailN grows only as the NEW particle writes fresh samples, so a dead
+        // particle's trail can never leak into a live one. Guarded so a trail-less instance
+        // (trailN === null) touches nothing.
+        if (trailN) { trailN[i] = 0; trailLen[i] = config.trailLen; }
         // Multi-shape mixing: when a `shapes` mix is active, pick a shape per particle
         // (weighted by repetition in the array). The single-shape branch takes NO rng
         // draw, so a default burst's determinism fingerprint is byte-for-byte preserved;
@@ -565,6 +618,10 @@ export function createConfetti(canvas, {
         const H = canvas.height;
 
         ctx.clearRect(0, 0, W, H);
+
+        // Advance the trail ring cursor once per frame (all alive particles append to this same
+        // slot below). Guarded so a trail-less instance never touches it. Read only in trail code.
+        if (trailCap !== 0) _trailHead = _trailHead + 1 === trailCap ? 0 : _trailHead + 1;
 
         let alive = 0;
 
@@ -660,6 +717,18 @@ export function createConfetti(canvas, {
                 pool.vx[i] = -pool.vx[i] * pool.bounce[i];
             }
 
+            // Motion trail: append this frame's FINAL position (after every clamp above, so the
+            // stored point equals where the body draws) to the ring, and grow the live count up
+            // to this particle's draw length. Pure TypedArray stores + one integer increment --
+            // zero allocation. Guarded so trail-less instances and trail:0 bursts do no work and
+            // write nothing (leaving stale slots untouched -- see the spawn() reuse note).
+            if (trailCap !== 0 && trailLen[i] !== 0) {
+                const base = i * trailCap;
+                trailX[base + _trailHead] = pool.x[i];
+                trailY[base + _trailHead] = pool.y[i];
+                if (trailN[i] < trailLen[i]) trailN[i]++;
+            }
+
             // Opacity fade in last 30% of life
             const lifeT = pool.life[i] / pool.maxL[i];
             const alpha = lifeT < 0.3 ? lifeT / 0.3 : 1;
@@ -670,6 +739,44 @@ export function createConfetti(canvas, {
             // knob is hash-neutral regardless of its value.
             const a = pool.flut[i];
             const wobbleScale = 1 - a * 0.5 * (1 - Math.abs(Math.cos(pool.tilt[i])));
+
+            // Trail ribbon: a tapered "comet" stroke through the particle's recent world
+            // positions, drawn BEFORE the body so the solid piece sits on top of its own streak.
+            // Each segment is stroked separately so alpha AND width can FADE from full at the head
+            // (newest, at the particle) to ~0 at the tail: this reads as a motion streak rather
+            // than a flat band, and -- crucially -- the faded tail contributes ~0 opacity, so many
+            // overlapping trails no longer stack into an opaque smear. Done in WORLD space with
+            // beginPath/moveTo/lineTo/stroke -- deliberately NO translate, so it contributes nothing
+            // to the position fingerprint (which hashes only translate); that is what keeps trails a
+            // provable pure overlay. strokeStyle reuses the color string already parsed in
+            // burst()/spray(); the per-segment alpha/width are plain numbers -- zero allocation on
+            // this path (each segment is one more ctx call, never a JS allocation). Needs >= 2
+            // samples for a segment.
+            if (trailCap !== 0 && trailN[i] >= 2) {
+                const n = trailN[i];
+                const base = i * trailCap;
+                const wBody = Math.min(pool.w[i], pool.h[i]) * TRAIL_WIDTH;
+                const aBody = alpha * TRAIL_ALPHA;
+                const span = n - 1;   // segment count; >= 1 here
+                ctx.strokeStyle = colors[i];
+                // Walk oldest -> newest, one stroke per segment. `pr`/`px`/`py` carry the previous
+                // sample so each segment reuses it (no re-read, no array).
+                let pk = span;                       // frames-ago of the oldest sample
+                let pr = _trailHead - pk; if (pr < 0) pr += trailCap;
+                let px = trailX[base + pr], py = trailY[base + pr];
+                for (let k = span - 1; k >= 0; k--) {   // k = frames-ago of this segment's newest end
+                    let r = _trailHead - k; if (r < 0) r += trailCap;
+                    const gx = trailX[base + r], gy = trailY[base + r];
+                    const tf = (span - k) / span;    // 0..1, 1 at the newest (head) segment
+                    ctx.globalAlpha = aBody * tf;
+                    ctx.lineWidth = wBody * (0.35 + 0.65 * tf);
+                    ctx.beginPath();
+                    ctx.moveTo(px, py);
+                    ctx.lineTo(gx, gy);
+                    ctx.stroke();
+                    px = gx; py = gy;
+                }
+            }
 
             // Render
             ctx.save();
@@ -782,6 +889,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.sway=0]      Horizontal drift 0..1 (0 straight fall)
          * @param {number} [options.turbulence=0] Per-particle rotating accel px/sec^2 (organic wander). Opt-in, zero-rng, fingerprint-safe
          * @param {number} [options.gust=0]      Global oscillating horizontal accel px/sec^2 layered on wind (~3s swells). Opt-in, zero-rng
+         * @param {number} [options.trail]       Per-particle motion-trail length 0..capacity (default: full capacity). Needs a construction `trail` budget; ignored otherwise. Render overlay, fingerprint-safe
          * @param {Array}  [options.colors]      Array of OKLCH objects or CSS strings
          * @param {number} [options.angle=-Math.PI/2] Center angle of emission cone
          * @param {Function} [options.onComplete] Called when all burst particles die
@@ -811,6 +919,7 @@ export function createConfetti(canvas, {
                   sway = 0,
                   turbulence = 0,
                   gust = 0,
+                  trail,
                   colors = DEFAULT_COLORS,
                   angle = -Math.PI / 2,
                   onComplete,
@@ -869,9 +978,17 @@ export function createConfetti(canvas, {
             }
 
             const colorPick = () => rng.pick(parsedColors);
+            // Per-particle trail DRAW length (not capacity -- the buffer was sized at construction).
+            // `undefined` (option omitted) inherits full capacity, so a trail-capable instance
+            // trails by default; an explicit value clamps into [0, trailCap] (0 opts this burst out,
+            // over-large is capped). Fail-closed: non-finite coerces to full via nonneg's default.
+            // Always 0 on a trail-less instance -- there is no buffer to write.
+            const trailDraw = trailCap === 0
+                ? 0
+                : (trail === undefined ? trailCap : Math.min(trailCap, Math.floor(nonneg(trail, trailCap))));
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), turbulence, gust,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), turbulence, gust, trailLen: trailDraw,
             };
 
             for (let i = 0; i < count; i++) {
@@ -907,6 +1024,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.sway=0]         Horizontal drift 0..1
          * @param {number} [options.turbulence=0]   Per-particle rotating accel px/sec^2 (organic wander). Opt-in, zero-rng
          * @param {number} [options.gust=0]         Global oscillating horizontal accel px/sec^2 layered on wind. Opt-in, zero-rng
+         * @param {number} [options.trail]          Per-particle motion-trail length 0..capacity (default: full). Needs a construction `trail` budget; render overlay, fingerprint-safe
          */
         spray({
                   duration = 1000,
@@ -934,6 +1052,7 @@ export function createConfetti(canvas, {
                   sway = 0,
                   turbulence = 0,
                   gust = 0,
+                  trail,
                   colors = DEFAULT_COLORS,
                   angle = -Math.PI / 2,
                   followPointer = false,
@@ -989,9 +1108,17 @@ export function createConfetti(canvas, {
             }
 
             const colorPick = () => rng.pick(parsedColors);
+            // Per-particle trail DRAW length (not capacity -- the buffer was sized at construction).
+            // `undefined` (option omitted) inherits full capacity, so a trail-capable instance
+            // trails by default; an explicit value clamps into [0, trailCap] (0 opts this burst out,
+            // over-large is capped). Fail-closed: non-finite coerces to full via nonneg's default.
+            // Always 0 on a trail-less instance -- there is no buffer to write.
+            const trailDraw = trailCap === 0
+                ? 0
+                : (trail === undefined ? trailCap : Math.min(trailCap, Math.floor(nonneg(trail, trailCap))));
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), turbulence, gust,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), turbulence, gust, trailLen: trailDraw,
             };
 
             // Pointer-follow is opt-in and, by nature, NON-DETERMINISTIC: it injects

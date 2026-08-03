@@ -59,6 +59,15 @@ const TURB_HASH = 1630588936;   // turbulence: 500
 const GUST_HASH = 4074438162;   // gust: 400
 const TURBGUST_HASH = 15761758; // turbulence: 500 + gust: 400
 
+// Committed fingerprint for the trail GEOMETRY (v1.9.0) -- the strokeHash of the mock ctx, which
+// accumulates only stroked (trail) paths and is kept entirely out of the position `hash`. Trails
+// are a pure RENDER overlay (they draw via moveTo/lineTo/stroke, never translate), so the POSITION
+// hash is preserved at any depth -- see the trails suite, where a trailed run still reproduces
+// COMMITTED_HASH. This gate proves the ribbon geometry itself is deterministic. Value probed on
+// the seed-12345 rig at construction `trail: 10` (default per-burst length). The ribbon is a
+// tapered comet -- one stroke() per segment -- so strokeHash folds each segment's path.
+const TRAIL_HASH = 660640570;
+
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
 function withSilencedWarn(fn) {
     const orig = console.warn;
@@ -1101,6 +1110,141 @@ describe('lite-confetti', () => {
                 }
             };
             assert.equal(staticHash({ turbulence: 800, gust: 600 }), staticHash({}));
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    //  trails / ribbons -- the first RENDER-path feature (v1.9.0, decision 0010)
+    // -------------------------------------------------------------------------
+    describe('trails / ribbons', () => {
+        // Same seed-12345 rig as the box/turbulence gates -- a trail-less run therefore reproduces
+        // COMMITTED_HASH. `trail` is a CONSTRUCTION option (the ring buffer must be sized once), so
+        // it is passed to createConfetti; a per-burst `trail` overrides the draw length. The record
+        // canvas exposes strokeHash + strokes (trail-only, kept OUT of the position hash), so we can
+        // prove the ribbon geometry is deterministic AND that the physics hash is untouched.
+        const run = (ctorOpts = {}, burstOpts = {}) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345, ...ctorOpts });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...burstOpts });
+            pump(1, 1000); pump(29, 16);
+            const out = { hash: canvas.hash, strokeHash: canvas.strokeHash, strokes: canvas.strokes };
+            c.destroy();
+            return out;
+        };
+
+        it('is off by default: no strokes, position hash byte-identical', () => {
+            const off = run({});
+            assert.equal(off.strokes, 0, 'a default instance must not stroke any trail');
+            assert.equal(off.strokeHash, 0, 'no strokes => empty trail-geometry hash');
+            assert.equal(off.hash, COMMITTED_HASH, 'the default position fingerprint drifted');
+            // Explicit trail: 0 is identical to omitting it.
+            const zero = run({ trail: 0 });
+            assert.equal(zero.strokes, 0);
+            assert.equal(zero.hash, COMMITTED_HASH);
+        });
+
+        it('is a PURE OVERLAY: trails on leaves every committed physics fingerprint intact', () => {
+            // The headline property. Trails draw via stroke() in world space (never translate),
+            // so the position hash cannot move -- at any depth, for any physics.
+            assert.equal(run({ trail: 10 }).hash, COMMITTED_HASH, 'trails perturbed the default stream');
+            assert.equal(run({ trail: 64 }).hash, COMMITTED_HASH, 'max-depth trails perturbed the stream');
+            // Re-assert the floor-only and box fingerprints with trails on -- unchanged.
+            assert.equal(run({ trail: 10 }, { floor: FLOOR_Y }).hash, FLOOR_HASH, 'floor fingerprint drifted under trails');
+            assert.equal(run({ trail: 10 }, { ...BOX, bounce: 0 }).hash, BOX_HASH, 'box fingerprint drifted under trails');
+        });
+
+        it('fails closed on a garbage / over-large construction trail', () => {
+            // Non-finite / negative capacity => off (0); no buffers, no strokes, hash intact.
+            for (const bad of [NaN, -5, Infinity, 'x', null]) {
+                const r = run({ trail: bad });
+                assert.equal(r.strokes, 0, `trail:${String(bad)} should disable trails`);
+                assert.equal(r.hash, COMMITTED_HASH);
+            }
+            // Absurd depth is capped at TRAIL_MAX (64), not honoured literally -- no huge alloc,
+            // no throw, and it still strokes (feature on).
+            const huge = run({ trail: 1e9 });
+            assert.ok(huge.strokes > 0, 'a capped-but-positive trail should still stroke');
+            assert.equal(huge.hash, COMMITTED_HASH);
+            // trail: 1e9 clamps to 64, so it must equal an explicit trail: 64.
+            assert.equal(huge.strokeHash, run({ trail: 64 }).strokeHash, 'over-large trail did not clamp to TRAIL_MAX');
+        });
+
+        it('matches the committed trail-geometry fingerprint (non-vacuous, deterministic)', () => {
+            const t = run({ trail: 10 });
+            assert.ok(t.strokes > 0, 'trails on must stroke at least one ribbon (else vacuous)');
+            if (TRAIL_HASH === null) console.log('[trail] geometry fingerprint =', t.strokeHash);
+            else assert.equal(t.strokeHash, TRAIL_HASH, 'trail geometry changed vs the committed baseline');
+            // Deterministic replay: the ring buffer + global head are a pure function of the seed.
+            assert.equal(run({ trail: 10 }).strokeHash, t.strokeHash, 'trail geometry not deterministic on replay');
+            // Depth changes the geometry: a shallower ring strokes a different (shorter) ribbon.
+            assert.notEqual(run({ trail: 4 }).strokeHash, t.strokeHash, 'trail depth 4 vs 10 must differ');
+        });
+
+        it('honours a per-burst trail override (0 opts out; a shorter length changes geometry)', () => {
+            // A trail-capable instance trails by default; burst({ trail: 0 }) silences one burst.
+            const out = run({ trail: 10 }, { trail: 0 });
+            assert.equal(out.strokes, 0, 'per-burst trail: 0 did not opt the burst out');
+            assert.equal(out.hash, COMMITTED_HASH);
+            // A per-burst length below capacity draws a different (shorter) ribbon than the default,
+            // and matches a construction instance built at that same capacity (same max samples).
+            const perBurst4 = run({ trail: 10 }, { trail: 4 });
+            assert.ok(perBurst4.strokes > 0, 'per-burst trail: 4 should still stroke');
+            assert.notEqual(perBurst4.strokeHash, run({ trail: 10 }).strokeHash, 'per-burst 4 must differ from default 10');
+            assert.equal(perBurst4.strokeHash, run({ trail: 4 }).strokeHash, 'per-burst 4 should match construction cap 4');
+        });
+
+        it('ignores a per-burst trail on a trail-less instance (fail closed, no throw)', () => {
+            // No construction budget => no buffer => the option is silently inert.
+            const r = run({}, { trail: 10 });
+            assert.equal(r.strokes, 0, 'trail on a budget-less instance must not stroke');
+            assert.equal(r.hash, COMMITTED_HASH);
+        });
+
+        it('keeps every drawn position finite under trails + strong forces in a tight box', () => {
+            // Trail points are copies of the finite body positions; assertFinite also guards the
+            // stroked path points. A leak would NaN out; the box clamp still contains the bodies.
+            const canvas = makeCanvas({ record: true, assertFinite: true });
+            const c = createConfetti(canvas, { seed: 3, trail: 16 });
+            assert.doesNotThrow(() => {
+                c.burst({
+                    x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 5, lifeMax: 5,
+                    wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350,
+                    bounce: 1, wind: 2000, gravity: 4000, turbulence: 3000, gust: 2500,
+                });
+                pump(1, 1000); pump(80, 16);
+            });
+            assert.ok(canvas.strokes > 0, 'the finite-under-forces rig should actually draw trails');
+            assert.ok(canvas.minX >= 350 && canvas.maxX <= 450, 'a body escaped a wall under trails + forces');
+            c.destroy();
+        });
+
+        it('spray() honours trails (deterministic ribbon geometry)', () => {
+            const sprayRun = (ctorOpts, sprayOpts = {}) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9, ...ctorOpts });
+                c.spray({ duration: 200, rate: 10, x: 400, y: 300, spread: 2.0, lifeMin: 5, lifeMax: 5, ...sprayOpts });
+                pump(1, 1000); pump(60, 16);
+                const out = { strokes: canvas.strokes, strokeHash: canvas.strokeHash };
+                c.destroy();
+                return out;
+            };
+            assert.equal(sprayRun({}).strokes, 0, 'a trail-less spray must not stroke');
+            const trailed = sprayRun({ trail: 12 });
+            assert.ok(trailed.strokes > 0, 'spray ignored the trail budget');
+            assert.equal(sprayRun({ trail: 12 }).strokeHash, trailed.strokeHash, 'sprayed trail geometry not deterministic');
+        });
+
+        it('has no effect under reduced motion (static path records no history)', () => {
+            setReducedMotion(true);
+            try {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 5, trail: 16 });
+                c.burst({ count: 30, trail: 16 });
+                assert.equal(canvas.strokes, 0, 'reduced-motion static render must not draw trails');
+                c.destroy();
+            } finally {
+                setReducedMotion(false);
+            }
         });
     });
 

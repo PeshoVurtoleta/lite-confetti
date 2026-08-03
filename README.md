@@ -10,7 +10,7 @@
 Deterministic confetti engine with OKLCH colors, 5 built-in shapes plus custom
 `registerShape()` shapes (vector or image sprite), per-particle multi-shape mixing,
 tunable flutter, lateral wind, turbulence + gust (living-air forces), a full bounding box
-(floor, walls, ceiling) with bounce, and reduced-motion support.
+(floor, walls, ceiling) with bounce, zero-GC motion trails, and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -99,6 +99,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `sway` | number | 0 | Horizontal drift, 0–1. `0` = straight fall; higher values sway side-to-side like real paper. |
 | `turbulence` | number | 0 | Per-particle rotating acceleration in px/s² — organic wander, so a burst fans out and mills. Opt-in; `0` = none. Draws no rng. See [Living air](#living-air). |
 | `gust` | number | 0 | Global oscillating horizontal acceleration in px/s² layered on `wind` — the whole burst swells side to side in ~3s waves. Opt-in; `0` = none. See [Living air](#living-air). |
+| `trail` | number | capacity | Per-particle trail length `0..capacity` — how many recent positions this burst's ribbon spans. Needs a construction `trail` budget; ignored without one. `0` opts a burst out. See [Motion trails](#motion-trails). |
 | `colors` | Array | 7 OKLCH defaults | Array of OKLCH objects `{ l, c, h }` or CSS strings |
 | `angle` | number | `-Math.PI / 2` | Center angle of emission cone in radians. -π/2 = upward. |
 | `onComplete` | Function | — | Called when all burst particles have died |
@@ -122,6 +123,7 @@ Spray accepts all burst options plus:
 | `seed` | number | `Date.now()` | RNG seed for deterministic output |
 | `maxParticles` | number | 500 | Pool size (ring buffer — overwrites oldest when full) |
 | `respectReducedMotion` | boolean | true | Honor `prefers-reduced-motion: reduce` |
+| `trail` | number | 0 | Motion-trail capacity: ring-buffer depth for the per-particle ribbon. `0` = off (no buffers). Sized once here (zero-GC); capped at 64. See [Motion trails](#motion-trails). |
 
 ---
 
@@ -144,8 +146,11 @@ Every frame, each alive particle runs through this pipeline:
 11. SPIN        rotation += spinVelocity × dt
 12. TILT        tiltPhase += tiltSpeed × dt
 13. OPACITY     fade to 0 in last 30% of life
-14. RENDER      translate → rotate → flutter-scale → draw shape
+14. TRAIL       record (x,y) in the ring → stroke the ribbon through recent positions   (opt-in RENDER overlay — world-space stroke, touches no physics state)
+15. RENDER      translate → rotate → flutter-scale → draw shape
 ```
+
+Steps 1–12 are **physics** (they mutate `x/y/vx/vy`); steps 13–15 are **rendering**. `trail` (step 14) is the first purely-render feature: it *reads* the position but draws a stroked polyline in world space (never `translate`), so it cannot move the determinism fingerprint — every committed physics hash is preserved at any trail depth.
 
 ### Rotation & 3D Tumbling
 
@@ -208,6 +213,23 @@ c.burst({ turbulence: 400, gust: 250 });
 ```
 
 Both draw **zero random values**: `turbulence` is a pure function of the seeded tumble phases the engine already advances, and `gust` of a shared elapsed-time clock — so a turbulent/gusty burst replays identically under a fixed seed (with its own committed fingerprints in the test suite), while the default `0` keeps every prior fingerprint (default, floored, and box) byte-for-byte unchanged. Both are accelerations applied *before* drag, exactly like `wind`, so they damp toward a terminal velocity and never run away; inside a [bounding box](#bounding-box) the edge clamps still hold, so a turbulent burst stays contained. Garbage fails closed to `0`; negatives are allowed (they flip direction). Neither has any effect under reduced motion.
+
+### Motion trails
+
+Every feature above changes the **physics**. Trails (added in v1.9.0) are the first purely **visual** one: each particle leaves a fading ribbon through its recent positions, so a fast burst reads as motion streaks instead of hard dots. Trails are **opt-in at construction**, because the ribbon needs a *fixed* ring buffer of past positions — and a zero-GC engine can't grow one lazily, so its depth (the *capacity*) is set once when you create the instance:
+
+```js
+const c = createConfetti(canvas, { trail: 16 });   // capacity: 16 samples of history per particle
+c.burst({ count: 120, speed: 500 });               // every particle now trails by default
+c.burst({ count: 40, trail: 6 });                  // a shorter ribbon for this burst
+c.burst({ count: 40, trail: 0 });                  // …or none for this one
+```
+
+The per-burst `trail` sets the ribbon *length* (`0..capacity`); omit it and a trail-capable instance trails at full capacity. On an instance created without a `trail` budget the per-burst option is simply ignored (fail-closed, no throw).
+
+The ribbon is a tapered **comet**: alpha and width fade from full at the head (at the particle) to ~0 at the tail, so a fast piece reads as a motion streak and many overlapping trails don't stack into an opaque smear.
+
+Trails are a **pure render overlay**. The ribbon is stroked in *world space* (`moveTo`/`lineTo`/`stroke`, one stroke per segment) — it never uses `translate` and never touches `x/y/vx/vy`, so it **cannot** perturb the determinism fingerprint: a trailed burst reproduces the exact same committed physics hash as an untrailed one, at any depth. The ribbon geometry is itself deterministic (its own committed `strokeHash` gate). Storage is a `Float32Array` ring buffer allocated **once** at construction (so `trail: 0`, the default, allocates nothing and is byte-identical to no trails), and recording + stroking are allocation-free on the hot path — the per-segment alpha/width are plain numbers, verified at ~0 B/frame with a full trailed pool under the torture alloc gate. A garbage capacity fails closed to off or the 64-sample cap; on pool reuse a recycled slot's stale history can never leak (the live sample count resets at spawn). No effect under reduced motion.
 
 ### Canvas Sizing
 
@@ -513,6 +535,13 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.9.0
+
+**Motion trails.** The first *render-path* feature — each particle leaves a fading ribbon through its recent positions. A **pure overlay**: it draws a world-space stroke (never `translate`) and never touches physics state, so every committed physics fingerprint (default, mixed, wind, floored, box, turbulence, gust) is preserved byte-for-byte at any depth.
+
+- `trail: number` on `createConfetti()` — the trail *capacity* (ring-buffer depth). Sized once at construction (zero-GC, no lazy growth); default `0` = off, allocates nothing. Capped at 64, fails closed.
+- `trail: number` on `burst()`/`spray()` — the per-particle *length* `0..capacity` (default: full). `0` opts a burst out; needs a construction budget, ignored without one. The ribbon geometry has its own committed determinism gate; recording + stroking are ~0 B/frame (torture-verified); no effect under reduced motion. See [Motion trails](#motion-trails).
 
 ### v1.8.0
 

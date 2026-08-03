@@ -3,6 +3,52 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.9.0] - 2026-08-02
+
+Feature release: motion **`trail`s** -- the first **render-path** feature (every prior release
+extended the physics). Opt in at construction and each particle leaves a fading ribbon through
+its recent world positions, so a fast burst reads as motion streaks instead of hard dots. The
+key property: trails are a **pure overlay**. They draw as a world-space stroked polyline
+(`moveTo`/`lineTo`/`stroke`, never `translate`) and never touch physics state, so **every**
+committed physics fingerprint -- default `1569828004`, mixed, wind, floor `2679696825`, box
+`804161759`, turbulence `1630588936`, gust `4074438162` -- is preserved byte-for-byte at any
+trail depth. The new gate is the trail **geometry** itself (its own committed hash). Storage is
+a fixed ring buffer allocated **once** at construction (zero-GC: no lazy growth), so the default
+`trail: 0` allocates nothing and is byte-identical to v1.8.0.
+
+### Added
+- **`trail: number` on `createConfetti()`** -- the trail *capacity*: ring-buffer depth (samples
+  of recent world positions) for the per-particle ribbon. Sizes the buffer once; default `0`
+  (off, no buffers). Capped at 64; fails closed to 0 on non-finite/negative input.
+- **`trail: number` on `burst()`/`spray()`** -- the per-particle *draw length* `0..capacity`
+  (default: full capacity). `0` opts a single burst out; a shorter value draws a shorter ribbon.
+  Requires a construction `trail` budget; ignored (no throw) on an instance created without one.
+
+### Semantics
+- **Pure render overlay.** The ribbon draws in world space via `stroke()`, never `translate`,
+  and reads (never writes) physics state, so it cannot perturb any position fingerprint. A
+  trailed burst still reproduces the exact committed physics hash at any depth (asserted).
+- **Off by default, zero-cost.** `trail: 0` (the default) allocates no buffers, never advances
+  the ring cursor, and emits no `stroke()` -- byte-identical to an engine without trails.
+- **Deterministic geometry.** The ring buffer + a single global per-frame write cursor are a
+  pure function of the seed, so the ribbon geometry replays identically (its own committed
+  `strokeHash` gate; deeper vs shallower rings stroke distinct geometry).
+- **Fail closed.** A garbage construction capacity coerces to off (0) or the 64-sample cap
+  (never a huge allocation or a throw); a garbage per-burst length coerces to full/off/capped.
+  On pool reuse a recycled slot's stale history can never leak -- the live sample count resets
+  to 0 at spawn and grows only as the new particle writes fresh samples.
+- **No effect under reduced motion.** The static render records no history, so it draws no trails.
+
+### Internal
+- Zero-GC fixed ring buffer: `trailX`/`trailY` (`Float32Array`, `maxParticles * capacity`) plus
+  two `Uint8Array` per-particle columns (live count + draw length), all allocated once at
+  construction only when trails are on. A global `_trailHead` cursor advances one integer per
+  frame. Recording is TypedArray stores; the ribbon is a tapered "comet" -- one `stroke()` per
+  segment, alpha + width fading from full at the head (the particle) to ~0 at the tail, so many
+  overlapping trails read as motion streaks instead of stacking into an opaque smear -- and it is
+  still allocation-free (per-segment alpha/width are plain numbers; proven under the torture alloc
+  gate with a full trailed pool).
+
 ## [1.8.0] - 2026-08-02
 
 Feature release: `turbulence` + `gust` -- the first **time-varying** forces. Until now every

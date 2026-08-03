@@ -120,6 +120,17 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     let minX = Infinity;
     let maxX = -Infinity;
     let minY = Infinity;
+    // Motion-trail GEOMETRY probe (v1.9.0). Trails render as world-space stroked polylines
+    // (beginPath -> moveTo/lineTo... -> stroke), never via `translate`, so they contribute
+    // NOTHING to the position `hash` -- that is what makes trails a provable pure overlay. To
+    // still prove the ribbon geometry is deterministic, `strokeHash` folds each stroked path's
+    // rounded points, committed ONLY on stroke(); `strokes` counts stroke() calls. Both are
+    // kept out of `hash` (like sumX/maxY), so every committed position fingerprint is byte-
+    // identical whether or not they are read. Shapes fill() (never stroke()), so `pathHash`
+    // built for a filled shape is simply never committed -- strokeHash/strokes are trail-only.
+    let strokeHash = 0 >>> 0;
+    let strokes = 0;
+    let pathHash = 2166136261 >>> 0; // FNV-1a offset basis; reset per beginPath in record mode
     // Fingerprint INTEGER-pixel draw positions only. Rounding to whole pixels
     // absorbs the sub-pixel divergence libm sin/cos can show across platforms, so
     // a committed baseline is portable; rotations (radians) are deliberately not
@@ -150,10 +161,33 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
         }
         : null;
 
+    // Path-point sink for moveTo/lineTo, the trail-geometry analog of `mix` for translate: under
+    // assertFinite it throws on a non-finite point (a NaN trail coord is loud, not invisible);
+    // under record it folds the rounded point into the current subpath's `pathHash`. Built-in
+    // vector shapes (star/triangle) also call moveTo/lineTo with constant local coords, but those
+    // paths are fill()ed, never stroke()d, so their pathHash is never committed to strokeHash.
+    const onPathPt = (record || assertFinite)
+        ? (x, y) => {
+            if (assertFinite && !(Number.isFinite(x) && Number.isFinite(y))) {
+                throw new Error('non-finite draw position: path point (' + x + ', ' + y + ')');
+            }
+            if (!record) return;
+            pathHash = (Math.imul(pathHash ^ (Math.round(x) | 0), 16777619)) >>> 0;
+            pathHash = (Math.imul(pathHash ^ (Math.round(y) | 0), 16777619)) >>> 0;
+        }
+        : null;
+
     const ctx = {
-        fillStyle: '', font: '', textAlign: '', textBaseline: '', globalAlpha: 1,
-        clearRect() {}, fillRect() {}, beginPath() {}, arc() {}, fill() {}, closePath() {},
-        moveTo() {}, lineTo() {}, save() {}, restore() {}, scale() {}, setTransform() {},
+        fillStyle: '', strokeStyle: '', lineWidth: 1, lineJoin: '', lineCap: '',
+        font: '', textAlign: '', textBaseline: '', globalAlpha: 1,
+        clearRect() {}, fillRect() {}, arc() {}, fill() {}, closePath() {},
+        beginPath() { if (record) pathHash = 2166136261 >>> 0; }, // reset the subpath signature
+        moveTo(x, y) { if (onPathPt) onPathPt(x, y); },
+        lineTo(x, y) { if (onPathPt) onPathPt(x, y); },
+        // Commit the current subpath into the trail-only strokeHash and count it. Shapes fill()
+        // and so never reach here; only the trail ribbon strokes.
+        stroke() { if (record) { strokeHash = (Math.imul(strokeHash ^ pathHash, 16777619)) >>> 0; strokes++; } },
+        save() {}, restore() {}, scale() {}, setTransform() {},
         drawImage() {},
         translate(x, y) { if (mix) mix(x, y); },
         rotate() {},
@@ -167,6 +201,8 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     Object.defineProperty(c, 'minX', { get() { return minX; } });
     Object.defineProperty(c, 'maxX', { get() { return maxX; } });
     Object.defineProperty(c, 'minY', { get() { return minY; } });
+    Object.defineProperty(c, 'strokeHash', { get() { return strokeHash >>> 0; } });
+    Object.defineProperty(c, 'strokes', { get() { return strokes; } });
     return c;
 }
 

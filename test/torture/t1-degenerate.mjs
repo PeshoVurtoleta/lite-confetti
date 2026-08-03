@@ -172,6 +172,39 @@ export function run() {
         c.destroy();
     }
 
+    // --- trails (v1.9.0) FAIL CLOSED: a garbage construction `trail` capacity coerces to
+    //     off (0) or the TRAIL_MAX cap -- never a huge allocation or a throw -- and a garbage
+    //     per-burst `trail` length coerces safely. Under assertFinite the stroked ribbon points
+    //     (moveTo/lineTo) are finiteness-checked too, so a NaN reaching the trail is a hard
+    //     throw, not an invisible pixel. --------------------------------------------------
+    {
+        // Construction-time capacity poison: NaN/-5/Infinity/string/null => off (0); 1e9 => 64.
+        for (const cap of [NaN, -5, Infinity, 1e9, 'x', null]) {
+            const cv = makeCanvas({ assertFinite: true });
+            const c = createConfetti(cv, { seed: 4, maxParticles: CAP, trail: cap });
+            const err = capture(() => {
+                c.burst({ count: 40, wind: 200, turbulence: 300, lifeMin: 0.3, lifeMax: 0.3 });
+                for (let f = 0; f < 30; f++) pump(1, 50);
+            });
+            check(err === null, () => `T1 trail-cap ${String(cap)}: threw or drew a non-finite trail point (${err && err.message})`);
+            check(c.count === 0, () => `T1 trail-cap ${String(cap)}: pool did not drain (count ${c.count})`);
+            c.destroy();
+        }
+        // Per-burst draw-length poison on a trail-capable instance: each coerces (full/off/capped)
+        // with no non-finite stroked point and no immortal pool.
+        for (const len of [NaN, -5, Infinity, 1e9]) {
+            const cv = makeCanvas({ assertFinite: true });
+            const c = createConfetti(cv, { seed: 4, maxParticles: CAP, trail: 20 });
+            const err = capture(() => {
+                c.burst({ count: 40, trail: len, wind: 200, turbulence: 300, lifeMin: 0.3, lifeMax: 0.3 });
+                for (let f = 0; f < 30; f++) pump(1, 50);
+            });
+            check(err === null, () => `T1 trail-len ${String(len)}: threw or drew a non-finite trail point (${err && err.message})`);
+            check(c.count === 0, () => `T1 trail-len ${String(len)}: pool did not drain (count ${c.count})`);
+            c.destroy();
+        }
+    }
+
     // --- bad canvas objects: createConfetti must degrade to an inert stub -------
     withSilencedWarn(() => {
         const nullStub = createConfetti(null);

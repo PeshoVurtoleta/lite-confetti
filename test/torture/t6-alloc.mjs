@@ -111,9 +111,12 @@ export async function run() {
     // a particle lands/leans it re-crosses an edge every frame and the branches keep firing for
     // the whole resting pool. It ALSO carries the v1.8.0 time-varying forces (`turbulence` +
     // `gust`), so both guarded accel blocks and their Math.cos/Math.sin fire every particle
-    // every frame. All must still integrate at ~0 B/frame. Includes a custom vector + a sprite
-    // in the mix so all three dispatch kinds are hit from a single burst.
-    const cm = createConfetti(makeCanvas(), { seed: 5150, maxParticles: MAXP });
+    // every frame. It is ALSO built with a `trail` capacity, so every alive particle BOTH writes
+    // a ring-buffer sample AND strokes a fading ribbon (beginPath + moveTo/lineTo + stroke) every
+    // frame -- the v1.9.0 render overlay must be as allocation-free as the physics. All must still
+    // integrate at ~0 B/frame. Includes a custom vector + a sprite in the mix so all three
+    // dispatch kinds are hit from a single burst.
+    const cm = createConfetti(makeCanvas(), { seed: 5150, maxParticles: MAXP, trail: 16 });
     cm.registerShape('heart', (ctx, w) => { ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, Math.PI * 2); ctx.fill(); });
     cm.registerShape('logo', { image: makeCanvas() });
     cm.burst({
@@ -142,6 +145,6 @@ export async function run() {
     log('  T6 ok -- update() ' + bpf.toFixed(2) + ' B/frame over ' + MAXP + ' particles ('
         + bpfCustom.toFixed(2) + ' B/frame custom vector+sprite+sway, '
         + bpfPoison.toFixed(2) + ' B/frame from sanitised garbage inputs, '
-        + bpfMix.toFixed(2) + ' B/frame from a shapes[] mix under wind + full box + turbulence/gust); '
+        + bpfMix.toFixed(2) + ' B/frame from a shapes[] mix under wind + full box + turbulence/gust + trails); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

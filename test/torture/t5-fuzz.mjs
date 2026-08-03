@@ -54,6 +54,7 @@ function genOp(prng, allowReseed) {
                 ceiling: (prng() % 2 === 0) ? -Infinity : 20 + (prng() % 150),
                 turbulence: (prng() % 2 === 0) ? 0 : (prng() % 800) - 400, // signed wander, half off
                 gust: (prng() % 2 === 0) ? 0 : (prng() % 600) - 300,       // signed gust, half off
+                trail: (prng() % 3 === 0) ? 0 : (prng() % 25),             // per-burst trail length, 1/3 off
                 lifeMin: 0.5 + (prng() % 200) / 100,
                 lifeMax: 2.5 + (prng() % 200) / 100,
             },
@@ -72,6 +73,7 @@ function genOp(prng, allowReseed) {
                 ceiling: (prng() % 2 === 0) ? -Infinity : 20 + (prng() % 150),
                 turbulence: (prng() % 2 === 0) ? 0 : (prng() % 800) - 400,
                 gust: (prng() % 2 === 0) ? 0 : (prng() % 600) - 300,
+                trail: (prng() % 3 === 0) ? 0 : (prng() % 25),
             },
         };
     }
@@ -96,8 +98,11 @@ export function run() {
         const seed = 20260731;
         const ca = makeCanvas({ record: true });
         const cb = makeCanvas({ record: true });
-        const A = createConfetti(ca, { seed, maxParticles: CAP });
-        const B = createConfetti(cb, { seed, maxParticles: CAP });
+        // A trail capacity is given to BOTH so the ring buffer + global head + per-burst trail
+        // lengths are exercised under fuzz; the trail GEOMETRY (strokeHash) is checked alongside
+        // the position hash, proving the render overlay is as deterministic as the physics.
+        const A = createConfetti(ca, { seed, maxParticles: CAP, trail: 24 });
+        const B = createConfetti(cb, { seed, maxParticles: CAP, trail: 24 });
         const prng = makePrng(SEED);
         const OPS = 3000;
         for (let i = 0; i < OPS; i++) {
@@ -106,9 +111,9 @@ export function run() {
             apply(B, op);
             if (op.kind === 'pump') {
                 pump(1, op.dt); // one pump drives BOTH updates on the shared rAF queue
-                check(ca.hash === cb.hash, () =>
+                check(ca.hash === cb.hash && ca.strokeHash === cb.strokeHash, () =>
                     `T5 F1: op ${i} seed ${SEED}: same-seed instances diverged ` +
-                    `(A ${ca.hash} != B ${cb.hash})`);
+                    `(A ${ca.hash}/${ca.strokeHash} != B ${cb.hash}/${cb.strokeHash})`);
             }
         }
         A.destroy();

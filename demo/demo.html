@@ -402,6 +402,7 @@
         <span class="badge">5 + custom shapes</span>
         <span class="badge">flutter + sway + wind</span>
         <span class="badge">living air</span>
+        <span class="badge">trails</span>
         <span class="badge">bounding box</span>
         <span class="badge">reduced-motion</span>
         <span class="badge">< 4KB</span>
@@ -554,6 +555,11 @@
                 <input type="range" id="gust" min="0" max="800" value="0" step="25">
             </div>
             <div class="control">
+                <div class="control-header"><span class="control-name">trail</span><span class="control-val"
+                                                                                        id="trailVal">off</span></div>
+                <input type="range" id="trail" min="0" max="14" value="0" step="1">
+            </div>
+            <div class="control">
                 <div class="control-header"><span class="control-name">floor</span><span class="control-val"
                                                                                          id="floorVal">off</span></div>
                 <input type="range" id="floor" min="0" max="100" value="0" step="5">
@@ -635,14 +641,17 @@
     const $codeBtn  = document.getElementById('codeBtn');
     const $seedBtn  = document.getElementById('seedBtn');
 
-    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'floor', 'bounce', 'box'];
+    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'trail', 'floor', 'bounce', 'box'];
     const $in = {};   // id -> input element
     const $out = {};  // id -> value-display element
     for (const id of SLIDERS) { $in[id] = document.getElementById(id); $out[id] = document.getElementById(id + 'Val'); }
     $in.shape = $shape;
     $in.emoji = $emoji;
 
-    const c = createConfetti($canvas, { maxParticles: 800 });
+    // trail: 14 sets the ring-buffer CAPACITY once (zero-GC -- can't grow lazily), so the
+    // per-burst `trail` slider (0..14) can vary the ribbon length live with no instance rebuild.
+    // 14 is a tasteful ceiling for the tapered comet ribbon; the library caps capacity at 64.
+    const c = createConfetti($canvas, { maxParticles: 800, trail: 14 });
     let currentSeed = null;
 
     // ── Custom shapes via registerShape() (v1.3.0). Per-instance: registered on THIS
@@ -733,6 +742,7 @@
             wind: +$in.wind.value,
             turbulence: +$in.turbulence.value, // v1.8.0: per-particle wander (0 = off)
             gust: +$in.gust.value,             // v1.8.0: global oscillating breeze (0 = off)
+            trail: +$in.trail.value,           // v1.9.0: per-burst ribbon length 0..14 (0 = off)
             floor: floorPct === 0 ? Infinity : window.innerHeight * floorPct / 100,
             bounce: +$in.bounce.value,
         };
@@ -767,6 +777,7 @@
                 : id === 'floor' ? (+raw === 0 ? 'off' : raw + '%')  // 0 = no floor (Infinity)
                 : id === 'box' ? (+raw === 0 ? 'off' : 'on')         // 0 = no walls/ceiling
                 : (id === 'turbulence' || id === 'gust') ? (+raw === 0 ? 'off' : raw)  // 0 = no force
+                : id === 'trail' ? (+raw === 0 ? 'off' : raw)        // 0 = no ribbon
                 : FIXED2.has(id) ? (+raw).toFixed(2)
                 : FIXED1.has(id) ? (+raw).toFixed(1) : raw;
         });
@@ -914,16 +925,21 @@
             const cfg = getConfig();
             const isCustom = CUSTOM_SHAPES.has(cfg.shape);
 
-            // Custom shapes are per-instance, so their snippet uses createConfetti +
-            // registerShape + c.burst; built-ins use the fire-and-forget confetti().
-            let code = `<span class="kw">import</span> { <span class="fn">${isCustom ? 'createConfetti' : 'confetti'}</span> } <span class="kw">from</span> <span class="str">'@zakkster/lite-confetti'</span>;\n\n`;
+            // An instance (createConfetti) is needed for custom shapes (per-instance registerShape)
+            // AND for trails (the ring buffer's capacity must be budgeted at construction). Plain
+            // built-ins with no trail use the fire-and-forget confetti().
+            const needsInstance = isCustom || cfg.trail !== 0;
+            let code = `<span class="kw">import</span> { <span class="fn">${needsInstance ? 'createConfetti' : 'confetti'}</span> } <span class="kw">from</span> <span class="str">'@zakkster/lite-confetti'</span>;\n\n`;
             let indent = '  ';
-            let call = 'confetti';
-            if (isCustom) {
-                code += `<span class="kw">const</span> c = <span class="fn">createConfetti</span>(canvas);\n`;
-                code += `c.<span class="fn">registerShape</span>(<span class="str">'${cfg.shape}'</span>, ${cfg.shape === 'sprite' ? '{ image }' : 'draw'});\n\n`;
-                code += `c.<span class="fn">burst</span>({`;
-                call = 'c.burst';
+            if (needsInstance) {
+                const ctorArgs = cfg.trail !== 0
+                    ? `canvas, { <span class="kw">trail</span>: <span class="num">${cfg.trail}</span> }`
+                    : `canvas`;
+                code += `<span class="kw">const</span> c = <span class="fn">createConfetti</span>(${ctorArgs});\n`;
+                if (isCustom) {
+                    code += `c.<span class="fn">registerShape</span>(<span class="str">'${cfg.shape}'</span>, ${cfg.shape === 'sprite' ? '{ image }' : 'draw'});\n`;
+                }
+                code += `\nc.<span class="fn">burst</span>({`;
             } else {
                 code += `<span class="fn">confetti</span>({`;
             }
