@@ -82,6 +82,14 @@ export function run() {
         ['turbulence:NaN', { count: 60, turbulence: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['turbulence:-Infinity', { count: 60, turbulence: -Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
         ['gust:Infinity', { count: 60, gust: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['attract:NaN', { count: 60, attract: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['swirl:Infinity', { count: 60, swirl: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['attractX/Y:NaN', { count: 60, attract: 6, attractX: NaN, attractY: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['attractX:Infinity', { count: 60, attract: 6, attractX: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
+        // A strong repeller is an unstable anti-spring; the VORTEX_MAX_ACCEL cap must keep every
+        // drawn position finite over the (finite) life, not just coerce the input.
+        ['repeller:-400', { count: 60, x: 400, y: 300, attract: -400, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['repeller:-5000', { count: 60, x: 400, y: 300, attract: -5000, swirl: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],

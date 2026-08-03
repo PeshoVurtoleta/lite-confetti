@@ -65,8 +65,16 @@ const TURBGUST_HASH = 15761758; // turbulence: 500 + gust: 400
 // hash is preserved at any depth -- see the trails suite, where a trailed run still reproduces
 // COMMITTED_HASH. This gate proves the ribbon geometry itself is deterministic. Value probed on
 // the seed-12345 rig at construction `trail: 10` (default per-burst length). The ribbon is a
-// tapered comet -- one stroke() per segment -- so strokeHash folds each segment's path.
-const TRAIL_HASH = 660640570;
+// single flat-alpha stroke, so strokeHash folds one polyline per particle.
+const TRAIL_HASH = 72519212;
+
+// Committed fingerprints for the vortex / attractor (v1.10.0). A linear-spring point force draws
+// NO rng (a pure function of position + the burst center), so, like the other forces, each is
+// cross-process stable and its own replay gate. All differ from COMMITTED_HASH and each other
+// (probed on the seed-12345 rig below; center defaults to the burst origin).
+const ATTRACT_HASH = 2926753007; // attract: 6  (pull toward the burst origin)
+const SWIRL_HASH   = 2039789049; // swirl: 6    (tangential spin)
+const VORTEX_HASH  = 1387388835; // attract: 6 + swirl: 6  (inward spiral)
 
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
 function withSilencedWarn(fn) {
@@ -1245,6 +1253,153 @@ describe('lite-confetti', () => {
             } finally {
                 setReducedMotion(false);
             }
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    //  vortex / attractor -- a directed point force (v1.10.0, decision 0011)
+    // -------------------------------------------------------------------------
+    describe('vortex / attractor', () => {
+        // Same seed-12345 rig as the force gates (a plain run reproduces COMMITTED_HASH). The record
+        // canvas's extent (maxX-minX, maxY-minY) captures the convergence a bare hash cannot see:
+        // a PULL collapses the pool, a REPEL expands it. The burst here centers at (400,198), so a
+        // bare `attract` (center defaults to the burst origin) pulls toward that point.
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = {
+                hash: canvas.hash,
+                spreadX: canvas.maxX - canvas.minX, spreadY: canvas.maxY - canvas.minY,
+                cx: (canvas.minX + canvas.maxX) / 2,
+            };
+            c.destroy();
+            return out;
+        };
+
+        it('omitting / zero / non-finite knobs keep the committed default fingerprint', () => {
+            assert.equal(run({}).hash, COMMITTED_HASH);
+            assert.equal(run({ attract: 0, swirl: 0 }).hash, COMMITTED_HASH);
+            // Fail closed on garbage -> 0 (num), for each knob (incl. the center).
+            assert.equal(run({ attract: NaN, swirl: NaN }).hash, COMMITTED_HASH);
+            assert.equal(run({ attract: null, swirl: 'x' }).hash, COMMITTED_HASH);
+            assert.equal(run({ attract: Infinity, swirl: -Infinity }).hash, COMMITTED_HASH);
+            // A center with no strength never fires the branch either.
+            assert.equal(run({ attractX: 10, attractY: 20 }).hash, COMMITTED_HASH);
+        });
+
+        it('leaves the floor-only and box fingerprints byte-identical (new guard never fires)', () => {
+            assert.equal(run({ floor: FLOOR_Y }).hash, FLOOR_HASH, 'floor-only fingerprint drifted');
+            assert.equal(run({ ...BOX, bounce: 0 }).hash, BOX_HASH, 'box fingerprint drifted');
+        });
+
+        it('matches committed fingerprints for attract, swirl, and both (deterministic, distinct)', () => {
+            const a = run({ attract: 6 });
+            const s = run({ swirl: 6 });
+            const b = run({ attract: 6, swirl: 6 });
+            if (ATTRACT_HASH === null) console.log('[attract] fingerprint =', a.hash);
+            else assert.equal(a.hash, ATTRACT_HASH, 'attract stream changed vs the committed baseline');
+            if (SWIRL_HASH === null) console.log('[swirl] fingerprint =', s.hash);
+            else assert.equal(s.hash, SWIRL_HASH, 'swirl stream changed vs the committed baseline');
+            if (VORTEX_HASH === null) console.log('[vortex] fingerprint =', b.hash);
+            else assert.equal(b.hash, VORTEX_HASH, 'combined stream changed vs the committed baseline');
+            // Each perturbs, and the three are mutually distinct and distinct from plain.
+            assert.equal(new Set([COMMITTED_HASH, a.hash, s.hash, b.hash]).size, 4,
+                'attract/swirl/both must each shift the stream distinctly');
+            // Deterministic replay: no rng, so same seed -> same hash on a second run.
+            assert.equal(run({ attract: 6 }).hash, a.hash, 'attract is not deterministic on replay');
+            assert.equal(run({ attract: 6, swirl: 6 }).hash, b.hash, 'combined is not deterministic on replay');
+        });
+
+        it('attract CONVERGES the pool; repel EXPANDS it (non-vacuous, directional)', () => {
+            const plain = run({});
+            const pull = run({ attract: 6 });
+            const push = run({ attract: -6 });
+            // A pull collapses the pool toward the center -> strictly smaller extent than plain.
+            assert.ok(pull.spreadX < plain.spreadX, 'attract did not converge the pool in x (else vacuous)');
+            assert.ok(pull.spreadY < plain.spreadY, 'attract did not converge the pool in y');
+            // A repel (negative attract) blows it apart -> strictly larger extent.
+            assert.ok(push.spreadX > plain.spreadX, 'repel did not expand the pool (else vacuous)');
+        });
+
+        it('swirl is directional: +swirl and -swirl diverge (spin sign is real)', () => {
+            assert.notEqual(run({ swirl: 6 }).hash, run({ swirl: -6 }).hash,
+                'swirl sign made no difference -- the tangential term is not directional');
+            // A pure swirl orbits (roughly conserves radial extent), so it must NOT collapse the
+            // pool the way attract does -- it is a distinct effect, not a weak attractor.
+            const plain = run({});
+            const swirl = run({ swirl: 6 });
+            assert.ok(swirl.spreadX > plain.spreadX * 0.8,
+                'a pure swirl should orbit, not collapse the pool like attract');
+        });
+
+        it('honours a custom attractX/attractY (pulls toward that point, not the origin)', () => {
+            // The burst origin is x~400; pulling toward x=600 must shift the pool's center right.
+            const plain = run({});
+            const off = run({ attract: 6, attractX: 600, attractY: 100 });
+            assert.ok(off.cx > plain.cx + 20, 'a custom attractX did not pull the pool toward it');
+        });
+
+        it('keeps positions finite AND contained under strong attract + swirl in a box', () => {
+            const canvas = makeCanvas({ record: true, assertFinite: true });
+            const c = createConfetti(canvas, { seed: 3 });
+            assert.doesNotThrow(() => {
+                c.burst({
+                    x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 5, lifeMax: 5,
+                    wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350,
+                    bounce: 1, wind: 2000, gravity: 4000, attract: 40, swirl: 30,
+                });
+                pump(1, 1000); pump(80, 16);
+            });
+            assert.ok(canvas.minX >= 350 && canvas.maxX <= 450, 'a particle escaped a wall under the vortex');
+            c.destroy();
+        });
+
+        it('a strong repeller stays finite over its life (the accel cap holds)', () => {
+            // A negative attract is an unstable anti-spring; without the VORTEX_MAX_ACCEL cap it
+            // could drive a position to Infinity. assertFinite makes any non-finite draw a throw.
+            const canvas = makeCanvas({ record: true, assertFinite: true });
+            const c = createConfetti(canvas, { seed: 7 });
+            assert.doesNotThrow(() => {
+                c.burst({ x: 400, y: 300, count: 60, attract: -400, lifeMin: 0.4, lifeMax: 0.4 });
+                pump(1, 1000); for (let f = 0; f < 40; f++) pump(1, 50);
+            });
+            assert.equal(c.count, 0, 'the repeller pool did not drain within its life');
+            c.destroy();
+        });
+
+        it('spray() honours the vortex (deterministic, perturbing stream)', () => {
+            const sprayRun = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 200, rate: 10, x: 400, y: 300, spread: 2.0, lifeMin: 5, lifeMax: 5, ...opts });
+                pump(1, 1000); pump(60, 16);
+                const h = canvas.hash;
+                c.destroy();
+                return h;
+            };
+            const calm = sprayRun({});
+            assert.equal(sprayRun({}), calm, 'calm spray not deterministic');
+            assert.notEqual(sprayRun({ attract: 8, swirl: 5 }), calm, 'spray ignored the vortex');
+            assert.equal(sprayRun({ attract: 8, swirl: 5 }), sprayRun({ attract: 8, swirl: 5 }), 'vortex spray not deterministic');
+        });
+
+        it('has no effect under reduced motion (static path has no velocity to perturb)', () => {
+            const staticHash = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 30, ...opts });
+                    const h = canvas.hash;
+                    c.destroy();
+                    return h;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            assert.equal(staticHash({ attract: 10, swirl: 8 }), staticHash({}));
         });
     });
 

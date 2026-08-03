@@ -1,7 +1,7 @@
 {
   "name": "@zakkster/lite-confetti",
   "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "description": "Deterministic confetti engine with OKLCH colors, 5 shapes, named presets, palette import, pointer-follow spray, reduced-motion support, and timeline composability.",
   "type": "module",
   "main": "./Confetti.js",
@@ -44,7 +44,7 @@
     "url": "https://github.com/sponsors/PeshoVurtoleta"
   },
   "dependencies": {
-    "@zakkster/lite-color": "^1.0.4",
+    "@zakkster/lite-color": "^2.1.0",
     "@zakkster/lite-random": "^1.0.0",
     "@zakkster/lite-ticker": "^1.0.0"
   },
@@ -63,7 +63,7 @@
   ],
   "sideEffects": false,
   "devDependencies": {
-    "@zakkster/lite-gc-profiler": "^1.11.0",
-    "@zakkster/lite-leak": "^1.8.0"
+    "@zakkster/lite-gc-profiler": "^1.15.0",
+    "@zakkster/lite-leak": "^1.8.1"
   }
 }

@@ -83,6 +83,19 @@ export interface BurstOptions {
      *  `wind` -- the whole burst swells one way then the other in ~3s waves. Default 0 (none).
      *  Opt-in, fingerprint-safe, draws no RNG. */
     gust?: number;
+    /** Vortex radial spring strength (1/sec^2, scaled by distance): the acceleration toward the
+     *  center is `attract * (center - pos)`. Positive PULLS in (a damped inward spiral), negative
+     *  REPELS. Zero at the center (no singularity). Default 0 (none). Opt-in, fingerprint-safe,
+     *  draws no RNG. */
+    attract?: number;
+    /** Vortex tangential strength (1/sec^2): spins particles around the center (perpendicular to
+     *  `attract`); the sign sets the spin direction. Default 0 (none). Opt-in, draws no RNG. */
+    swirl?: number;
+    /** Vortex center X (CSS px). Default: the burst origin `x` (a bare `attract`/`swirl` spins
+     *  around where the burst was fired). */
+    attractX?: number;
+    /** Vortex center Y (CSS px). Default: the burst origin `y`. */
+    attractY?: number;
     /** Per-particle motion-trail length: how many recent world positions this burst's ribbon
      *  spans, in `0..capacity`. Requires a construction `trail` budget (see `createConfetti`);
      *  ignored on an instance created without one. Default: the full capacity. `0` opts a burst

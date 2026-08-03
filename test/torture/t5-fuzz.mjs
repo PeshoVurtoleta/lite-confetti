@@ -54,6 +54,9 @@ function genOp(prng, allowReseed) {
                 ceiling: (prng() % 2 === 0) ? -Infinity : 20 + (prng() % 150),
                 turbulence: (prng() % 2 === 0) ? 0 : (prng() % 800) - 400, // signed wander, half off
                 gust: (prng() % 2 === 0) ? 0 : (prng() % 600) - 300,       // signed gust, half off
+                attract: (prng() % 2 === 0) ? 0 : (prng() % 20) - 10,      // signed spring, half off
+                swirl: (prng() % 2 === 0) ? 0 : (prng() % 20) - 10,        // signed swirl, half off
+                attractX: 100 + (prng() % 500), attractY: 50 + (prng() % 400), // jittered center
                 trail: (prng() % 3 === 0) ? 0 : (prng() % 25),             // per-burst trail length, 1/3 off
                 lifeMin: 0.5 + (prng() % 200) / 100,
                 lifeMax: 2.5 + (prng() % 200) / 100,
@@ -73,6 +76,9 @@ function genOp(prng, allowReseed) {
                 ceiling: (prng() % 2 === 0) ? -Infinity : 20 + (prng() % 150),
                 turbulence: (prng() % 2 === 0) ? 0 : (prng() % 800) - 400,
                 gust: (prng() % 2 === 0) ? 0 : (prng() % 600) - 300,
+                attract: (prng() % 2 === 0) ? 0 : (prng() % 20) - 10,
+                swirl: (prng() % 2 === 0) ? 0 : (prng() % 20) - 10,
+                attractX: 100 + (prng() % 500), attractY: 50 + (prng() % 400),
                 trail: (prng() % 3 === 0) ? 0 : (prng() % 25),
             },
         };

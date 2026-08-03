@@ -3,6 +3,56 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.10.0] - 2026-08-03
+
+Feature release: `attract` + `swirl` -- a **vortex / attractor**, the first **directed (point)**
+force. Every force until now was uniform in space (`gravity`/`wind`/`gust`) or per-particle-random
+(`turbulence`); this one is aimed at a *place*, so a burst can collapse into, blow out from, or
+spin around a chosen point. `attract` is a linear-spring pull toward a per-burst center (accel =
+`attract * (center - pos)`) -- zero at the center (no singularity), damped by `drag` into an inward
+spiral; negative repels. `swirl` adds the perpendicular tangential term. The force draws **zero
+rng** (a pure function of the particle's position + the burst center), so default `0` is
+byte-identical -- every prior committed fingerprint is preserved (default `1569828004`, mixed,
+wind, floored `2679696825`, box `804161759`, turbulence `1630588936`, gust `4074438162`, and the
+v1.9.0 trail geometry) -- and a vortexed burst is reproducible for free.
+
+### Added
+- **`attract: number` on `burst()`/`spray()`** -- radial spring strength (1/sec^2, scaled by
+  distance). Positive pulls toward the center, negative repels. Default `0` (none).
+- **`swirl: number`** -- tangential strength (1/sec^2): spins particles around the center; the sign
+  sets the spin direction. Default `0` (none).
+- **`attractX` / `attractY`** -- the vortex center in CSS px. Default: the burst origin, so a bare
+  `attract`/`swirl` spins around where the burst was fired.
+
+### Semantics
+- **Opt-in, zero-cost by default.** The force is guarded on `attract !== 0 || swirl !== 0`, so no
+  branch fires by default -- a plain burst does no extra work and its seeded positions are
+  byte-identical. All prior fingerprints (physics and the trail geometry) are preserved.
+- **Deterministic when on.** The force draws no rng (position + center only), so a vortexed burst
+  replays identically under a fixed seed, with its own committed fingerprints (attract-only,
+  swirl-only, and both, all distinct).
+- **Stable, finite, contained.** The spring is zero at the center (no singularity); a pull is a
+  damped oscillator that spirals in; inside a bounding box the edge clamps still hold. A negative
+  `attract` is an unstable anti-spring, so a fail-closed accel cap (`VORTEX_MAX_ACCEL`) bounds the
+  acceleration -- a repeller can never drive a position to a non-finite value (verified).
+- **Fail closed.** A non-finite/garbage strength or center coerces via `num()` (strengths to `0` =
+  off, center to the burst origin); negatives are valid (repel / reverse spin).
+- **No reduced-motion effect** -- the static render has no velocity to perturb.
+
+### Internal
+- Four per-particle columns (`vortX`, `vortY`, `attract`, `swirl`); the force is `[[at,-sw],[sw,at]]`
+  applied to the radial vector, inserted after `gust` and before `drag` in the integrator. No
+  hot-path allocation (the guarded block is a few multiplies + the component cap).
+
+### Fixed
+- **Trails are clearly visible again.** The per-segment "comet" taper added in 1.9.0 (alpha + width
+  fading to a transparent tail) read as too faint -- on a dark background the ribbon all but
+  disappeared. It had been added to fix an apparent overlap "smear", which turned out to be a
+  misconfigured `floor` (particles piling up), not the trail. Reverted to the original single
+  flat-alpha ribbon (uniform opacity along its length). The committed `strokeHash` gate returns to
+  its 1.9.0-pre-taper value; no physics fingerprint is affected. The demo `trail` slider ceiling
+  and ring-buffer capacity go back to 24 (from 14), restoring the longer, prominent ribbons.
+
 ## [1.9.0] - 2026-08-02
 
 Feature release: motion **`trail`s** -- the first **render-path** feature (every prior release

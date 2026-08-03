@@ -111,8 +111,10 @@ export async function run() {
     // a particle lands/leans it re-crosses an edge every frame and the branches keep firing for
     // the whole resting pool. It ALSO carries the v1.8.0 time-varying forces (`turbulence` +
     // `gust`), so both guarded accel blocks and their Math.cos/Math.sin fire every particle
-    // every frame. It is ALSO built with a `trail` capacity, so every alive particle BOTH writes
-    // a ring-buffer sample AND strokes a fading ribbon (beginPath + moveTo/lineTo + stroke) every
+    // every frame. It ALSO carries a `vortex` (positive `attract` + `swirl`, stable so the immortal
+    // pool stays finite), arming the linear-spring point force + its accel-cap branch every frame.
+    // It is ALSO built with a `trail` capacity, so every alive particle BOTH writes
+    // a ring-buffer sample AND strokes a ribbon (beginPath + moveTo/lineTo + stroke) every
     // frame -- the v1.9.0 render overlay must be as allocation-free as the physics. All must still
     // integrate at ~0 B/frame. Includes a custom vector + a sprite in the mix so all three
     // dispatch kinds are hit from a single burst.
@@ -123,7 +125,7 @@ export async function run() {
         count: MAXP, shapes: ['rect', 'circle', 'star', 'triangle', 'emoji', 'heart', 'logo'],
         lifeMin: 1e6, lifeMax: 1e6, sizeMin: 4, sizeMax: 12, sway: 0.5, wind: 300,
         floor: 150, bounce: 0.4, wallLeft: 200, wallRight: 600, ceiling: 100,
-        turbulence: 250, gust: 200,
+        turbulence: 250, gust: 200, attract: 5, swirl: 4,
     });
     pump(1, 1000);
     check(cm.count === MAXP, () => `T6: mixed-shape pool has ${cm.count} alive, expected ${MAXP}`);
@@ -145,6 +147,6 @@ export async function run() {
     log('  T6 ok -- update() ' + bpf.toFixed(2) + ' B/frame over ' + MAXP + ' particles ('
         + bpfCustom.toFixed(2) + ' B/frame custom vector+sprite+sway, '
         + bpfPoison.toFixed(2) + ' B/frame from sanitised garbage inputs, '
-        + bpfMix.toFixed(2) + ' B/frame from a shapes[] mix under wind + full box + turbulence/gust + trails); '
+        + bpfMix.toFixed(2) + ' B/frame from a shapes[] mix under wind + full box + turbulence/gust + vortex + trails); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

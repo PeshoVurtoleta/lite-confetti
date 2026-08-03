@@ -1,10 +1,18 @@
 /**
- * @zakkster/lite-confetti v1.9.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.10.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.10.0 adds: `attract` + `swirl` -- a VORTEX / attractor, the first DIRECTED (point) force.
+ * `attract` is a linear-spring pull toward a per-burst center (`attractX`/`attractY`, default the
+ * burst origin): accel = attract * (center - pos), zero at the center (no singularity), damped by
+ * `drag` into an inward spiral; negative repels. `swirl` adds the perpendicular tangential term, so
+ * a burst can collapse into, blow out from, or spin around a point. Draws ZERO rng (a pure function
+ * of the particle's position + the burst center), so default `0` is byte-identical (every prior
+ * fingerprint preserved) and a vortexed burst is reproducible for free. A fail-closed accel cap
+ * keeps a repeller (unstable anti-spring) from ever driving a position non-finite.
  * v1.9.0 adds: motion `trail`s -- the first RENDER-path feature (every prior chapter extended
  * the physics). Opt in at construction with `createConfetti(canvas, { trail: N })` to give each
  * particle a fading ribbon through its last N world positions; a per-burst `trail` (0..N) then
@@ -127,16 +135,26 @@ const SWAY_PX = 60;
 const GUST_HZ = 2 * Math.PI / 3;
 
 // Motion trails (v1.9.0). A trail is a fixed-size ring buffer of a particle's recent world
-// positions, stroked as a tapered "comet" ribbon (alpha + width fade from full at the head, at
-// the particle, to ~0 at the tail). TRAIL_MAX bounds the one-time buffer allocation (`trail`
-// capacity is clamped to it); TRAIL_ALPHA is the ribbon's HEAD opacity relative to the body's
-// life-fade (the tail fades to 0); TRAIL_WIDTH is the head line width as a fraction of the
-// particle's min(w,h). The trail is a pure RENDER overlay -- it draws in world space
-// (moveTo/lineTo/stroke, never translate) and never touches physics state, so every committed
-// physics fingerprint is preserved at any depth.
+// positions, stroked as a single flat-alpha ribbon (uniform opacity along its length, so the
+// whole streak stays clearly visible). TRAIL_MAX bounds the one-time buffer allocation (`trail`
+// capacity is clamped to it); TRAIL_ALPHA is the ribbon opacity relative to the body's life-fade;
+// TRAIL_WIDTH is the line width as a fraction of the particle's min(w,h). The trail is a pure
+// RENDER overlay -- it draws in world space (moveTo/lineTo/stroke, never translate) and never
+// touches physics state, so every committed physics fingerprint is preserved at any depth.
+// (A per-segment alpha/width taper shipped in v1.9.0 was reverted in v1.10.0 -- it read as too
+// faint; see decision 0010.)
 const TRAIL_MAX = 64;
 const TRAIL_ALPHA = 0.5;
 const TRAIL_WIDTH = 0.55;
+
+// Vortex / attractor (v1.10.0). A linear-spring point force: `attract` pulls each particle toward
+// a per-burst center (accel = attract * (center - pos)), `swirl` adds the perpendicular tangential
+// component (a spiral). VORTEX_MAX_ACCEL is a fail-closed cap on the accel components -- a NEGATIVE
+// attract is an anti-spring (exponentially unstable far from the center), so without the cap a
+// repeller could drive a position to Float32 Infinity; the cap bounds accel so positions stay
+// finite for any run. It never bites in the normal regime (single-digit attract x a few-hundred-px
+// radius). The force draws NO rng (a pure function of position + the burst center).
+const VORTEX_MAX_ACCEL = 50000;
 
 // Clamp a numeric option into [0,1], failing closed to `dflt` for non-finite input
 // (NaN/Infinity coerce to the default rather than poisoning a particle -- "null is not
@@ -466,6 +484,10 @@ export function createConfetti(canvas, {
         sway:  new Float32Array(maxParticles),   // sway: horizontal drift amplitude 0..1
         turb:  new Float32Array(maxParticles),   // turbulence accel magnitude (px/sec^2); 0 = none
         gust:  new Float32Array(maxParticles),   // gust accel magnitude (px/sec^2); 0 = none
+        vortX: new Float32Array(maxParticles),   // vortex/attractor center X (CSS px)
+        vortY: new Float32Array(maxParticles),   // vortex/attractor center Y (CSS px)
+        attract:new Float32Array(maxParticles),  // radial spring strength (1/sec^2); 0 = off, <0 = repel
+        swirl: new Float32Array(maxParticles),   // tangential strength (1/sec^2); 0 = off, sign = spin
         shape: new Uint8Array(maxParticles),     // 0..4 built-in, 5+ = registerShape() custom
     };
 
@@ -591,6 +613,10 @@ export function createConfetti(canvas, {
         pool.sway[i] = config.sway;
         pool.turb[i] = config.turbulence;
         pool.gust[i] = config.gust;
+        pool.vortX[i] = config.attractX;
+        pool.vortY[i] = config.attractY;
+        pool.attract[i] = config.attract;
+        pool.swirl[i] = config.swirl;
         // Motion trail: reset the live sample count to 0 and stamp this burst's draw length.
         // Resetting trailN is the fail-closed guard on pool reuse -- the recycled ring slots
         // still hold the DEAD particle's positions, but we only ever read the last trailN of
@@ -659,6 +685,30 @@ export function createConfetti(canvas, {
             // amplitude is per-particle. Guarded so gust == 0 is byte-identical. Applied
             // before drag, like wind, so it too damps toward a terminal velocity.
             if (pool.gust[i] !== 0) pool.vx[i] += Math.sin(_elapsed * GUST_HZ) * pool.gust[i] * dtSec;
+            // Vortex: a linear-spring point force. `attract` pulls toward (center - pos) -- the
+            // force is ZERO at the center (no singularity), so a PULL (attract > 0) is a damped
+            // oscillator that spirals in; `swirl` adds the perpendicular tangential component, so
+            // together (at, sw) apply the matrix [[at,-sw],[sw,at]] to the radial vector (pull +
+            // rotation). Draws NO rng -- a pure function of the particle's own position and the
+            // burst center -- so a vortexed burst is reproducible for free. Guarded so the default
+            // (attract == 0 && swirl == 0) leaves vx/vy byte-identical (every committed fingerprint
+            // depends on this branch never firing by default). Applied before drag, like the other
+            // forces, so it damps toward the center rather than running away.
+            if (pool.attract[i] !== 0 || pool.swirl[i] !== 0) {
+                const rx = pool.vortX[i] - pool.x[i];
+                const ry = pool.vortY[i] - pool.y[i];
+                const at = pool.attract[i], sw = pool.swirl[i];
+                let ax = at * rx - sw * ry;
+                let ay = at * ry + sw * rx;
+                // Fail-closed finiteness cap: a NEGATIVE attract is an anti-spring (exponentially
+                // unstable far from the center), so an unclamped repeller could drive a position to
+                // Float32 Infinity. Clamping each accel component bounds velocity growth to linear,
+                // so positions stay finite over any finite run. Never bites in the normal regime.
+                if (ax > VORTEX_MAX_ACCEL) ax = VORTEX_MAX_ACCEL; else if (ax < -VORTEX_MAX_ACCEL) ax = -VORTEX_MAX_ACCEL;
+                if (ay > VORTEX_MAX_ACCEL) ay = VORTEX_MAX_ACCEL; else if (ay < -VORTEX_MAX_ACCEL) ay = -VORTEX_MAX_ACCEL;
+                pool.vx[i] += ax * dtSec;
+                pool.vy[i] += ay * dtSec;
+            }
             pool.vx[i] *= pool.drag[i];
             pool.vy[i] *= pool.drag[i];
             pool.x[i] += pool.vx[i] * dtSec;
@@ -740,42 +790,31 @@ export function createConfetti(canvas, {
             const a = pool.flut[i];
             const wobbleScale = 1 - a * 0.5 * (1 - Math.abs(Math.cos(pool.tilt[i])));
 
-            // Trail ribbon: a tapered "comet" stroke through the particle's recent world
+            // Trail ribbon: a single flat-alpha stroke through the particle's recent world
             // positions, drawn BEFORE the body so the solid piece sits on top of its own streak.
-            // Each segment is stroked separately so alpha AND width can FADE from full at the head
-            // (newest, at the particle) to ~0 at the tail: this reads as a motion streak rather
-            // than a flat band, and -- crucially -- the faded tail contributes ~0 opacity, so many
-            // overlapping trails no longer stack into an opaque smear. Done in WORLD space with
-            // beginPath/moveTo/lineTo/stroke -- deliberately NO translate, so it contributes nothing
-            // to the position fingerprint (which hashes only translate); that is what keeps trails a
-            // provable pure overlay. strokeStyle reuses the color string already parsed in
-            // burst()/spray(); the per-segment alpha/width are plain numbers -- zero allocation on
-            // this path (each segment is one more ctx call, never a JS allocation). Needs >= 2
-            // samples for a segment.
+            // A uniform alpha keeps the whole ribbon clearly visible (a per-segment taper to a
+            // transparent tail was tried in v1.9.0 and reverted in v1.10.0 -- it made trails too
+            // faint, and the "smear" it aimed to fix was a misread floor pile, not the trail).
+            // Done in WORLD space with beginPath/moveTo/lineTo/stroke -- deliberately NO translate,
+            // so it contributes nothing to the position fingerprint (which hashes only translate);
+            // that is what keeps trails a provable pure overlay. strokeStyle reuses the color string
+            // already parsed in burst()/spray() -- zero allocation on this path. Needs >= 2 samples.
             if (trailCap !== 0 && trailN[i] >= 2) {
                 const n = trailN[i];
                 const base = i * trailCap;
-                const wBody = Math.min(pool.w[i], pool.h[i]) * TRAIL_WIDTH;
-                const aBody = alpha * TRAIL_ALPHA;
-                const span = n - 1;   // segment count; >= 1 here
                 ctx.strokeStyle = colors[i];
-                // Walk oldest -> newest, one stroke per segment. `pr`/`px`/`py` carry the previous
-                // sample so each segment reuses it (no re-read, no array).
-                let pk = span;                       // frames-ago of the oldest sample
-                let pr = _trailHead - pk; if (pr < 0) pr += trailCap;
-                let px = trailX[base + pr], py = trailY[base + pr];
-                for (let k = span - 1; k >= 0; k--) {   // k = frames-ago of this segment's newest end
-                    let r = _trailHead - k; if (r < 0) r += trailCap;
-                    const gx = trailX[base + r], gy = trailY[base + r];
-                    const tf = (span - k) / span;    // 0..1, 1 at the newest (head) segment
-                    ctx.globalAlpha = aBody * tf;
-                    ctx.lineWidth = wBody * (0.35 + 0.65 * tf);
-                    ctx.beginPath();
-                    ctx.moveTo(px, py);
-                    ctx.lineTo(gx, gy);
-                    ctx.stroke();
-                    px = gx; py = gy;
+                ctx.lineWidth = Math.min(pool.w[i], pool.h[i]) * TRAIL_WIDTH;
+                ctx.globalAlpha = alpha * TRAIL_ALPHA;
+                ctx.beginPath();
+                for (let k = n - 1; k >= 0; k--) {   // oldest sample -> newest (the head)
+                    let r = _trailHead - k;
+                    if (r < 0) r += trailCap;
+                    const gx = trailX[base + r];
+                    const gy = trailY[base + r];
+                    if (k === n - 1) ctx.moveTo(gx, gy);
+                    else ctx.lineTo(gx, gy);
                 }
+                ctx.stroke();
             }
 
             // Render
@@ -889,6 +928,10 @@ export function createConfetti(canvas, {
          * @param {number} [options.sway=0]      Horizontal drift 0..1 (0 straight fall)
          * @param {number} [options.turbulence=0] Per-particle rotating accel px/sec^2 (organic wander). Opt-in, zero-rng, fingerprint-safe
          * @param {number} [options.gust=0]      Global oscillating horizontal accel px/sec^2 layered on wind (~3s swells). Opt-in, zero-rng
+         * @param {number} [options.attract=0]   Vortex radial spring strength (1/sec^2, scaled by distance): + pulls toward the center, - repels. Opt-in, zero-rng, fingerprint-safe
+         * @param {number} [options.swirl=0]     Vortex tangential strength (1/sec^2): spins particles around the center; sign = spin direction. Opt-in, zero-rng
+         * @param {number} [options.attractX]    Vortex center X (CSS px); default: the burst origin x
+         * @param {number} [options.attractY]    Vortex center Y (CSS px); default: the burst origin y
          * @param {number} [options.trail]       Per-particle motion-trail length 0..capacity (default: full capacity). Needs a construction `trail` budget; ignored otherwise. Render overlay, fingerprint-safe
          * @param {Array}  [options.colors]      Array of OKLCH objects or CSS strings
          * @param {number} [options.angle=-Math.PI/2] Center angle of emission cone
@@ -919,6 +962,10 @@ export function createConfetti(canvas, {
                   sway = 0,
                   turbulence = 0,
                   gust = 0,
+                  attract = 0,
+                  swirl = 0,
+                  attractX,
+                  attractY,
                   trail,
                   colors = DEFAULT_COLORS,
                   angle = -Math.PI / 2,
@@ -939,6 +986,8 @@ export function createConfetti(canvas, {
             wind = num(wind, 0); // signed: negative wind drifts left, so num (not nonneg)
             turbulence = num(turbulence, 0); // signed accel (px/sec^2); non-finite => 0 (off)
             gust = num(gust, 0);             // signed accel (px/sec^2); non-finite => 0 (off)
+            attract = num(attract, 0);       // signed spring strength; non-finite => 0 (off), <0 = repel
+            swirl = num(swirl, 0);           // signed tangential strength; non-finite => 0 (off)
             floor = num(floor, Infinity);  // opt-in: undefined/NaN/Infinity/string all => no floor
             bounce = clamp01(bounce, 0);   // restitution 0..1; a rebound can never add energy
             wallLeft = num(wallLeft, -Infinity);   // opt-in box edge; non-finite => no left wall
@@ -978,6 +1027,11 @@ export function createConfetti(canvas, {
             }
 
             const colorPick = () => rng.pick(parsedColors);
+            // Vortex center: defaults to the burst origin (cx, cy), so a bare `attract`/`swirl`
+            // spins around where the burst was fired; an explicit attractX/attractY overrides
+            // (non-finite falls back to the origin via num()).
+            const vortX = num(attractX, cx);
+            const vortY = num(attractY, cy);
             // Per-particle trail DRAW length (not capacity -- the buffer was sized at construction).
             // `undefined` (option omitted) inherits full capacity, so a trail-capable instance
             // trails by default; an explicit value clamps into [0, trailCap] (0 opts this burst out,
@@ -989,6 +1043,7 @@ export function createConfetti(canvas, {
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
                 flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), turbulence, gust, trailLen: trailDraw,
+                attract, swirl, attractX: vortX, attractY: vortY,
             };
 
             for (let i = 0; i < count; i++) {
@@ -1024,6 +1079,10 @@ export function createConfetti(canvas, {
          * @param {number} [options.sway=0]         Horizontal drift 0..1
          * @param {number} [options.turbulence=0]   Per-particle rotating accel px/sec^2 (organic wander). Opt-in, zero-rng
          * @param {number} [options.gust=0]         Global oscillating horizontal accel px/sec^2 layered on wind. Opt-in, zero-rng
+         * @param {number} [options.attract=0]      Vortex radial spring strength (1/sec^2): + pulls toward the center, - repels. Opt-in, zero-rng
+         * @param {number} [options.swirl=0]        Vortex tangential strength (1/sec^2): spins around the center; sign = direction. Opt-in, zero-rng
+         * @param {number} [options.attractX]       Vortex center X (CSS px); default: the spray origin x
+         * @param {number} [options.attractY]       Vortex center Y (CSS px); default: the spray origin y
          * @param {number} [options.trail]          Per-particle motion-trail length 0..capacity (default: full). Needs a construction `trail` budget; render overlay, fingerprint-safe
          */
         spray({
@@ -1052,6 +1111,10 @@ export function createConfetti(canvas, {
                   sway = 0,
                   turbulence = 0,
                   gust = 0,
+                  attract = 0,
+                  swirl = 0,
+                  attractX,
+                  attractY,
                   trail,
                   colors = DEFAULT_COLORS,
                   angle = -Math.PI / 2,
@@ -1071,6 +1134,8 @@ export function createConfetti(canvas, {
             wind = num(wind, 0); // signed: negative wind drifts left, so num (not nonneg)
             turbulence = num(turbulence, 0); // signed accel (px/sec^2); non-finite => 0 (off)
             gust = num(gust, 0);             // signed accel (px/sec^2); non-finite => 0 (off)
+            attract = num(attract, 0);       // signed spring strength; non-finite => 0 (off), <0 = repel
+            swirl = num(swirl, 0);           // signed tangential strength; non-finite => 0 (off)
             floor = num(floor, Infinity);  // opt-in: undefined/NaN/Infinity/string all => no floor
             bounce = clamp01(bounce, 0);   // restitution 0..1; a rebound can never add energy
             wallLeft = num(wallLeft, -Infinity);   // opt-in box edge; non-finite => no left wall
@@ -1108,6 +1173,11 @@ export function createConfetti(canvas, {
             }
 
             const colorPick = () => rng.pick(parsedColors);
+            // Vortex center: defaults to the burst origin (cx, cy), so a bare `attract`/`swirl`
+            // spins around where the burst was fired; an explicit attractX/attractY overrides
+            // (non-finite falls back to the origin via num()).
+            const vortX = num(attractX, cx);
+            const vortY = num(attractY, cy);
             // Per-particle trail DRAW length (not capacity -- the buffer was sized at construction).
             // `undefined` (option omitted) inherits full capacity, so a trail-capable instance
             // trails by default; an explicit value clamps into [0, trailCap] (0 opts this burst out,
@@ -1119,6 +1189,7 @@ export function createConfetti(canvas, {
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
                 flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), turbulence, gust, trailLen: trailDraw,
+                attract, swirl, attractX: vortX, attractY: vortY,
             };
 
             // Pointer-follow is opt-in and, by nature, NON-DETERMINISTIC: it injects

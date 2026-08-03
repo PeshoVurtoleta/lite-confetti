@@ -9,8 +9,9 @@
 
 Deterministic confetti engine with OKLCH colors, 5 built-in shapes plus custom
 `registerShape()` shapes (vector or image sprite), per-particle multi-shape mixing,
-tunable flutter, lateral wind, turbulence + gust (living-air forces), a full bounding box
-(floor, walls, ceiling) with bounce, zero-GC motion trails, and reduced-motion support.
+tunable flutter, lateral wind, turbulence + gust (living-air forces), a vortex/attractor
+point force, a full bounding box (floor, walls, ceiling) with bounce, zero-GC motion trails,
+and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -99,6 +100,10 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `sway` | number | 0 | Horizontal drift, 0–1. `0` = straight fall; higher values sway side-to-side like real paper. |
 | `turbulence` | number | 0 | Per-particle rotating acceleration in px/s² — organic wander, so a burst fans out and mills. Opt-in; `0` = none. Draws no rng. See [Living air](#living-air). |
 | `gust` | number | 0 | Global oscillating horizontal acceleration in px/s² layered on `wind` — the whole burst swells side to side in ~3s waves. Opt-in; `0` = none. See [Living air](#living-air). |
+| `attract` | number | 0 | Vortex radial spring strength (1/s², scaled by distance): `+` pulls toward the center, `−` repels. Opt-in; `0` = none. See [Vortex](#vortex). |
+| `swirl` | number | 0 | Vortex tangential strength (1/s²): spins particles around the center; sign = spin direction. Opt-in; `0` = none. See [Vortex](#vortex). |
+| `attractX` | number | burst x | Vortex center X (CSS px). Defaults to the burst origin. |
+| `attractY` | number | burst y | Vortex center Y (CSS px). Defaults to the burst origin. |
 | `trail` | number | capacity | Per-particle trail length `0..capacity` — how many recent positions this burst's ribbon spans. Needs a construction `trail` budget; ignored without one. `0` opts a burst out. See [Motion trails](#motion-trails). |
 | `colors` | Array | 7 OKLCH defaults | Array of OKLCH objects `{ l, c, h }` or CSS strings |
 | `angle` | number | `-Math.PI / 2` | Center angle of emission cone in radians. -π/2 = upward. |
@@ -136,21 +141,22 @@ Every frame, each alive particle runs through this pipeline:
 2.  WIND        vx += wind × dt           (opt-in lateral acceleration)
 3.  TURBULENCE  vx += cos(p) × turb × dt, vy += sin(p) × turb × dt   (opt-in, p = tilt+spin phase)
 4.  GUST        vx += sin(elapsed × GUST_HZ) × gust × dt   (opt-in, global oscillating wind)
-5.  DRAG        vx *= drag, vy *= drag    (air resistance)
-6.  POSITION    x += vx × dt, y += vy × dt
-7.  FLOOR       if y > floor:   y = floor,   vy = −vy × bounce   (opt-in, box Y-max)
-8.  CEILING     if y < ceiling: y = ceiling, vy = −vy × bounce   (opt-in, box Y-min)
-9.  SWAY        x += sin(tiltPhase) × sway × dt   (opt-in horizontal drift)
-10. WALLS       if x < wallLeft:  x = wallLeft,  vx = −vx × bounce   (opt-in, box X-min)
+5.  VORTEX      vx += (attract·rx − swirl·ry) × dt, vy += (attract·ry + swirl·rx) × dt   (opt-in, r = center − pos; capped)
+6.  DRAG        vx *= drag, vy *= drag    (air resistance)
+7.  POSITION    x += vx × dt, y += vy × dt
+8.  FLOOR       if y > floor:   y = floor,   vy = −vy × bounce   (opt-in, box Y-max)
+9.  CEILING     if y < ceiling: y = ceiling, vy = −vy × bounce   (opt-in, box Y-min)
+10. SWAY        x += sin(tiltPhase) × sway × dt   (opt-in horizontal drift)
+11. WALLS       if x < wallLeft:  x = wallLeft,  vx = −vx × bounce   (opt-in, box X-min)
                 if x > wallRight: x = wallRight, vx = −vx × bounce   (opt-in, box X-max)
-11. SPIN        rotation += spinVelocity × dt
-12. TILT        tiltPhase += tiltSpeed × dt
-13. OPACITY     fade to 0 in last 30% of life
-14. TRAIL       record (x,y) in the ring → stroke the ribbon through recent positions   (opt-in RENDER overlay — world-space stroke, touches no physics state)
-15. RENDER      translate → rotate → flutter-scale → draw shape
+12. SPIN        rotation += spinVelocity × dt
+13. TILT        tiltPhase += tiltSpeed × dt
+14. OPACITY     fade to 0 in last 30% of life
+15. TRAIL       record (x,y) in the ring → stroke the ribbon through recent positions   (opt-in RENDER overlay — world-space stroke, touches no physics state)
+16. RENDER      translate → rotate → flutter-scale → draw shape
 ```
 
-Steps 1–12 are **physics** (they mutate `x/y/vx/vy`); steps 13–15 are **rendering**. `trail` (step 14) is the first purely-render feature: it *reads* the position but draws a stroked polyline in world space (never `translate`), so it cannot move the determinism fingerprint — every committed physics hash is preserved at any trail depth.
+Steps 1–13 are **physics** (they mutate `x/y/vx/vy`); steps 14–16 are **rendering**. `trail` (step 15) is the first purely-render feature: it *reads* the position but draws a stroked polyline in world space (never `translate`), so it cannot move the determinism fingerprint — every committed physics hash is preserved at any trail depth.
 
 ### Rotation & 3D Tumbling
 
@@ -227,9 +233,25 @@ c.burst({ count: 40, trail: 0 });                  // …or none for this one
 
 The per-burst `trail` sets the ribbon *length* (`0..capacity`); omit it and a trail-capable instance trails at full capacity. On an instance created without a `trail` budget the per-burst option is simply ignored (fail-closed, no throw).
 
-The ribbon is a tapered **comet**: alpha and width fade from full at the head (at the particle) to ~0 at the tail, so a fast piece reads as a motion streak and many overlapping trails don't stack into an opaque smear.
+The ribbon is a single **flat-alpha** stroke — one uniform-opacity line through the particle's recent positions, so the whole streak stays clearly visible. (A per-segment taper to a transparent tail was tried in 1.9.0 and reverted in 1.10.0: it read as too faint.)
 
-Trails are a **pure render overlay**. The ribbon is stroked in *world space* (`moveTo`/`lineTo`/`stroke`, one stroke per segment) — it never uses `translate` and never touches `x/y/vx/vy`, so it **cannot** perturb the determinism fingerprint: a trailed burst reproduces the exact same committed physics hash as an untrailed one, at any depth. The ribbon geometry is itself deterministic (its own committed `strokeHash` gate). Storage is a `Float32Array` ring buffer allocated **once** at construction (so `trail: 0`, the default, allocates nothing and is byte-identical to no trails), and recording + stroking are allocation-free on the hot path — the per-segment alpha/width are plain numbers, verified at ~0 B/frame with a full trailed pool under the torture alloc gate. A garbage capacity fails closed to off or the 64-sample cap; on pool reuse a recycled slot's stale history can never leak (the live sample count resets at spawn). No effect under reduced motion.
+Trails are a **pure render overlay**. The ribbon is stroked in *world space* (`moveTo`/`lineTo`/`stroke`) — it never uses `translate` and never touches `x/y/vx/vy`, so it **cannot** perturb the determinism fingerprint: a trailed burst reproduces the exact same committed physics hash as an untrailed one, at any depth. The ribbon geometry is itself deterministic (its own committed `strokeHash` gate). Storage is a `Float32Array` ring buffer allocated **once** at construction (so `trail: 0`, the default, allocates nothing and is byte-identical to no trails), and recording + stroking are allocation-free on the hot path — verified at ~0 B/frame with a full trailed pool under the torture alloc gate. A garbage capacity fails closed to off or the 64-sample cap; on pool reuse a recycled slot's stale history can never leak (the live sample count resets at spawn). No effect under reduced motion.
+
+### Vortex
+
+Every force so far is uniform in space (`gravity`, `wind`, `gust`) or per-particle random (`turbulence`). A **vortex** (added in v1.10.0) is the first force aimed at a *place* — a point that pulls, pushes, and spins the burst around itself, so confetti can collapse into a logo, drain into a hole, or spiral like a galaxy.
+
+```js
+c.burst({ attract: 6, swirl: 4 });                 // spiral inward around the burst origin
+c.burst({ attract: -8, x: cx, y: cy });            // blow the burst apart from its center
+c.burst({ swirl: 6, attractX: 400, attractY: 300 }); // orbit a fixed point, no net pull
+```
+
+- **`attract`** is a *linear spring*: the pull is `attract × (center − pos)`, so it grows with distance and is **zero at the center** — no `1/r` singularity, no NaN. A positive `attract` is a damped oscillator that spirals inward (`drag` bleeds the energy); a negative one repels.
+- **`swirl`** adds the perpendicular (tangential) component, turning the pull into a spiral; its sign picks the spin direction. Together `(attract, swirl)` apply the matrix `[[attract, −swirl], [swirl, attract]]` to the radius vector.
+- **`attractX` / `attractY`** set the center; they default to the **burst origin**, so a bare `attract`/`swirl` spins around where you fired.
+
+Like every force, the vortex draws **zero random values** — it's a pure function of the particle's own position and the burst center — so a vortexed burst replays identically under a fixed seed (with its own committed fingerprints for attract-only, swirl-only, and both), while the default `0` keeps every prior fingerprint byte-for-byte unchanged. It's applied *before* drag, so it damps toward the center and never runs away; inside a [bounding box](#bounding-box) the edge clamps still contain it. A negative `attract` is an unstable anti-spring, so a fail-closed acceleration cap guarantees a repeller can **never** drive a position to a non-finite value. Garbage fails closed (strengths → `0`, center → the burst origin); negatives are valid. No effect under reduced motion.
 
 ### Canvas Sizing
 
@@ -535,6 +557,14 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.10.0
+
+**Vortex / attractor.** The first *directed* (point) force — a burst can collapse into, blow out from, or spin around a chosen point. Opt-in, zero-rng, fingerprint-safe.
+
+- `attract: number` — a linear-spring pull toward the center (`+` in, `−` out); zero at the center, so no singularity, damped into an inward spiral.
+- `swirl: number` — the tangential (spin) component; sign = direction.
+- `attractX` / `attractY` — the center, defaulting to the burst origin. A negative `attract` is an unstable anti-spring, guarded by a fail-closed acceleration cap so a repeller can never draw a non-finite position. Its own committed fingerprints (attract / swirl / both); every prior physics + trail hash is preserved. See [Vortex](#vortex).
 
 ### v1.9.0
 

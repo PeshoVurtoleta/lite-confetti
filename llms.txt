@@ -1,6 +1,6 @@
 # @zakkster/lite-confetti
 
-> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, turbulence + gust (time-varying living-air forces), a full bounding box (floor + walls + ceiling) with bounce, zero-GC motion trails (fading ribbons), reduced-motion support, and timeline composability.
+> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, turbulence + gust (time-varying living-air forces), a vortex/attractor point force (attract + swirl), a full bounding box (floor + walls + ceiling) with bounce, zero-GC motion trails (fading ribbons), reduced-motion support, and timeline composability.
 
 ## Installation
 npm install @zakkster/lite-confetti
@@ -57,6 +57,9 @@ Full control instance bound to a specific canvas.
 | `sway` | 0 | Horizontal drift 0–1 (0 straight fall). Opt-in side-to-side motion. |
 | `turbulence` | 0 | Per-particle rotating acceleration (px/s²) for organic wander (fans the pool). Opt-in; zero-rng; fingerprint-safe (v1.8.0) |
 | `gust` | 0 | Global sinusoidal horizontal acceleration (px/s²) layered on wind (~3s swells). Opt-in; zero-rng; fingerprint-safe (v1.8.0) |
+| `attract` | 0 | Vortex radial spring strength (1/s², scaled by distance): + pulls toward the center, - repels. Zero at the center (no singularity), damped into an inward spiral. Opt-in; zero-rng; fingerprint-safe (v1.10.0) |
+| `swirl` | 0 | Vortex tangential strength (1/s²): spins particles around the center; sign = spin direction. Opt-in; zero-rng (v1.10.0) |
+| `attractX` / `attractY` | burst origin | Vortex center (CSS px); defaults to where the burst was fired (v1.10.0) |
 | `trail` | capacity | Per-particle motion-trail length 0..capacity (how many recent positions the ribbon spans). Needs a construction `trail` budget; ignored without one. 0 opts a burst out. Pure render overlay; every physics fingerprint preserved (v1.9.0) |
 | `colors` | 7 OKLCH defaults | Array of OKLCH objects `{ l, c, h }` or CSS strings |
 | `angle` | -π/2 (upward) | Center angle of emission cone (radians) |
@@ -65,7 +68,7 @@ Full control instance bound to a specific canvas.
 Spray-only: `duration` (ms, default 1000), `rate` (particles/frame, default 5)
 
 ## Particle Physics
-Each particle has: position (x, y), velocity (vx, vy), gravity, wind, turbulence, gust, floor, bounce, wallLeft, wallRight, ceiling, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame: gravity → wind (guarded, opt-in) → turbulence (guarded, opt-in: per-particle rotating accel from the tilt+spin phases, both axes) → gust (guarded, opt-in: global sin(elapsed*GUST_HZ) horizontal accel) → drag → position update → floor + ceiling collision (guarded, opt-in: clamp + reflect vy) → spin → tilt → sway → wall collision (guarded, opt-in, after sway: clamp + reflect vx). The floor/ceiling/wall collisions together form an opt-in axis-aligned bounding box; turbulence + gust are time-varying forces; every force and edge draws no rng. After the physics, an opt-in RENDER overlay runs: if trails are on, the frame's final (x,y) is appended to a per-particle ring buffer and a fading ribbon is stroked through the recent positions in world space (moveTo/lineTo/stroke, never translate) — it reads but never mutates physics state, so it cannot move any position fingerprint (v1.9.0).
+Each particle has: position (x, y), velocity (vx, vy), gravity, wind, turbulence, gust, vortex center (vortX/vortY) + attract + swirl, floor, bounce, wallLeft, wallRight, ceiling, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame: gravity → wind (guarded, opt-in) → turbulence (guarded, opt-in: per-particle rotating accel from the tilt+spin phases, both axes) → gust (guarded, opt-in: global sin(elapsed*GUST_HZ) horizontal accel) → vortex (guarded, opt-in: linear-spring point force, accel = [[attract,-swirl],[swirl,attract]]·(center-pos), component-capped) → drag → position update → floor + ceiling collision (guarded, opt-in: clamp + reflect vy) → spin → tilt → sway → wall collision (guarded, opt-in, after sway: clamp + reflect vx). The floor/ceiling/wall collisions together form an opt-in axis-aligned bounding box; turbulence + gust are time-varying forces; attract + swirl are a directed point force; every force and edge draws no rng. After the physics, an opt-in RENDER overlay runs: if trails are on, the frame's final (x,y) is appended to a per-particle ring buffer and a fading ribbon is stroked through the recent positions in world space (moveTo/lineTo/stroke, never translate) — it reads but never mutates physics state, so it cannot move any position fingerprint (v1.9.0).
 
 ## Rotation
 Particles rotate via `spin` (angular velocity applied each frame). The `spinV` is randomized per particle at spawn: `(rng.next() - 0.5) * 10` radians/sec. Combined with `tilt` wobble (cosine-driven X-scale oscillation), this produces realistic 3D tumbling.
@@ -74,7 +77,7 @@ Particles rotate via `spin` (angular velocity applied each frame). The `spinV` i
 - SoA flat TypedArrays for cache-friendly particle physics
 - Deterministic: `seed(42)` produces identical output every time
 - 5 built-in shapes (rect, circle, star, triangle, emoji) + `registerShape()` for custom vector/sprite shapes
-- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + turbulence/gust (time-varying living-air forces) + a full bounding box (floor/walls/ceiling) with bounce, all deterministic
+- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + turbulence/gust (time-varying living-air forces) + vortex/attractor (attract + swirl point force) + a full bounding box (floor/walls/ceiling) with bounce, all deterministic
 - Motion trails (v1.9.0): opt-in fading ribbons via a zero-GC fixed ring buffer; a pure render overlay (world-space stroke, never translate) so every physics fingerprint is preserved
 - OKLCH colors (perceptually uniform — every piece looks equally vibrant)
 - Reduced motion: auto-detects `prefers-reduced-motion: reduce`, renders static spread, fades out
@@ -365,9 +368,9 @@ columns (live sample count + draw length), allocated only when trails are on; a 
 cursor advances one integer per frame. trail:0 (default) allocates NOTHING and is byte-identical to
 an engine without trails.
 
-The ribbon is a tapered COMET: one stroke() per segment, alpha + width fading from full at the head
-(the particle) to ~0 at the tail, so a fast piece reads as a motion streak and many overlapping
-trails do not stack into an opaque smear.
+The ribbon is a single FLAT-ALPHA stroke (uniform opacity along its length), so the whole streak
+stays clearly visible. (A per-segment taper to a transparent tail shipped in 1.9.0 was reverted in
+1.10.0 -- it read as too faint; the "smear" it aimed to fix was a misread floor pile, not the trail.)
 
 Pure render overlay -- the headline property: the ribbon is stroked in WORLD space (beginPath +
 moveTo/lineTo + stroke, per segment), never via translate, and it reads (never writes) x/y/vx/vy.
@@ -376,19 +379,19 @@ burst reproduces the EXACT committed physics hash of an untrailed one at any dep
 fingerprint (default 1569828004, mixed 3132631460, wind 2385225781, floored 2679696825, box
 804161759, turbulence 1630588936, gust 4074438162, both 15761758) is preserved. The NEW gate is the
 trail GEOMETRY itself: a mock-ctx `strokeHash` accumulated only on stroke() and kept out of the
-position hash (committed TRAIL_HASH 660640570 on the seed-12345 rig at capacity 10); deeper vs
+position hash (committed TRAIL_HASH 72519212 on the seed-12345 rig at capacity 10); deeper vs
 shallower rings stroke distinct geometry, and the ring buffer + global head are a pure function of
 the seed, so the ribbon replays identically.
 
 Fail closed: a garbage construction capacity coerces to off (0) or the TRAIL_MAX=64 cap (never a
 huge alloc or throw); a garbage per-burst length coerces to full/off/capped. On pool reuse a
 recycled slot's stale history can never leak -- the live count resets to 0 at spawn and grows only
-as the new particle writes fresh samples. Recording is TypedArray stores; the per-segment strokes
-are allocation-free (alpha/width are plain numbers) -- torture T6's mixed lane (full pool, shapes[]
-+ wind + full box + turbulence/gust) is built with trail:16 so every particle records AND strokes a
-tapered ribbon every frame, still ~0 B/frame. No effect under reduced motion (the static render
-records no history). Constants: TRAIL_MAX=64, TRAIL_ALPHA=0.5 (ribbon HEAD opacity vs body; the tail
-fades to 0), TRAIL_WIDTH=0.55 (HEAD line width as a fraction of min(w,h)).
+as the new particle writes fresh samples. Recording is TypedArray stores; the single flat-alpha
+stroke is allocation-free -- torture T6's mixed lane (full pool, shapes[] + wind + full box +
+turbulence/gust + vortex) is built with trail:16 so every particle records AND strokes a ribbon
+every frame, still ~0 B/frame. No effect under reduced motion (the static render records no
+history). Constants: TRAIL_MAX=64, TRAIL_ALPHA=0.5 (ribbon opacity vs body's life-fade),
+TRAIL_WIDTH=0.55 (line width as a fraction of min(w,h)).
 
 The unit gate asserts off-by-default (strokes 0, hash == default), the PURE-OVERLAY proof (trails on
 -> default/floored/box hashes unchanged), fail-closed capacity coercion (incl. 1e9 -> capped 64), the
@@ -399,3 +402,44 @@ spray + reduced-motion. Torture T5 threads capacity + per-burst trail through th
 and checks strokeHash equality alongside the position hash; T6 as above; T1 adds construction- and
 per-burst-trail poison under the finite-position detector. See decision 0010. No runtime dep change.
 Unit suite 113 -> 122.
+
+## v1.10.0 -- vortex / attractor
+
+The first DIRECTED (point) force. Every force before was uniform in space (gravity/wind/gust) or
+per-particle-random (turbulence); a vortex is aimed at a place, so a burst can collapse into, blow
+out from, or spin around a point -- c.burst({ attract: 6, swirl: 4 }). Four flat-scalar knobs:
+`attract` (radial spring strength, 1/s^2 scaled by distance; + pull, - repel), `swirl` (tangential
+strength; sign = spin direction), `attractX`/`attractY` (center, default = the burst origin).
+
+Law -- linear spring (Hooke): accel = attract*(center - pos) + swirl*perp(center - pos), i.e. the
+matrix [[attract,-swirl],[swirl,attract]] applied to the radial vector. Force is ZERO at the center
+(no 1/r singularity, no NaN), so a PULL is a damped oscillator that spirals in; combined with swirl
+it is an inward spiral. Applied after gust and before drag, so it damps toward the center rather than
+running away; inside a bounding box the edge clamps still contain it.
+
+Fail-closed finiteness: a NEGATIVE attract is an anti-spring, exponentially unstable far from the
+center, so without a guard a repeller could drive a position to Float32 Infinity. A cap on the accel
+COMPONENTS (VORTEX_MAX_ACCEL = 50000) bounds velocity growth to linear, so positions stay finite
+over any finite run; it never bites in the normal regime (single-digit attract x few-hundred-px
+radius). Garbage coerces via num() (strengths -> 0 = off, center -> the burst origin); negatives are
+valid (repel / reverse spin).
+
+Zero rng (a pure function of the particle's own position + the burst center), so a vortexed burst
+replays identically under a fixed seed with its own committed fingerprints (attract-only 2926753007,
+swirl-only 2039789049, both 1387388835 -- all distinct), while the default (attract 0 && swirl 0) is
+guarded so no branch fires and EVERY prior fingerprint is preserved (default 1569828004, mixed
+3132631460, wind 2385225781, floored 2679696825, box 804161759, turbulence 1630588936, gust
+4074438162, both 15761758, and the v1.9.0 trail geometry -- positions untouched). Four per-particle
+pool columns (vortX, vortY, attract, swirl, 16 B/particle) so a vortexed burst and a plain burst
+coexist; no hot-path alloc (the guarded block is a few multiplies + the component cap). No
+reduced-motion effect (the static render has no velocity to perturb).
+
+The unit gate asserts opt-in/fail-closed == the default hash, re-asserts floored + box unchanged,
+pins the three new hashes, and proves NON-VACUOUS directional effects a bare hash can't see: attract
+CONVERGES the pool (smaller extent), repel EXPANDS it, +swirl vs -swirl diverge (spin sign is real),
+a pure swirl orbits rather than collapses, and a custom attractX/Y pulls the pool toward that point;
+plus assertFinite under strong attract+swirl+wind+gravity in a box (contained) and a strong-repeller
+finiteness case (the accel cap). Torture T5 threads signed attract/swirl + a jittered center through
+the differential fuzz; T6 lane 5 arms a stable positive attract+swirl on the immortal pool; T1 adds
+attract/swirl/center poison AND strong finite-life repellers under the finite-position detector.
+See decision 0011. No runtime dep change. Unit suite 122 -> 132.

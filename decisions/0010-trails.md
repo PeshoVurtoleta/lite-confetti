@@ -37,8 +37,9 @@ physics fingerprint untouched.
      `804161759`, turbulence `1630588936`, gust `4074438162`, both `15761758`.
    - The NEW committed gate is the trail GEOMETRY itself: a mock-ctx `strokeHash` accumulated only
      on `stroke()` (shapes `fill()`, never `stroke()`, so it is trail-only) and kept out of the
-     position hash, exactly like the `sumX`/`maxY` probes. Committed `TRAIL_HASH = 660640570` on the
-     seed-12345 rig at capacity 10 (this is the tapered-ribbon value; see decision 7).
+     position hash, exactly like the `sumX`/`maxY` probes. Committed `TRAIL_HASH = 72519212` on the
+     seed-12345 rig at capacity 10 (the flat single-stroke value; see decision 7 for the taper that
+     briefly changed this and was reverted).
 
 3. **Capacity is a CONSTRUCTION option; length is per-burst.** A zero-GC ring buffer cannot grow
    lazily, so its depth (the CAPACITY) must be fixed once, at `createConfetti(canvas, { trail: N })`.
@@ -67,23 +68,20 @@ physics fingerprint untouched.
    + sway + walls, so the stored point equals exactly where the body draws that frame -- the ribbon
    terminates at the particle, not one clamp behind it.
 
-7. **Tapered "comet" ribbon (per-segment stroke).** *Revised after first-look feedback:* the ribbon
-   originally shipped as a single flat-alpha `stroke()` per particle (`globalAlpha = bodyAlpha *
-   TRAIL_ALPHA`, uniform width), with a per-segment taper listed as out-of-scope. A demo screenshot
-   at high trail length exposed the flaw: at a uniform 0.4 alpha, many overlapping trails STACK into
-   an opaque smear rather than reading as motion streaks. The fix -- chosen "Both" (library + demo)
-   via AskUserQuestion -- is to draw each segment as its own `stroke()` with alpha AND width fading
-   from full at the head (newest, at the particle) to ~0 at the tail: `tf = (span - k) / span`,
-   `globalAlpha = bodyAlpha * tf`, `lineWidth = wHead * (0.35 + 0.65*tf)`. The faded tail contributes
-   ~0 opacity, so overlaps no longer accumulate. Cost is `n-1` stroke calls per particle, but it is
-   STILL allocation-free -- the per-segment alpha/width are plain numbers, no array, no gradient
-   object (a `createLinearGradient` taper was rejected precisely because it allocates per particle
-   per frame). `colors[i]` (already parsed) is the shared `strokeStyle`. `TRAIL_ALPHA` raised 0.4 ->
-   0.5 (it is now the HEAD opacity, and the taper makes the average fainter); `TRAIL_WIDTH = 0.55`
-   is the HEAD width. Consequence: `strokeHash` now folds `n-1` segment paths instead of one polyline,
-   so the committed `TRAIL_HASH` was re-probed (`72519212` -> `660640570`); the position hash is
-   untouched (still world-space stroke, no translate). Zero-alloc re-verified under torture T6. The
-   demo trail slider max + construction capacity were lowered 24 -> 14 to a tasteful ceiling.
+7. **Flat-alpha single-stroke ribbon** (the shipped look, after a taper detour). The ribbon is one
+   `stroke()` per particle at a uniform `globalAlpha = bodyAlpha * TRAIL_ALPHA` and uniform width,
+   drawn oldest -> newest. `colors[i]` (already parsed) is the `strokeStyle`; zero allocation.
+   `TRAIL_ALPHA = 0.5`, `TRAIL_WIDTH = 0.55`.
+   - *The taper detour (1.9.0 -> reverted 1.10.0):* a demo screenshot looked like an opaque
+     horizontal "smear", read as overlapping trails stacking to opaque. The fix chosen at the time
+     was a per-segment "comet" taper (alpha + width fading to a transparent tail, `n-1` strokes per
+     particle, `TRAIL_HASH` re-probed to `660640570`). But the smear turned out to be a misconfigured
+     `floor` (particles piling up), NOT the trail -- and the taper's transparent tail made the whole
+     ribbon too faint to see on the dark demo. So the taper was reverted to this flat-alpha stroke:
+     `strokeHash` returns to `72519212`, and the demo slider/capacity go back to 24. Lesson recorded:
+     diagnose the actual cause (here, an option the user had set) before changing a renderer.
+   - A `createLinearGradient` taper was (and remains) rejected regardless: it allocates a gradient
+     object per particle per frame, breaking the zero-GC law.
 
 8. **Fail-closed coercion + a hard cap.** Construction capacity:
    `Math.min(TRAIL_MAX, Math.floor(nonneg(trail, 0)))` -- `TRAIL_MAX = 64` bounds the one-time
