@@ -1,10 +1,18 @@
 /**
- * @zakkster/lite-confetti v1.10.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.11.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.11.0 adds: `settle` -- settle-and-pile, the first BEHAVIOUR (lifecycle) feature (every prior
+ * chapter changed how a particle MOVES or DRAWS; this changes how it ENDS). A piece bounces on the
+ * `floor` (losing energy to `bounce` < 1 + `drag`) until the rebound is too weak to lift it -- its
+ * reflected |vy| drops below the `settle` rest threshold -- then it FREEZES in place and piles up,
+ * instead of bouncing forever. A settled piece keeps aging + fading, so it recycles and the pile is
+ * a transient drift (the fixed pool never saturates). Draws ZERO rng (a pure function of the piece's
+ * own post-bounce velocity), so default `0` is byte-identical (every prior fingerprint preserved)
+ * and a settling burst is reproducible for free. Needs a `floor`; no floor => nothing ever settles.
  * v1.10.0 adds: `attract` + `swirl` -- a VORTEX / attractor, the first DIRECTED (point) force.
  * `attract` is a linear-spring pull toward a per-burst center (`attractX`/`attractY`, default the
  * burst origin): accel = attract * (center - pos), zero at the center (no singularity), damped by
@@ -488,6 +496,8 @@ export function createConfetti(canvas, {
         vortY: new Float32Array(maxParticles),   // vortex/attractor center Y (CSS px)
         attract:new Float32Array(maxParticles),  // radial spring strength (1/sec^2); 0 = off, <0 = repel
         swirl: new Float32Array(maxParticles),   // tangential strength (1/sec^2); 0 = off, sign = spin
+        settle:new Float32Array(maxParticles),   // rest-speed threshold (px/sec); 0 = off (never settles)
+        landed:new Uint8Array(maxParticles),     // 1 = at rest on the floor (physics frozen); 0 = active
         shape: new Uint8Array(maxParticles),     // 0..4 built-in, 5+ = registerShape() custom
     };
 
@@ -617,6 +627,11 @@ export function createConfetti(canvas, {
         pool.vortY[i] = config.attractY;
         pool.attract[i] = config.attract;
         pool.swirl[i] = config.swirl;
+        pool.settle[i] = config.settle;
+        // Fail-closed reset: a recycled slot must never inherit the dead particle's frozen state,
+        // or a fresh piece would spawn already "landed" and skip all physics. (Same pool-reuse
+        // subtlety as the trail `trailN = 0` reset.)
+        pool.landed[i] = 0;
         // Motion trail: reset the live sample count to 0 and stamp this burst's draw length.
         // Resetting trailN is the fail-closed guard on pool reuse -- the recycled ring slots
         // still hold the DEAD particle's positions, but we only ever read the last trailN of
@@ -659,112 +674,135 @@ export function createConfetti(canvas, {
 
             alive++;
 
-            // Physics
-            pool.vy[i] += pool.grav[i] * dtSec;
-            // Wind: sustained lateral drift, the X-axis mirror of gravity. Guarded so the
-            // default (wind == 0) leaves vx byte-identical -- gravity is unguarded only
-            // because its default is non-zero; wind defaults to 0, so it follows the sway
-            // discipline (the committed fingerprint depends on this branch never firing by
-            // default). Applied before drag, so wind is damped toward a terminal lateral
-            // velocity exactly as gravity is toward a terminal fall speed.
-            if (pool.wind[i] !== 0) pool.vx[i] += pool.wind[i] * dtSec;
-            // Turbulence: a per-particle rotating acceleration for organic wander. Reuses the
-            // tilt + spin phases (already advanced every frame, seeded once at spawn) so it
-            // draws NO rng -- the curl direction is a pure deterministic function of seeded
-            // state, hence a turbulent burst is reproducible for free. Guarded so turb == 0
-            // leaves vx/vy byte-identical (the committed fingerprints depend on this branch
-            // never firing by default). Decorrelated from `sway` (a position offset from
-            // sin(tilt)) by mixing spin in and driving BOTH axes.
-            if (pool.turb[i] !== 0) {
-                const tp = pool.tilt[i] * 1.7 + pool.spin[i];
-                pool.vx[i] += Math.cos(tp) * pool.turb[i] * dtSec;
-                pool.vy[i] += Math.sin(tp) * pool.turb[i] * dtSec;
-            }
-            // Gust: a global sinusoidal horizontal acceleration (a coherent breeze), layered
-            // on wind. Phase is the shared `_elapsed` clock so the whole pool swells together;
-            // amplitude is per-particle. Guarded so gust == 0 is byte-identical. Applied
-            // before drag, like wind, so it too damps toward a terminal velocity.
-            if (pool.gust[i] !== 0) pool.vx[i] += Math.sin(_elapsed * GUST_HZ) * pool.gust[i] * dtSec;
-            // Vortex: a linear-spring point force. `attract` pulls toward (center - pos) -- the
-            // force is ZERO at the center (no singularity), so a PULL (attract > 0) is a damped
-            // oscillator that spirals in; `swirl` adds the perpendicular tangential component, so
-            // together (at, sw) apply the matrix [[at,-sw],[sw,at]] to the radial vector (pull +
-            // rotation). Draws NO rng -- a pure function of the particle's own position and the
-            // burst center -- so a vortexed burst is reproducible for free. Guarded so the default
-            // (attract == 0 && swirl == 0) leaves vx/vy byte-identical (every committed fingerprint
-            // depends on this branch never firing by default). Applied before drag, like the other
-            // forces, so it damps toward the center rather than running away.
-            if (pool.attract[i] !== 0 || pool.swirl[i] !== 0) {
-                const rx = pool.vortX[i] - pool.x[i];
-                const ry = pool.vortY[i] - pool.y[i];
-                const at = pool.attract[i], sw = pool.swirl[i];
-                let ax = at * rx - sw * ry;
-                let ay = at * ry + sw * rx;
-                // Fail-closed finiteness cap: a NEGATIVE attract is an anti-spring (exponentially
-                // unstable far from the center), so an unclamped repeller could drive a position to
-                // Float32 Infinity. Clamping each accel component bounds velocity growth to linear,
-                // so positions stay finite over any finite run. Never bites in the normal regime.
-                if (ax > VORTEX_MAX_ACCEL) ax = VORTEX_MAX_ACCEL; else if (ax < -VORTEX_MAX_ACCEL) ax = -VORTEX_MAX_ACCEL;
-                if (ay > VORTEX_MAX_ACCEL) ay = VORTEX_MAX_ACCEL; else if (ay < -VORTEX_MAX_ACCEL) ay = -VORTEX_MAX_ACCEL;
-                pool.vx[i] += ax * dtSec;
-                pool.vy[i] += ay * dtSec;
-            }
-            pool.vx[i] *= pool.drag[i];
-            pool.vy[i] *= pool.drag[i];
-            pool.x[i] += pool.vx[i] * dtSec;
-            pool.y[i] += pool.vy[i] * dtSec;
+            // Physics -- skipped ENTIRELY for a landed (settled) piece. A settled piece is frozen
+            // in place: it keeps its exact position AND rotation (no integration, no sway, no spin
+            // advance), so a pile lies still and cannot be nudged by wind/gust/sway. It still ages,
+            // fades, records its trail, and draws below (all OUTSIDE this guard). When `settle` is
+            // unused, `landed[i]` is always 0, so this branch always runs and every committed
+            // fingerprint (default + every force + box + trail) is byte-identical.
+            if (!pool.landed[i]) {
+                pool.vy[i] += pool.grav[i] * dtSec;
+                // Wind: sustained lateral drift, the X-axis mirror of gravity. Guarded so the
+                // default (wind == 0) leaves vx byte-identical -- gravity is unguarded only
+                // because its default is non-zero; wind defaults to 0, so it follows the sway
+                // discipline (the committed fingerprint depends on this branch never firing by
+                // default). Applied before drag, so wind is damped toward a terminal lateral
+                // velocity exactly as gravity is toward a terminal fall speed.
+                if (pool.wind[i] !== 0) pool.vx[i] += pool.wind[i] * dtSec;
+                // Turbulence: a per-particle rotating acceleration for organic wander. Reuses the
+                // tilt + spin phases (already advanced every frame, seeded once at spawn) so it
+                // draws NO rng -- the curl direction is a pure deterministic function of seeded
+                // state, hence a turbulent burst is reproducible for free. Guarded so turb == 0
+                // leaves vx/vy byte-identical (the committed fingerprints depend on this branch
+                // never firing by default). Decorrelated from `sway` (a position offset from
+                // sin(tilt)) by mixing spin in and driving BOTH axes.
+                if (pool.turb[i] !== 0) {
+                    const tp = pool.tilt[i] * 1.7 + pool.spin[i];
+                    pool.vx[i] += Math.cos(tp) * pool.turb[i] * dtSec;
+                    pool.vy[i] += Math.sin(tp) * pool.turb[i] * dtSec;
+                }
+                // Gust: a global sinusoidal horizontal acceleration (a coherent breeze), layered
+                // on wind. Phase is the shared `_elapsed` clock so the whole pool swells together;
+                // amplitude is per-particle. Guarded so gust == 0 is byte-identical. Applied
+                // before drag, like wind, so it too damps toward a terminal velocity.
+                if (pool.gust[i] !== 0) pool.vx[i] += Math.sin(_elapsed * GUST_HZ) * pool.gust[i] * dtSec;
+                // Vortex: a linear-spring point force. `attract` pulls toward (center - pos) -- the
+                // force is ZERO at the center (no singularity), so a PULL (attract > 0) is a damped
+                // oscillator that spirals in; `swirl` adds the perpendicular tangential component, so
+                // together (at, sw) apply the matrix [[at,-sw],[sw,at]] to the radial vector (pull +
+                // rotation). Draws NO rng -- a pure function of the particle's own position and the
+                // burst center -- so a vortexed burst is reproducible for free. Guarded so the default
+                // (attract == 0 && swirl == 0) leaves vx/vy byte-identical (every committed fingerprint
+                // depends on this branch never firing by default). Applied before drag, like the other
+                // forces, so it damps toward the center rather than running away.
+                if (pool.attract[i] !== 0 || pool.swirl[i] !== 0) {
+                    const rx = pool.vortX[i] - pool.x[i];
+                    const ry = pool.vortY[i] - pool.y[i];
+                    const at = pool.attract[i], sw = pool.swirl[i];
+                    let ax = at * rx - sw * ry;
+                    let ay = at * ry + sw * rx;
+                    // Fail-closed finiteness cap: a NEGATIVE attract is an anti-spring (exponentially
+                    // unstable far from the center), so an unclamped repeller could drive a position to
+                    // Float32 Infinity. Clamping each accel component bounds velocity growth to linear,
+                    // so positions stay finite over any finite run. Never bites in the normal regime.
+                    if (ax > VORTEX_MAX_ACCEL) ax = VORTEX_MAX_ACCEL; else if (ax < -VORTEX_MAX_ACCEL) ax = -VORTEX_MAX_ACCEL;
+                    if (ay > VORTEX_MAX_ACCEL) ay = VORTEX_MAX_ACCEL; else if (ay < -VORTEX_MAX_ACCEL) ay = -VORTEX_MAX_ACCEL;
+                    pool.vx[i] += ax * dtSec;
+                    pool.vy[i] += ay * dtSec;
+                }
+                pool.vx[i] *= pool.drag[i];
+                pool.vy[i] *= pool.drag[i];
+                pool.x[i] += pool.vx[i] * dtSec;
+                pool.y[i] += pool.vy[i] * dtSec;
 
-            // Floor: an opt-in settle boundary on the Y axis (the piece lands instead of
-            // falling forever). Guarded so the default (floor == Infinity) NEVER fires --
-            // `y > Infinity` is always false -- leaving y/vy byte-identical to pre-1.6.0, so
-            // the committed default fingerprint is preserved (the same structural-guard trick
-            // as wind's `!= 0`). On contact, clamp onto the floor and reflect vy scaled by
-            // restitution (bounce): 0 rests (pile-up), 1 is perfectly elastic. clamp01 keeps
-            // bounce in 0..1 so a rebound can never ADD energy, and drag still damps vy every
-            // frame, so even bounce == 1 loses energy and settles -- never a runaway. Draws no
-            // rng, so a floored burst stays deterministic under a fixed seed.
-            if (pool.y[i] > pool.floor[i]) {
-                pool.y[i] = pool.floor[i];
-                pool.vy[i] = -pool.vy[i] * pool.bounce[i];
-            }
+                // Floor: an opt-in settle boundary on the Y axis (the piece lands instead of
+                // falling forever). Guarded so the default (floor == Infinity) NEVER fires --
+                // `y > Infinity` is always false -- leaving y/vy byte-identical to pre-1.6.0, so
+                // the committed default fingerprint is preserved (the same structural-guard trick
+                // as wind's `!= 0`). On contact, clamp onto the floor and reflect vy scaled by
+                // restitution (bounce): 0 rests (pile-up), 1 is perfectly elastic. clamp01 keeps
+                // bounce in 0..1 so a rebound can never ADD energy, and drag still damps vy every
+                // frame, so even bounce == 1 loses energy and settles -- never a runaway. Draws no
+                // rng, so a floored burst stays deterministic under a fixed seed.
+                if (pool.y[i] > pool.floor[i]) {
+                    pool.y[i] = pool.floor[i];
+                    pool.vy[i] = -pool.vy[i] * pool.bounce[i];
+                    // Settle: if the rebound is too weak to lift the piece off the floor (the
+                    // reflected |vy| is below the rest threshold), it comes to REST -- freeze it
+                    // here for the rest of its life. It keeps aging + fading (see the life
+                    // countdown above), so the slot still recycles and the pile is a transient
+                    // drift, not a permanent leak. Guarded on settle != 0, so the committed
+                    // floor/box fingerprints are byte-identical when off. The `> -settle &&
+                    // < settle` pair is `|vy| < settle` without a Math.abs call. Draws no rng, so
+                    // a settling burst is deterministic. With bounce == 0 the reflected vy is 0,
+                    // so a piece rests on first contact; a higher bounce just makes it bounce longer
+                    // before the rebound decays below the threshold (drag still bleeds energy every
+                    // frame). With no floor this branch is unreachable, so nothing ever settles.
+                    if (pool.settle[i] !== 0 && pool.vy[i] > -pool.settle[i] && pool.vy[i] < pool.settle[i]) {
+                        pool.landed[i] = 1;
+                        pool.vx[i] = 0;
+                        pool.vy[i] = 0;
+                    }
+                }
 
-            // Ceiling: the Y-min edge of the bounding box (v1.7.0), the mirror of `floor`.
-            // Guarded so the default (ceil == -Infinity) NEVER fires -- `y < -Infinity` is
-            // always false -- so it is byte-identical to pre-1.7.0 and BOTH committed
-            // fingerprints (default + the v1.6.0 floored) are preserved. Separate from the
-            // floor `if` above (not an else) so the floor block stays literally unchanged; for
-            // a valid box (ceil < floor) a single y can't trip both in one frame anyway.
-            // Reuses `bounce` as the shared box restitution; draws no rng (pure physics).
-            if (pool.y[i] < pool.ceil[i]) {
-                pool.y[i] = pool.ceil[i];
-                pool.vy[i] = -pool.vy[i] * pool.bounce[i];
-            }
+                // Ceiling: the Y-min edge of the bounding box (v1.7.0), the mirror of `floor`.
+                // Guarded so the default (ceil == -Infinity) NEVER fires -- `y < -Infinity` is
+                // always false -- so it is byte-identical to pre-1.7.0 and BOTH committed
+                // fingerprints (default + the v1.6.0 floored) are preserved. Separate from the
+                // floor `if` above (not an else) so the floor block stays literally unchanged; for
+                // a valid box (ceil < floor) a single y can't trip both in one frame anyway.
+                // Reuses `bounce` as the shared box restitution; draws no rng (pure physics).
+                if (pool.y[i] < pool.ceil[i]) {
+                    pool.y[i] = pool.ceil[i];
+                    pool.vy[i] = -pool.vy[i] * pool.bounce[i];
+                }
 
-            // Spin + wobble
-            pool.spin[i] += pool.spinV[i] * dtSec;
-            pool.tilt[i] += pool.tiltV[i] * dtSec;
+                // Spin + wobble
+                pool.spin[i] += pool.spinV[i] * dtSec;
+                pool.tilt[i] += pool.tiltV[i] * dtSec;
 
-            // Sway: paper-like side-to-side drift, opt-in. Guarded so the default
-            // (sway == 0) leaves positions byte-identical to pre-1.3.0 -- the committed
-            // determinism fingerprint depends on this branch never firing by default.
-            if (pool.sway[i] !== 0) {
-                pool.x[i] += Math.sin(pool.tilt[i]) * pool.sway[i] * SWAY_PX * dtSec;
-            }
+                // Sway: paper-like side-to-side drift, opt-in. Guarded so the default
+                // (sway == 0) leaves positions byte-identical to pre-1.3.0 -- the committed
+                // determinism fingerprint depends on this branch never firing by default.
+                if (pool.sway[i] !== 0) {
+                    pool.x[i] += Math.sin(pool.tilt[i]) * pool.sway[i] * SWAY_PX * dtSec;
+                }
 
-            // Walls: the X-min / X-max edges of the bounding box (v1.7.0), the X-axis mirror
-            // of `floor`/`ceiling`. Placed AFTER the sway block on purpose -- x is mutated by
-            // BOTH the vx integration above AND sway, so the clamp must be the frame's LAST x
-            // write to actually contain a swaying particle. Guarded so the defaults
-            // (wallL == -Infinity, wallR == +Infinity) NEVER fire -- `x < -Infinity` and
-            // `x > +Infinity` are always false -- so both committed fingerprints are preserved.
-            // if/else-if because a particle can't breach both walls in one frame. Reuses
-            // `bounce` as the shared box restitution; draws no rng (pure physics).
-            if (pool.x[i] < pool.wallL[i]) {
-                pool.x[i] = pool.wallL[i];
-                pool.vx[i] = -pool.vx[i] * pool.bounce[i];
-            } else if (pool.x[i] > pool.wallR[i]) {
-                pool.x[i] = pool.wallR[i];
-                pool.vx[i] = -pool.vx[i] * pool.bounce[i];
+                // Walls: the X-min / X-max edges of the bounding box (v1.7.0), the X-axis mirror
+                // of `floor`/`ceiling`. Placed AFTER the sway block on purpose -- x is mutated by
+                // BOTH the vx integration above AND sway, so the clamp must be the frame's LAST x
+                // write to actually contain a swaying particle. Guarded so the defaults
+                // (wallL == -Infinity, wallR == +Infinity) NEVER fire -- `x < -Infinity` and
+                // `x > +Infinity` are always false -- so both committed fingerprints are preserved.
+                // if/else-if because a particle can't breach both walls in one frame. Reuses
+                // `bounce` as the shared box restitution; draws no rng (pure physics).
+                if (pool.x[i] < pool.wallL[i]) {
+                    pool.x[i] = pool.wallL[i];
+                    pool.vx[i] = -pool.vx[i] * pool.bounce[i];
+                } else if (pool.x[i] > pool.wallR[i]) {
+                    pool.x[i] = pool.wallR[i];
+                    pool.vx[i] = -pool.vx[i] * pool.bounce[i];
+                }
             }
 
             // Motion trail: append this frame's FINAL position (after every clamp above, so the
@@ -932,6 +970,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.swirl=0]     Vortex tangential strength (1/sec^2): spins particles around the center; sign = spin direction. Opt-in, zero-rng
          * @param {number} [options.attractX]    Vortex center X (CSS px); default: the burst origin x
          * @param {number} [options.attractY]    Vortex center Y (CSS px); default: the burst origin y
+         * @param {number} [options.settle=0]    Rest-speed threshold px/sec: a piece whose post-bounce |vy| drops below it freezes on the `floor` and piles (keeps aging + fades). Needs a `floor`. Opt-in, zero-rng, fingerprint-safe
          * @param {number} [options.trail]       Per-particle motion-trail length 0..capacity (default: full capacity). Needs a construction `trail` budget; ignored otherwise. Render overlay, fingerprint-safe
          * @param {Array}  [options.colors]      Array of OKLCH objects or CSS strings
          * @param {number} [options.angle=-Math.PI/2] Center angle of emission cone
@@ -947,6 +986,7 @@ export function createConfetti(canvas, {
                   wind = 0,
                   floor = Infinity,
                   bounce = 0,
+                  settle = 0,
                   wallLeft = -Infinity,
                   wallRight = Infinity,
                   ceiling = -Infinity,
@@ -990,6 +1030,7 @@ export function createConfetti(canvas, {
             swirl = num(swirl, 0);           // signed tangential strength; non-finite => 0 (off)
             floor = num(floor, Infinity);  // opt-in: undefined/NaN/Infinity/string all => no floor
             bounce = clamp01(bounce, 0);   // restitution 0..1; a rebound can never add energy
+            settle = nonneg(settle, 0);    // rest-speed threshold (px/sec); NaN/negative/string => 0 (off)
             wallLeft = num(wallLeft, -Infinity);   // opt-in box edge; non-finite => no left wall
             wallRight = num(wallRight, Infinity);  // opt-in box edge; non-finite => no right wall
             ceiling = num(ceiling, -Infinity);     // opt-in box edge; non-finite => no ceiling
@@ -1043,7 +1084,7 @@ export function createConfetti(canvas, {
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
                 flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), turbulence, gust, trailLen: trailDraw,
-                attract, swirl, attractX: vortX, attractY: vortY,
+                attract, swirl, attractX: vortX, attractY: vortY, settle,
             };
 
             for (let i = 0; i < count; i++) {
@@ -1083,6 +1124,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.swirl=0]        Vortex tangential strength (1/sec^2): spins around the center; sign = direction. Opt-in, zero-rng
          * @param {number} [options.attractX]       Vortex center X (CSS px); default: the spray origin x
          * @param {number} [options.attractY]       Vortex center Y (CSS px); default: the spray origin y
+         * @param {number} [options.settle=0]       Rest-speed threshold px/sec: a piece whose post-bounce |vy| drops below it freezes on the `floor` and piles (keeps aging + fades). Needs a `floor`. Opt-in, zero-rng
          * @param {number} [options.trail]          Per-particle motion-trail length 0..capacity (default: full). Needs a construction `trail` budget; render overlay, fingerprint-safe
          */
         spray({
@@ -1096,6 +1138,7 @@ export function createConfetti(canvas, {
                   wind = 0,
                   floor = Infinity,
                   bounce = 0,
+                  settle = 0,
                   wallLeft = -Infinity,
                   wallRight = Infinity,
                   ceiling = -Infinity,
@@ -1138,6 +1181,7 @@ export function createConfetti(canvas, {
             swirl = num(swirl, 0);           // signed tangential strength; non-finite => 0 (off)
             floor = num(floor, Infinity);  // opt-in: undefined/NaN/Infinity/string all => no floor
             bounce = clamp01(bounce, 0);   // restitution 0..1; a rebound can never add energy
+            settle = nonneg(settle, 0);    // rest-speed threshold (px/sec); NaN/negative/string => 0 (off)
             wallLeft = num(wallLeft, -Infinity);   // opt-in box edge; non-finite => no left wall
             wallRight = num(wallRight, Infinity);  // opt-in box edge; non-finite => no right wall
             ceiling = num(ceiling, -Infinity);     // opt-in box edge; non-finite => no ceiling
@@ -1189,7 +1233,7 @@ export function createConfetti(canvas, {
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
                 flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), turbulence, gust, trailLen: trailDraw,
-                attract, swirl, attractX: vortX, attractY: vortY,
+                attract, swirl, attractX: vortX, attractY: vortY, settle,
             };
 
             // Pointer-follow is opt-in and, by nature, NON-DETERMINISTIC: it injects

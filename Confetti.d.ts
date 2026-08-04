@@ -45,6 +45,15 @@ export interface BurstOptions {
      */
     bounce?: number;
     /**
+     * Rest-speed threshold in CSS px/sec for settle-and-pile (v1.11.0). A piece bounces on
+     * the `floor` (losing energy to `bounce` < 1 and `drag`) until its post-bounce vertical
+     * speed drops below this threshold, then it FREEZES in place and piles up instead of
+     * bouncing forever. A settled piece keeps aging and fades where it rests, so the pool
+     * still recycles (the pile is a transient drift, not a leak). Needs a finite `floor`; with
+     * no floor nothing ever settles. Default 0 (off). Opt-in, zero-rng, fingerprint-safe.
+     */
+    settle?: number;
+    /**
      * Left wall X coordinate in CSS px -- the X-min edge of the bounding box. A particle
      * reaching it is clamped and its horizontal velocity reflected (scaled by `bounce`).
      * Default `-Infinity` (no wall). Opt-in and fingerprint-safe (the default never fires

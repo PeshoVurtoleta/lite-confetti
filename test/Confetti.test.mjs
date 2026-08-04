@@ -76,6 +76,14 @@ const ATTRACT_HASH = 2926753007; // attract: 6  (pull toward the burst origin)
 const SWIRL_HASH   = 2039789049; // swirl: 6    (tangential spin)
 const VORTEX_HASH  = 1387388835; // attract: 6 + swirl: 6  (inward spiral)
 
+// Committed fingerprint for settle-and-pile (v1.11.0, decision 0012). Its own rig -- a burst that
+// falls onto a floor BELOW it and bounces (bounce 0.5) so `settle` has a real bounce-then-rest
+// dynamic to freeze (x400/y150, count 120, rect, life 15, spread 1.8, speed 300, gravity 900,
+// floor 360, settle 80; pump 1+150). The freeze draws NO rng (a pure function of the piece's own
+// post-bounce vy), so this is cross-process stable and its own deterministic-replay gate; it
+// differs from the same rig's no-settle (bouncy) hash.
+const SETTLE_HASH = 4157000621;
+
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
 function withSilencedWarn(fn) {
     const orig = console.warn;
@@ -1400,6 +1408,141 @@ describe('lite-confetti', () => {
                 }
             };
             assert.equal(staticHash({ attract: 10, swirl: 8 }), staticHash({}));
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    //  settle / pile -- the first BEHAVIOUR (lifecycle) feature (v1.11.0, decision 0012)
+    // -------------------------------------------------------------------------
+    describe('settle / pile', () => {
+        // Two rigs. `runStd` is the shared seed-12345 force rig (a plain run reproduces
+        // COMMITTED_HASH), used to prove the new physics-freeze wrap + settle guard perturb NOTHING
+        // when settle is off. `runSettle` is a settle-friendly rig -- a burst that falls onto a
+        // floor BELOW it and bounces (bounce 0.5), so `settle` has a real bounce-then-rest dynamic
+        // to freeze; the record canvas's maxX-minX (extent) captures the "arrests lateral drift"
+        // and "pile stops growing" a bare hash cannot see, and maxY captures floor CONTAINMENT.
+        const runStd = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const h = canvas.hash;
+            c.destroy();
+            return h;
+        };
+        const runSettle = (opts, frames = 150) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ x: 400, y: 150, count: 120, shape: 'rect', lifeMin: 15, lifeMax: 15, spread: 1.8,
+                speed: 300, gravity: 900, floor: 360, bounce: 0.5, ...opts });
+            pump(1, 1000); pump(frames, 16);
+            const out = { hash: canvas.hash, spreadX: canvas.maxX - canvas.minX, maxY: canvas.maxY };
+            c.destroy();
+            return out;
+        };
+
+        it('leaves the default / floor / box fingerprints byte-identical (freeze wrap + guard never fire)', () => {
+            // With settle off, `landed` is always 0, so the `if (!landed)` wrap always runs and the
+            // settle branch never fires -- every prior committed stream must be untouched.
+            assert.equal(runStd({}), COMMITTED_HASH, 'the physics-freeze wrap perturbed the default stream');
+            assert.equal(runStd({ floor: FLOOR_Y }), FLOOR_HASH, 'floor-only fingerprint drifted');
+            assert.equal(runStd({ ...BOX, bounce: 0 }), BOX_HASH, 'box fingerprint drifted');
+        });
+
+        it('omitting / zero / non-finite settle is a no-op vs the same bouncy run (opt-in, fail-closed)', () => {
+            const bouncy = runSettle({}).hash;   // floor + bounce 0.5, no settle
+            assert.equal(runSettle({ settle: 0 }).hash, bouncy);
+            assert.equal(runSettle({ settle: NaN }).hash, bouncy);     // nonneg -> 0
+            assert.equal(runSettle({ settle: null }).hash, bouncy);    // nonneg -> 0
+            assert.equal(runSettle({ settle: -5 }).hash, bouncy);      // negative -> 0
+            assert.equal(runSettle({ settle: 'x' }).hash, bouncy);     // string -> 0
+        });
+
+        it('matches the committed settle fingerprint (deterministic, distinct from bouncy)', () => {
+            const bouncy = runSettle({}).hash;
+            const settled = runSettle({ settle: 80 });
+            if (SETTLE_HASH === null) console.log('[settle] fingerprint =', settled.hash);
+            else assert.equal(settled.hash, SETTLE_HASH, 'settle stream changed vs the committed baseline');
+            assert.notEqual(settled.hash, bouncy, 'settle did not change the stream (else vacuous)');
+            // Zero rng: same seed -> same hash on replay.
+            assert.equal(runSettle({ settle: 80 }).hash, settled.hash, 'settle is not deterministic on replay');
+        });
+
+        it('arrests lateral drift: a settled pool spreads less than a still-sliding one (non-vacuous)', () => {
+            // With a wind, a floored-but-not-settled piece keeps sliding along the floor; a settled
+            // piece freezes on landing. So settle strictly narrows the pool's x-extent.
+            const sliding = runSettle({ wind: 800 }).spreadX;
+            const piled = runSettle({ wind: 800, settle: 80 }).spreadX;
+            assert.ok(piled < sliding, 'settle did not arrest lateral drift (else vacuous)');
+        });
+
+        it('the pile stops growing while an un-settled pool keeps sliding (comes to rest)', () => {
+            // Long life (no deaths in the window) + a steady wind. A settled pool's extent is FROZEN
+            // between two late snapshots (every piece at rest); an un-settled pool's keeps growing as
+            // pieces slide down-wind forever. This is the "it actually comes to rest" proof.
+            const settleEarly = runSettle({ wind: 600, settle: 80 }, 250).spreadX;
+            const settleLate = runSettle({ wind: 600, settle: 80 }, 450).spreadX;
+            assert.equal(settleLate, settleEarly, 'the settled pile kept moving (did not come to rest)');
+            const slideEarly = runSettle({ wind: 600 }, 250).spreadX;
+            const slideLate = runSettle({ wind: 600 }, 450).spreadX;
+            assert.ok(slideLate > slideEarly + 100, 'the un-settled pool should keep sliding (else vacuous)');
+        });
+
+        it('piles AT the floor, and needs a floor to settle (contained, non-vacuous)', () => {
+            const FLOOR2 = 360;
+            assert.equal(runSettle({ settle: 80 }).maxY, FLOOR2, 'settled pieces did not come to rest on the floor');
+            assert.ok(runSettle({ floor: Infinity, settle: 80 }).maxY > FLOOR2,
+                'with no floor nothing should settle -- the fall must overshoot (else vacuous)');
+        });
+
+        it('keeps positions finite AND contained under settle + sway + wind + gravity in a box', () => {
+            const canvas = makeCanvas({ record: true, assertFinite: true });
+            const c = createConfetti(canvas, { seed: 3 });
+            assert.doesNotThrow(() => {
+                c.burst({
+                    x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 5, lifeMax: 5,
+                    wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350,
+                    bounce: 0.6, wind: 2000, gravity: 4000, sway: 1, settle: 90,
+                });
+                pump(1, 1000); pump(80, 16);
+            });
+            assert.ok(canvas.minX >= 350 && canvas.maxX <= 450, 'a piece escaped a wall while settling');
+            assert.ok(canvas.maxY <= 350, 'a settled piece sank below the floor');
+            c.destroy();
+        });
+
+        it('spray() honours settle (deterministic, perturbing stream)', () => {
+            const sprayRun = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 600, rate: 20, x: 400, y: 150, spread: 1.8, lifeMin: 8, lifeMax: 8,
+                    speed: 300, gravity: 900, floor: 360, bounce: 0.5, ...opts });
+                pump(1, 1000); pump(150, 16);
+                const h = canvas.hash;
+                c.destroy();
+                return h;
+            };
+            const bouncy = sprayRun({});
+            assert.equal(sprayRun({}), bouncy, 'bouncy spray not deterministic');
+            assert.notEqual(sprayRun({ settle: 80 }), bouncy, 'spray ignored settle');
+            assert.equal(sprayRun({ settle: 80 }), sprayRun({ settle: 80 }), 'settle spray not deterministic');
+        });
+
+        it('has no effect under reduced motion (static path never integrates, so nothing lands)', () => {
+            const staticHash = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 30, floor: 200, bounce: 0.5, ...opts });
+                    const h = canvas.hash;
+                    c.destroy();
+                    return h;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            assert.equal(staticHash({ settle: 80 }), staticHash({}));
         });
     });
 

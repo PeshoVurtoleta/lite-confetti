@@ -90,6 +90,15 @@ export function run() {
         // drawn position finite over the (finite) life, not just coerce the input.
         ['repeller:-400', { count: 60, x: 400, y: 300, attract: -400, lifeMin: 0.3, lifeMax: 0.3 }],
         ['repeller:-5000', { count: 60, x: 400, y: 300, attract: -5000, swirl: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
+        // Settle poison (v1.11.0): garbage thresholds must coerce to 0 (off), and a settled piece
+        // rests at a FINITE floor -- no non-finite draw position, with or without a valid floor.
+        ['settle:NaN', { count: 60, floor: 50, bounce: 0.5, settle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['settle:Infinity', { count: 60, floor: 50, bounce: 0.5, settle: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['settle:-Infinity', { count: 60, floor: 50, bounce: 0.5, settle: -Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['settle:-90', { count: 60, floor: 50, bounce: 0.5, settle: -90, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['settle:"rest"', { count: 60, floor: 50, bounce: 0.5, settle: 'rest', lifeMin: 0.3, lifeMax: 0.3 }],
+        ['settle+poison-floor', { count: 60, floor: NaN, settle: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['settle+strong-fall', { count: 60, y: 20, gravity: 5000, floor: 300, bounce: 0.5, settle: 120, lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],

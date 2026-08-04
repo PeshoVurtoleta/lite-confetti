@@ -1,6 +1,6 @@
 # @zakkster/lite-confetti
 
-> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, turbulence + gust (time-varying living-air forces), a vortex/attractor point force (attract + swirl), a full bounding box (floor + walls + ceiling) with bounce, zero-GC motion trails (fading ribbons), reduced-motion support, and timeline composability.
+> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, turbulence + gust (time-varying living-air forces), a vortex/attractor point force (attract + swirl), a full bounding box (floor + walls + ceiling) with bounce, settle-and-pile (rest-threshold freeze on the floor), zero-GC motion trails (fading ribbons), reduced-motion support, and timeline composability.
 
 ## Installation
 npm install @zakkster/lite-confetti
@@ -42,6 +42,7 @@ Full control instance bound to a specific canvas.
 | `wind` | 0 | Lateral acceleration (px/s²), the X mirror of gravity. Positive = right, negative = left. Opt-in; fingerprint-safe (v1.5.0) |
 | `floor` | Infinity | Settle-boundary Y (CSS px); particles clamp onto it instead of falling forever. Opt-in; fingerprint-safe (v1.6.0) |
 | `bounce` | 0 | Restitution 0..1 on ANY boundary contact (0 rests/piles up, 1 elastic); shared by floor + walls + ceiling (v1.6.0/v1.7.0) |
+| `settle` | 0 | Rest-speed threshold (px/s): a piece whose post-bounce speed drops below it freezes on the `floor` and piles up (keeps aging + fades). Needs a `floor`. Opt-in; zero-rng; fingerprint-safe (v1.11.0) |
 | `wallLeft` | -Infinity | Left wall X (CSS px); the X-min edge of the bounding box. Particles clamp and reflect vx. Opt-in; fingerprint-safe (v1.7.0) |
 | `wallRight` | Infinity | Right wall X (CSS px); the X-max edge. Opt-in; fingerprint-safe (v1.7.0) |
 | `ceiling` | -Infinity | Ceiling Y (CSS px); the Y-min edge, mirror of `floor`. Particles clamp and reflect vy. Opt-in; fingerprint-safe (v1.7.0) |
@@ -68,7 +69,7 @@ Full control instance bound to a specific canvas.
 Spray-only: `duration` (ms, default 1000), `rate` (particles/frame, default 5)
 
 ## Particle Physics
-Each particle has: position (x, y), velocity (vx, vy), gravity, wind, turbulence, gust, vortex center (vortX/vortY) + attract + swirl, floor, bounce, wallLeft, wallRight, ceiling, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame: gravity → wind (guarded, opt-in) → turbulence (guarded, opt-in: per-particle rotating accel from the tilt+spin phases, both axes) → gust (guarded, opt-in: global sin(elapsed*GUST_HZ) horizontal accel) → vortex (guarded, opt-in: linear-spring point force, accel = [[attract,-swirl],[swirl,attract]]·(center-pos), component-capped) → drag → position update → floor + ceiling collision (guarded, opt-in: clamp + reflect vy) → spin → tilt → sway → wall collision (guarded, opt-in, after sway: clamp + reflect vx). The floor/ceiling/wall collisions together form an opt-in axis-aligned bounding box; turbulence + gust are time-varying forces; attract + swirl are a directed point force; every force and edge draws no rng. After the physics, an opt-in RENDER overlay runs: if trails are on, the frame's final (x,y) is appended to a per-particle ring buffer and a fading ribbon is stroked through the recent positions in world space (moveTo/lineTo/stroke, never translate) — it reads but never mutates physics state, so it cannot move any position fingerprint (v1.9.0).
+Each particle has: position (x, y), velocity (vx, vy), gravity, wind, turbulence, gust, vortex center (vortX/vortY) + attract + swirl, floor, bounce, settle (rest threshold) + landed (frozen flag), wallLeft, wallRight, ceiling, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame (the WHOLE block below is skipped for a `landed` piece — a settled piece is frozen in place): gravity → wind (guarded, opt-in) → turbulence (guarded, opt-in: per-particle rotating accel from the tilt+spin phases, both axes) → gust (guarded, opt-in: global sin(elapsed*GUST_HZ) horizontal accel) → vortex (guarded, opt-in: linear-spring point force, accel = [[attract,-swirl],[swirl,attract]]·(center-pos), component-capped) → drag → position update → floor + ceiling collision (guarded, opt-in: clamp + reflect vy; the floor block also holds the settle test: if `settle` and the reflected |vy| < settle, freeze the piece — landed=1, vx=vy=0) → spin → tilt → sway → wall collision (guarded, opt-in, after sway: clamp + reflect vx). The floor/ceiling/wall collisions together form an opt-in axis-aligned bounding box; turbulence + gust are time-varying forces; attract + swirl are a directed point force; settle is a lifecycle behaviour (a settled piece keeps aging + fading, so the pool still recycles); every force, edge, and the rest test draws no rng. After the physics, an opt-in RENDER overlay runs: if trails are on, the frame's final (x,y) is appended to a per-particle ring buffer and a fading ribbon is stroked through the recent positions in world space (moveTo/lineTo/stroke, never translate) — it reads but never mutates physics state, so it cannot move any position fingerprint (v1.9.0).
 
 ## Rotation
 Particles rotate via `spin` (angular velocity applied each frame). The `spinV` is randomized per particle at spawn: `(rng.next() - 0.5) * 10` radians/sec. Combined with `tilt` wobble (cosine-driven X-scale oscillation), this produces realistic 3D tumbling.
@@ -77,7 +78,7 @@ Particles rotate via `spin` (angular velocity applied each frame). The `spinV` i
 - SoA flat TypedArrays for cache-friendly particle physics
 - Deterministic: `seed(42)` produces identical output every time
 - 5 built-in shapes (rect, circle, star, triangle, emoji) + `registerShape()` for custom vector/sprite shapes
-- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + turbulence/gust (time-varying living-air forces) + vortex/attractor (attract + swirl point force) + a full bounding box (floor/walls/ceiling) with bounce, all deterministic
+- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + turbulence/gust (time-varying living-air forces) + vortex/attractor (attract + swirl point force) + a full bounding box (floor/walls/ceiling) with bounce + settle-and-pile (rest-threshold freeze on the floor), all deterministic
 - Motion trails (v1.9.0): opt-in fading ribbons via a zero-GC fixed ring buffer; a pure render overlay (world-space stroke, never translate) so every physics fingerprint is preserved
 - OKLCH colors (perceptually uniform — every piece looks equally vibrant)
 - Reduced motion: auto-detects `prefers-reduced-motion: reduce`, renders static spread, fades out
@@ -443,3 +444,45 @@ finiteness case (the accel cap). Torture T5 threads signed attract/swirl + a jit
 the differential fuzz; T6 lane 5 arms a stable positive attract+swirl on the immortal pool; T1 adds
 attract/swirl/center poison AND strong finite-life repellers under the finite-position detector.
 See decision 0011. No runtime dep change. Unit suite 122 -> 132.
+
+## v1.11.0 -- settle / pile
+
+The first BEHAVIOUR (lifecycle) feature. Every chapter before changed how a particle MOVES (forces)
+or DRAWS (trails); this changes how it ENDS. One flat-scalar knob: `settle` (rest-speed threshold,
+px/s; 0 = off). A piece bounces on the `floor` (losing energy to bounce < 1 + drag) until the
+rebound is too weak to lift it -- its reflected |vy| drops below `settle` -- then it FREEZES in
+place and piles up instead of bouncing forever -- c.burst({ floor: 520, bounce: 0.4, settle: 60 }).
+
+Law -- bounce-then-rest. The rest test lives INSIDE the (already opt-in) floor block: right after
+the floor clamps y and reflects vy, if `settle != 0 && |vy| < settle` the piece is marked landed
+(vx = vy = 0). A landed piece is frozen: the WHOLE physics span (gravity through the wall clamps) is
+wrapped in `if (!landed)`, so it skips integration, collision, spin, tilt, and sway -- position AND
+rotation frozen, so a pile lies still and wind/gust/sway can't nudge it. With bounce 0 a piece rests
+on first contact; a higher bounce just delays the rest (drag still bleeds energy each frame), and
+with no floor this branch is unreachable so nothing ever settles (fail-closed -- needs a floor).
+
+Keeps aging, transient pile. A landed piece still counts down its life and fades in place (the life
+countdown + fade + trail record + render all sit OUTSIDE the freeze wrap), then its slot recycles --
+so the fixed zero-GC pool never saturates and new bursts always spawn. The alternative (freeze
+immortal = a permanent pile) would saturate the pool and block spawns, so it is deliberately NOT the
+default. Garbage coerces via nonneg() (NaN/negative/string -> 0 = off); a settled piece rests at a
+finite floor Y, so no non-finite draw position can result.
+
+Zero rng (a pure function of the piece's own post-bounce velocity), so a settling burst replays
+identically under a fixed seed with its own committed fingerprint (SETTLE_HASH 4157000621 on a
+bounce-0.5 floor rig), while the default (settle 0) leaves `landed` always 0, so the `if (!landed)`
+wrap always runs and EVERY prior fingerprint is preserved (default 1569828004, floored 2679696825,
+box 804161759, all forces, and the v1.9.0 trail geometry -- positions untouched). Two per-particle
+pool columns (settle Float32 + landed Uint8, 5 B/particle); spawn() resets landed = 0 (a recycled
+slot can never inherit a dead piece's frozen state). No hot-path alloc -- a frozen pile is pure
+reads. No reduced-motion effect (the static render never integrates, so nothing lands).
+
+The unit gate asserts default/floor/box hashes byte-identical (the freeze wrap + guard never fire
+when off), opt-in/fail-closed settle == the same bouncy run, pins SETTLE_HASH (distinct from bouncy,
+deterministic), and proves NON-VACUOUS effects a bare hash can't see: settle ARRESTS lateral drift
+(a settled pool spreads less than a still-sliding one under wind), the pile STOPS GROWING while an
+un-settled pool keeps sliding (comes to rest), pieces pile AT the floor (maxY == floor) and need a
+floor to settle; plus assertFinite under settle+sway+wind+gravity in a box (contained). Torture T5
+threads settle + a floor through the differential fuzz; T6 adds a fully-settled (frozen) pile lane
+to the alloc gate; T1 adds settle + floor poison under the finite-position detector. See decision
+0012. No runtime dep change. Unit suite 132 -> 141.

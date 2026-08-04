@@ -136,6 +136,27 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- shapes[] dispatch is allocating');
     }
 
+    // (6) A SETTLED pile (v1.11.0): an immortal pool under strong gravity onto a reachable
+    // `floor` with `settle` armed, so every particle bounces a few times and then FREEZES.
+    // Within a frame or two the WHOLE pool is `landed`, so update() takes the `if (!landed)`
+    // skip for every particle every frame -- a landed piece must still be pure reads (its life
+    // countdown + trail record + fade + render), allocating nothing. This is the frozen-pile
+    // analog of the resting-pool lanes above: a saturated pile is the steady state settle
+    // produces, and it must integrate at the same ~0 B/frame as an active pool.
+    const cs = createConfetti(makeCanvas(), { seed: 8128, maxParticles: MAXP });
+    cs.burst({
+        count: MAXP, lifeMin: 1e6, lifeMax: 1e6, sizeMin: 4, sizeMax: 12,
+        y: 50, speed: 200, gravity: 3000, floor: 400, bounce: 0.4, settle: 90,
+    });
+    pump(1, 1000); pump(30, 16); // let the pool fall + bounce + freeze into a pile
+    check(cs.count === MAXP, () => `T6: settled pool has ${cs.count} alive, expected ${MAXP}`);
+    const bpfSettle = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    cs.destroy();
+    if (bpfSettle > RETAIN_FLOOR_BPF) {
+        die('T6: settled-pile update() retains ' + bpfSettle.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the frozen (landed) path is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -147,6 +168,7 @@ export async function run() {
     log('  T6 ok -- update() ' + bpf.toFixed(2) + ' B/frame over ' + MAXP + ' particles ('
         + bpfCustom.toFixed(2) + ' B/frame custom vector+sprite+sway, '
         + bpfPoison.toFixed(2) + ' B/frame from sanitised garbage inputs, '
-        + bpfMix.toFixed(2) + ' B/frame from a shapes[] mix under wind + full box + turbulence/gust + vortex + trails); '
+        + bpfMix.toFixed(2) + ' B/frame from a shapes[] mix under wind + full box + turbulence/gust + vortex + trails, '
+        + bpfSettle.toFixed(2) + ' B/frame from a fully-settled (frozen) pile); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

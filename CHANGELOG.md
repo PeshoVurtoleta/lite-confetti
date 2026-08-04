@@ -3,6 +3,54 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.11.0] - 2026-08-04
+
+Feature release: `settle` -- **settle-and-pile**, the first **behaviour (lifecycle)** feature.
+Every chapter until now changed how a particle *moves* (forces) or *draws* (trails); this one
+changes how it *ends*. A piece bounces on the `floor` (losing energy to `bounce` < 1 and `drag`)
+until the rebound is too weak to lift it -- its post-bounce vertical speed drops below the `settle`
+rest threshold -- then it **freezes in place** and piles up, instead of bouncing forever. A settled
+piece keeps aging and fades where it rests, so its slot still recycles: the pile is a *transient
+drift* that builds and melts, and the fixed zero-GC pool never saturates. The rest test draws
+**zero rng** (a pure function of the piece's own post-bounce velocity), so default `0` is
+byte-identical -- every prior committed fingerprint is preserved (default `1569828004`, mixed, wind,
+floored `2679696825`, box `804161759`, turbulence `1630588936`, gust `4074438162`, vortex
+`1387388835`/`2926753007`/`2039789049`, and the v1.9.0 trail geometry) -- and a settling burst is
+reproducible for free with its own committed fingerprint.
+
+### Added
+- **`settle: number` on `burst()`/`spray()`** -- rest-speed threshold in CSS px/sec. A piece whose
+  post-bounce vertical speed drops below it freezes on the `floor` and piles up (it keeps aging +
+  fading, so the slot recycles). Default `0` (off). Needs a finite `floor`; with no floor nothing
+  ever settles.
+
+### Semantics
+- **Opt-in, zero-cost by default.** Settle is guarded on `settle !== 0` inside the (already opt-in)
+  floor block, and the physics loop is wrapped in `if (!landed)` -- with settle off, no piece is
+  ever `landed`, so the wrap always runs and every prior committed fingerprint (physics + the trail
+  geometry) is byte-identical.
+- **Bounce, then rest.** A piece keeps bouncing (energy lost to `bounce` < 1 and `drag`) until the
+  reflected `|vy|` falls below `settle`, then it freezes: velocity zeroed, pinned on the floor,
+  physics skipped (position *and* rotation frozen -- a pile lies still, unmoved by wind/gust/sway).
+  With `bounce = 0` a piece rests on first contact; a higher `bounce` just delays the rest (`drag`
+  still bleeds energy each frame), and with no `floor` nothing settles.
+- **Keeps aging, transient pile.** A settled piece still counts down its life and fades in place,
+  then the slot recycles -- so a fixed pool never saturates and new bursts always spawn.
+- **Deterministic when on.** The rest test draws no rng (post-bounce velocity only), so a settling
+  burst replays identically under a fixed seed, with its own committed fingerprint.
+- **Fail closed.** A non-finite/negative/garbage threshold coerces via `nonneg()` to `0` (off). A
+  settled piece rests at a finite floor Y, so no non-finite draw position can result.
+- **No reduced-motion effect** -- the static render never integrates, so nothing ever lands.
+
+### Internal
+- Two per-particle columns: `settle` (Float32, the threshold) and `landed` (Uint8, the frozen flag);
+  `spawn()` sets `settle` and resets `landed = 0` (a recycled slot can never inherit a dead piece's
+  frozen state).
+- The `update()` physics span (gravity through the wall clamps) is wrapped in `if (!landed)`; the
+  rest test is appended inside the floor block; a landed piece still ages, records its trail, fades,
+  and draws (all outside the wrap). Torture T6 gains a fully-settled (frozen) pile lane -- a
+  saturated pile integrates at the same ~0 B/frame as an active pool.
+
 ## [1.10.0] - 2026-08-03
 
 Feature release: `attract` + `swirl` -- a **vortex / attractor**, the first **directed (point)**

@@ -10,8 +10,8 @@
 Deterministic confetti engine with OKLCH colors, 5 built-in shapes plus custom
 `registerShape()` shapes (vector or image sprite), per-particle multi-shape mixing,
 tunable flutter, lateral wind, turbulence + gust (living-air forces), a vortex/attractor
-point force, a full bounding box (floor, walls, ceiling) with bounce, zero-GC motion trails,
-and reduced-motion support.
+point force, a full bounding box (floor, walls, ceiling) with bounce, settle-and-pile,
+zero-GC motion trails, and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -85,6 +85,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `wind` | number | 0 | Lateral acceleration in px/s² — the sideways mirror of `gravity`. Positive drifts right, negative left. Opt-in; `0` = straight down. See [Wind](#wind--lateral-drift). |
 | `floor` | number | Infinity | Settle-boundary Y in CSS px. Particles that reach it land on the line instead of falling forever. Opt-in; `Infinity` = no floor. See [Floor](#floor--settle--bounce). |
 | `bounce` | number | 0 | Restitution `0–1` on **any** boundary contact (floor and walls alike): `0` rests (pile-up), `1` is perfectly elastic. Shared by the whole [bounding box](#bounding-box). |
+| `settle` | number | 0 | Rest-speed threshold in px/s. A piece whose post-bounce speed drops below it **freezes** on the `floor` and piles up (keeps aging + fades). Opt-in; `0` = off. Needs a `floor`. See [Settle & pile](#settle--pile). |
 | `wallLeft` | number | -Infinity | Left wall X in CSS px — the X-min edge of the [bounding box](#bounding-box). Particles reaching it clamp and reflect `vx`. Opt-in; `-Infinity` = no wall. |
 | `wallRight` | number | Infinity | Right wall X in CSS px — the X-max edge. Opt-in; `Infinity` = no wall. |
 | `ceiling` | number | -Infinity | Ceiling Y in CSS px — the Y-min edge, the mirror of `floor`. Particles rising past it clamp and reflect `vy`. Opt-in; `-Infinity` = no ceiling. |
@@ -137,6 +138,7 @@ Spray accepts all burst options plus:
 Every frame, each alive particle runs through this pipeline:
 
 ```
+0.  FROZEN?     if the piece has SETTLED (landed on the floor), skip steps 1–13 entirely   (opt-in; it still ages, fades, and draws)
 1.  GRAVITY     vy += gravity × dt        (downward acceleration)
 2.  WIND        vx += wind × dt           (opt-in lateral acceleration)
 3.  TURBULENCE  vx += cos(p) × turb × dt, vy += sin(p) × turb × dt   (opt-in, p = tilt+spin phase)
@@ -145,6 +147,7 @@ Every frame, each alive particle runs through this pipeline:
 6.  DRAG        vx *= drag, vy *= drag    (air resistance)
 7.  POSITION    x += vx × dt, y += vy × dt
 8.  FLOOR       if y > floor:   y = floor,   vy = −vy × bounce   (opt-in, box Y-max)
+                 └─ SETTLE: if |vy| < settle, freeze the piece here (landed = true)   (opt-in; bounce-then-rest)
 9.  CEILING     if y < ceiling: y = ceiling, vy = −vy × bounce   (opt-in, box Y-min)
 10. SWAY        x += sin(tiltPhase) × sway × dt   (opt-in horizontal drift)
 11. WALLS       if x < wallLeft:  x = wallLeft,  vx = −vx × bounce   (opt-in, box X-min)
@@ -156,7 +159,7 @@ Every frame, each alive particle runs through this pipeline:
 16. RENDER      translate → rotate → flutter-scale → draw shape
 ```
 
-Steps 1–13 are **physics** (they mutate `x/y/vx/vy`); steps 14–16 are **rendering**. `trail` (step 15) is the first purely-render feature: it *reads* the position but draws a stroked polyline in world space (never `translate`), so it cannot move the determinism fingerprint — every committed physics hash is preserved at any trail depth.
+Steps 1–13 are **physics** (they mutate `x/y/vx/vy`); steps 14–16 are **rendering**. `trail` (step 15) is the first purely-render feature: it *reads* the position but draws a stroked polyline in world space (never `translate`), so it cannot move the determinism fingerprint — every committed physics hash is preserved at any trail depth. Step 0 is the first **behaviour** feature: once a piece has `settle`d it is `landed`, so the whole physics block is skipped and it lies frozen — but it keeps ageing and drawing, so nothing else about the pipeline changes.
 
 ### Rotation & 3D Tumbling
 
@@ -252,6 +255,21 @@ c.burst({ swirl: 6, attractX: 400, attractY: 300 }); // orbit a fixed point, no 
 - **`attractX` / `attractY`** set the center; they default to the **burst origin**, so a bare `attract`/`swirl` spins around where you fired.
 
 Like every force, the vortex draws **zero random values** — it's a pure function of the particle's own position and the burst center — so a vortexed burst replays identically under a fixed seed (with its own committed fingerprints for attract-only, swirl-only, and both), while the default `0` keeps every prior fingerprint byte-for-byte unchanged. It's applied *before* drag, so it damps toward the center and never runs away; inside a [bounding box](#bounding-box) the edge clamps still contain it. A negative `attract` is an unstable anti-spring, so a fail-closed acceleration cap guarantees a repeller can **never** drive a position to a non-finite value. Garbage fails closed (strengths → `0`, center → the burst origin); negatives are valid. No effect under reduced motion.
+
+### Settle & pile
+
+Every earlier feature changed how a particle *moves* or *draws*. **Settle** (added in v1.11.0) is the first one that changes how a particle *ends*: instead of bouncing on the `floor` forever, a piece comes to **rest** and piles up — snow settling, ticker-tape drifting on the ground.
+
+```js
+c.burst({ floor: 520, bounce: 0.4, settle: 60 });   // fall, bounce a few times, then pile up
+```
+
+- **`settle`** is a *rest-speed threshold* in px/s. Each frame a piece bounces on the floor it loses energy (to `bounce` < 1 and `drag`); once the rebound is too weak to lift it — its post-bounce speed drops below `settle` — the piece **freezes**: velocity zeroed, pinned on the floor line, physics skipped. With `bounce = 0` a piece rests on first contact; a higher `bounce` just makes it bounce longer before it settles (`drag` still bleeds energy each frame), and with no `floor` nothing settles at all.
+- **It needs a `floor`.** Settle only ever fires as a piece lands on the floor, so with no floor set nothing settles (fail-closed).
+- **A settled piece keeps ageing and fades in place**, then its slot recycles — so the pile is a *transient drift* that builds and melts, and the fixed particle pool never fills up. (A permanent pile would saturate the pool and block new bursts, so it's deliberately not the default.)
+- A frozen piece is truly still: its **rotation is frozen too**, and lateral forces (`wind`, `gust`, `sway`) can't nudge it — a pile lies where it landed.
+
+Like every knob, settle draws **zero random values** (a pure function of the piece's own post-bounce velocity), so a settling burst replays identically under a fixed seed with its own committed fingerprint, and the default `0` keeps every prior fingerprint byte-for-byte unchanged. A garbage threshold fails closed to `0` (off). No effect under reduced motion — the static render never integrates, so nothing lands.
 
 ### Canvas Sizing
 
@@ -557,6 +575,13 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.11.0
+
+**Settle & pile.** The first *behaviour* (lifecycle) feature — a piece bounces on the `floor` until the rebound is too weak to lift it, then freezes and piles up instead of bouncing forever. Opt-in, zero-rng, fingerprint-safe.
+
+- `settle: number` — rest-speed threshold (px/s). A piece whose post-bounce speed drops below it freezes on the floor. Needs a `floor`; with `bounce = 0` it rests on first contact, with `bounce = 1` never.
+- A settled piece keeps ageing and fades in place, then recycles — the pile is a transient drift, so the fixed pool never saturates. Rotation freezes too; wind/gust/sway can't nudge a landed piece. Its own committed fingerprint; every prior physics + trail hash is preserved. See [Settle & pile](#settle--pile).
 
 ### v1.10.0
 
