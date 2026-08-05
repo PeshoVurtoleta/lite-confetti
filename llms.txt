@@ -1,6 +1,6 @@
 # @zakkster/lite-confetti
 
-> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, turbulence + gust (time-varying living-air forces), a vortex/attractor point force (attract + swirl), a full bounding box (floor + walls + ceiling) with bounce, settle-and-pile (rest-threshold freeze on the floor), zero-GC motion trails (fading ribbons), reduced-motion support, and timeline composability.
+> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, turbulence + gust (time-varying living-air forces), a vortex/attractor point force (attract + swirl), a full bounding box (floor + walls + ceiling) with bounce, settle-and-pile (rest-threshold freeze on the floor), zero-GC motion trails (fading ribbons), color-over-life ramps (multi-stop OKLCH per-life gradients), reduced-motion support, and timeline composability.
 
 ## Installation
 npm install @zakkster/lite-confetti
@@ -63,13 +63,14 @@ Full control instance bound to a specific canvas.
 | `attractX` / `attractY` | burst origin | Vortex center (CSS px); defaults to where the burst was fired (v1.10.0) |
 | `trail` | capacity | Per-particle motion-trail length 0..capacity (how many recent positions the ribbon spans). Needs a construction `trail` budget; ignored without one. 0 opts a burst out. Pure render overlay; every physics fingerprint preserved (v1.9.0) |
 | `colors` | 7 OKLCH defaults | Array of OKLCH objects `{ l, c, h }` or CSS strings |
+| `lifeColors` | - | Multi-stop OKLCH life ramp (>= 2 stops, birth-color first): the BODY sweeps it over each particle's life (sparks cooling white->red). Baked once per burst via bakeCssGradient, indexed by life fraction; the trail stays the flat `colors` pick. Invalid/short -> flat color. Opt-in; zero-rng; a pure color overlay, every position fingerprint preserved (v1.12.0) |
 | `angle` | -π/2 (upward) | Center angle of emission cone (radians) |
 | `onComplete` | — | Called when all burst particles die |
 
 Spray-only: `duration` (ms, default 1000), `rate` (particles/frame, default 5)
 
 ## Particle Physics
-Each particle has: position (x, y), velocity (vx, vy), gravity, wind, turbulence, gust, vortex center (vortX/vortY) + attract + swirl, floor, bounce, settle (rest threshold) + landed (frozen flag), wallLeft, wallRight, ceiling, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame (the WHOLE block below is skipped for a `landed` piece — a settled piece is frozen in place): gravity → wind (guarded, opt-in) → turbulence (guarded, opt-in: per-particle rotating accel from the tilt+spin phases, both axes) → gust (guarded, opt-in: global sin(elapsed*GUST_HZ) horizontal accel) → vortex (guarded, opt-in: linear-spring point force, accel = [[attract,-swirl],[swirl,attract]]·(center-pos), component-capped) → drag → position update → floor + ceiling collision (guarded, opt-in: clamp + reflect vy; the floor block also holds the settle test: if `settle` and the reflected |vy| < settle, freeze the piece — landed=1, vx=vy=0) → spin → tilt → sway → wall collision (guarded, opt-in, after sway: clamp + reflect vx). The floor/ceiling/wall collisions together form an opt-in axis-aligned bounding box; turbulence + gust are time-varying forces; attract + swirl are a directed point force; settle is a lifecycle behaviour (a settled piece keeps aging + fading, so the pool still recycles); every force, edge, and the rest test draws no rng. After the physics, an opt-in RENDER overlay runs: if trails are on, the frame's final (x,y) is appended to a per-particle ring buffer and a fading ribbon is stroked through the recent positions in world space (moveTo/lineTo/stroke, never translate) — it reads but never mutates physics state, so it cannot move any position fingerprint (v1.9.0).
+Each particle has: position (x, y), velocity (vx, vy), gravity, wind, turbulence, gust, vortex center (vortX/vortY) + attract + swirl, floor, bounce, settle (rest threshold) + landed (frozen flag), wallLeft, wallRight, ceiling, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame (the WHOLE block below is skipped for a `landed` piece — a settled piece is frozen in place): gravity → wind (guarded, opt-in) → turbulence (guarded, opt-in: per-particle rotating accel from the tilt+spin phases, both axes) → gust (guarded, opt-in: global sin(elapsed*GUST_HZ) horizontal accel) → vortex (guarded, opt-in: linear-spring point force, accel = [[attract,-swirl],[swirl,attract]]·(center-pos), component-capped) → drag → position update → floor + ceiling collision (guarded, opt-in: clamp + reflect vy; the floor block also holds the settle test: if `settle` and the reflected |vy| < settle, freeze the piece — landed=1, vx=vy=0) → spin → tilt → sway → wall collision (guarded, opt-in, after sway: clamp + reflect vx). The floor/ceiling/wall collisions together form an opt-in axis-aligned bounding box; turbulence + gust are time-varying forces; attract + swirl are a directed point force; settle is a lifecycle behaviour (a settled piece keeps aging + fading, so the pool still recycles); every force, edge, and the rest test draws no rng. After the physics, an opt-in RENDER overlay runs: if trails are on, the frame's final (x,y) is appended to a per-particle ring buffer and a fading ribbon is stroked through the recent positions in world space (moveTo/lineTo/stroke, never translate) — it reads but never mutates physics state, so it cannot move any position fingerprint (v1.9.0). The body's fill color is then chosen: if `lifeColors` is set, the piece's baked ramp is indexed by its life fraction (`step = clamp(floor((1 - life/maxL) * (RAMP_N-1)))`) for a pure array read; otherwise the flat per-particle `colors[i]`. Color-over-life draws no rng and moves no position, so it is a pure color overlay -- every position fingerprint is preserved, the palette `colors` still colors the flat trail, and an invalid ramp fails closed to the flat color (v1.12.0).
 
 ## Rotation
 Particles rotate via `spin` (angular velocity applied each frame). The `spinV` is randomized per particle at spawn: `(rng.next() - 0.5) * 10` radians/sec. Combined with `tilt` wobble (cosine-driven X-scale oscillation), this produces realistic 3D tumbling.
@@ -78,7 +79,7 @@ Particles rotate via `spin` (angular velocity applied each frame). The `spinV` i
 - SoA flat TypedArrays for cache-friendly particle physics
 - Deterministic: `seed(42)` produces identical output every time
 - 5 built-in shapes (rect, circle, star, triangle, emoji) + `registerShape()` for custom vector/sprite shapes
-- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + turbulence/gust (time-varying living-air forces) + vortex/attractor (attract + swirl point force) + a full bounding box (floor/walls/ceiling) with bounce + settle-and-pile (rest-threshold freeze on the floor), all deterministic
+- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + turbulence/gust (time-varying living-air forces) + vortex/attractor (attract + swirl point force) + a full bounding box (floor/walls/ceiling) with bounce + settle-and-pile (rest-threshold freeze on the floor) + color-over-life (multi-stop OKLCH ramp swept over each particle's life), all deterministic
 - Motion trails (v1.9.0): opt-in fading ribbons via a zero-GC fixed ring buffer; a pure render overlay (world-space stroke, never translate) so every physics fingerprint is preserved
 - OKLCH colors (perceptually uniform — every piece looks equally vibrant)
 - Reduced motion: auto-detects `prefers-reduced-motion: reduce`, renders static spread, fades out
@@ -444,6 +445,36 @@ finiteness case (the accel cap). Torture T5 threads signed attract/swirl + a jit
 the differential fuzz; T6 lane 5 arms a stable positive attract+swirl on the immortal pool; T1 adds
 attract/swirl/center poison AND strong finite-life repellers under the finite-position detector.
 See decision 0011. No runtime dep change. Unit suite 122 -> 132.
+
+## v1.12.0 -- color / lifeColors
+
+The second RENDER feature (after trails). Every chapter changed how a particle MOVES (forces), ENDS
+(settle), or is SHAPED; this changes how it is COLORED over time. One knob: `lifeColors` -- an ordered
+list of >= 2 OKLCH stops (birth-color first). The BODY of each piece sweeps the ramp as it ages --
+sparks cooling white -> orange -> red, embers dimming -- e.g.
+c.burst({ lifeColors: [{l:.98,c:.02,h:90}, {l:.72,c:.22,h:60}, {l:.40,c:.15,h:30}] }).
+
+Law -- baked LUT, indexed by life. The color model already pre-parsed OKLCH -> CSS strings ONCE per
+burst (never toCssOklch per frame). lifeColors keeps that: `buildLifeRamp` bakes the stops ONCE into a
+fixed-resolution LUT of CSS strings via lite-color's bakeCssGradient (RAMP_N = 32 steps), and the
+render loop indexes it by the piece's life fraction (`step = clamp(floor((1 - life/maxL) * (RAMP_N-1)))`,
+birth = stop 0, death = last) -- a pure array read, zero per-frame color math, zero allocation.
+
+Pure color overlay. The ONLY hot-path change is which string fillStyle gets. `colors[i]` is STILL
+picked per particle (one rng.pick, unchanged), so the spawn rng sequence -- and thus EVERY committed
+position fingerprint -- is byte-identical: a lifeColors burst reproduces the same-seed plain burst's
+position hash exactly (the render-axis analog of trails). The palette `colors` stays the flat TRAIL
+color (locked decision) and the body color when off; all pieces share one ramp, so variety comes from
+their different life phases. Since color never enters the position hash, the test canvas gained a
+`colorHash` probe (folds fillStyle at each body paint, kept out of the position hash) -- a lifeColors
+burst's colorHash differs (COLOR_HASH 2406267552) while its position hash is unchanged.
+
+Fail closed. `buildLifeRamp` returns null (=> the body paints the flat colors[i], not the default
+rainbow) for a non-array, < 2 stops, or any non-finite / unparseable stop; parseOklch THROWS on a bad
+string, so the whole bake is wrapped in try/catch. spawn() always (re)assigns colorRamp[i] (the shared
+LUT or null), so a recycled slot never inherits a prior burst's ramp. No reduced-motion effect (the
+static render does no life integration, so it paints the flat color). Unit suite 141 -> 149; every
+prior position/trail fingerprint preserved; ~0 B/frame (LUT baked once, hot path an array read).
 
 ## v1.11.0 -- settle / pile
 

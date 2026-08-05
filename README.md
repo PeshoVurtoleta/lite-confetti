@@ -11,7 +11,7 @@ Deterministic confetti engine with OKLCH colors, 5 built-in shapes plus custom
 `registerShape()` shapes (vector or image sprite), per-particle multi-shape mixing,
 tunable flutter, lateral wind, turbulence + gust (living-air forces), a vortex/attractor
 point force, a full bounding box (floor, walls, ceiling) with bounce, settle-and-pile,
-zero-GC motion trails, and reduced-motion support.
+zero-GC motion trails, color-over-life ramps, and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -107,6 +107,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `attractY` | number | burst y | Vortex center Y (CSS px). Defaults to the burst origin. |
 | `trail` | number | capacity | Per-particle trail length `0..capacity` — how many recent positions this burst's ribbon spans. Needs a construction `trail` budget; ignored without one. `0` opts a burst out. See [Motion trails](#motion-trails). |
 | `colors` | Array | 7 OKLCH defaults | Array of OKLCH objects `{ l, c, h }` or CSS strings |
+| `lifeColors` | Array | — | Multi-stop OKLCH life ramp (≥ 2 stops, birth-color first). The **body** sweeps it as each piece ages (sparks cooling white→red); the trail stays the flat `colors` pick. Opt-in; invalid falls back to flat. See [Color over life](#color-over-life). |
 | `angle` | number | `-Math.PI / 2` | Center angle of emission cone in radians. -π/2 = upward. |
 | `onComplete` | Function | — | Called when all burst particles have died |
 
@@ -157,9 +158,10 @@ Every frame, each alive particle runs through this pipeline:
 14. OPACITY     fade to 0 in last 30% of life
 15. TRAIL       record (x,y) in the ring → stroke the ribbon through recent positions   (opt-in RENDER overlay — world-space stroke, touches no physics state)
 16. RENDER      translate → rotate → flutter-scale → draw shape
+                 └─ COLOR: body fillStyle = lifeColors ? ramp[lifeFraction] : flat colors[i]   (opt-in; pure color overlay)
 ```
 
-Steps 1–13 are **physics** (they mutate `x/y/vx/vy`); steps 14–16 are **rendering**. `trail` (step 15) is the first purely-render feature: it *reads* the position but draws a stroked polyline in world space (never `translate`), so it cannot move the determinism fingerprint — every committed physics hash is preserved at any trail depth. Step 0 is the first **behaviour** feature: once a piece has `settle`d it is `landed`, so the whole physics block is skipped and it lies frozen — but it keeps ageing and drawing, so nothing else about the pipeline changes.
+Steps 1–13 are **physics** (they mutate `x/y/vx/vy`); steps 14–16 are **rendering**. `trail` (step 15) is the first purely-render feature: it *reads* the position but draws a stroked polyline in world space (never `translate`), so it cannot move the determinism fingerprint — every committed physics hash is preserved at any trail depth. `lifeColors` (the COLOR sub-step of 16) is the second: it only chooses which pre-baked color string the body paints, touching no position, so it too preserves every physics fingerprint. Step 0 is the first **behaviour** feature: once a piece has `settle`d it is `landed`, so the whole physics block is skipped and it lies frozen — but it keeps ageing and drawing, so nothing else about the pipeline changes.
 
 ### Rotation & 3D Tumbling
 
@@ -270,6 +272,27 @@ c.burst({ floor: 520, bounce: 0.4, settle: 60 });   // fall, bounce a few times,
 - A frozen piece is truly still: its **rotation is frozen too**, and lateral forces (`wind`, `gust`, `sway`) can't nudge it — a pile lies where it landed.
 
 Like every knob, settle draws **zero random values** (a pure function of the piece's own post-bounce velocity), so a settling burst replays identically under a fixed seed with its own committed fingerprint, and the default `0` keeps every prior fingerprint byte-for-byte unchanged. A garbage threshold fails closed to `0` (off). No effect under reduced motion — the static render never integrates, so nothing lands.
+
+### Color over life
+
+Until now a piece was painted **one flat color** from birth to death. **`lifeColors`** (added in v1.12.0) lets the **body** of each piece sweep a multi-stop OKLCH ramp as it *ages* — a spark cooling white → orange → red, an ember dimming, a firework tail shifting hue.
+
+```js
+c.burst({
+    lifeColors: [
+        { l: 0.98, c: 0.02, h: 90 },  // birth: near-white
+        { l: 0.72, c: 0.22, h: 60 },  // mid: gold
+        { l: 0.40, c: 0.15, h: 30 },  // death: deep orange
+    ],
+});
+```
+
+- **`lifeColors`** is an ordered list of **≥ 2 OKLCH stops**, birth-color first, death-color last. Each piece's body color is read from the ramp by its life fraction (birth = first stop, death = last).
+- **Baked once per burst.** The ramp is interpolated in OKLCH into a small lookup table of CSS strings ([`bakeCssGradient`](../LiteColor)) when the burst fires, so the render loop is a pure array read — no per-frame color math, no allocation.
+- **The trail stays flat.** Only the body sweeps the ramp; the motion-trail ribbon keeps drawing the piece's flat `colors` pick (the trail is a simple flat overlay). The palette `colors` is still picked per particle — it's the trail color, and the body color when `lifeColors` is off.
+- **All pieces share one ramp.** Variety comes from pieces being at *different* life phases, so a stream reads as a coherent gradient of ages (perfect for sparks).
+
+`lifeColors` is a **pure color overlay**: it draws **zero random values** and moves no particle, so a `lifeColors` burst replays with the exact same positions as a plain one — every physics fingerprint is preserved byte-for-byte. An invalid or too-short ramp fails closed to the flat color. No effect under reduced motion — the static render paints the flat color.
 
 ### Canvas Sizing
 
@@ -575,6 +598,13 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.12.0
+
+**Color over life.** The second *render* feature (after trails) — the body of each piece sweeps a multi-stop OKLCH ramp as it ages, so sparks cool white → red and embers dim. Opt-in, zero-rng, a pure color overlay.
+
+- `lifeColors: Array<OklchColor | string>` — a multi-stop life ramp (≥ 2 stops, birth-color first). Baked once per burst into a lookup table and indexed by life fraction; the hot path is a pure array read.
+- The trail stays the flat `colors` pick — only the body sweeps the ramp. Draws no rng and moves no particle, so every physics fingerprint is preserved byte-for-byte; an invalid ramp fails closed to the flat color. See [Color over life](#color-over-life).
 
 ### v1.11.0
 

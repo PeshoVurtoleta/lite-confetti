@@ -99,6 +99,17 @@ export function run() {
         ['settle:"rest"', { count: 60, floor: 50, bounce: 0.5, settle: 'rest', lifeMin: 0.3, lifeMax: 0.3 }],
         ['settle+poison-floor', { count: 60, floor: NaN, settle: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
         ['settle+strong-fall', { count: 60, y: 20, gravity: 5000, floor: 300, bounce: 0.5, settle: 120, lifeMin: 0.3, lifeMax: 0.3 }],
+        // lifeColors poison (v1.12.0): a non-array, too-few stops, or any non-finite / unparseable
+        // stop must fail closed in buildLifeRamp (return null -> the body paints the flat colors[i]),
+        // never crash the burst and never reach a draw. parseOklch THROWS on a bad string -- the
+        // try/catch must swallow it. A VALID ramp is finite by construction (a color, not a position).
+        ['lifeColors:NaN', { count: 60, lifeColors: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['lifeColors:nonarray', { count: 60, lifeColors: 42, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['lifeColors:[]', { count: 60, lifeColors: [], lifeMin: 0.3, lifeMax: 0.3 }],
+        ['lifeColors:[one]', { count: 60, lifeColors: [{ l: 0.7, c: 0.2, h: 40 }], lifeMin: 0.3, lifeMax: 0.3 }],
+        ['lifeColors:[badnum]', { count: 60, lifeColors: [{ l: NaN, c: 0, h: 0 }, { l: 0.5, c: 0.1, h: 10 }], lifeMin: 0.3, lifeMax: 0.3 }],
+        ['lifeColors:[badstr]', { count: 60, lifeColors: ['not-a-color', 'also-bad'], lifeMin: 0.3, lifeMax: 0.3 }],
+        ['lifeColors:valid+box', { count: 60, floor: 200, bounce: 0.5, gravity: 3000, lifeColors: [{ l: 0.98, c: 0.02, h: 90 }, { l: 0.3, c: 0.15, h: 20 }], lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],

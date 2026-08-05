@@ -130,6 +130,19 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     // built for a filled shape is simply never committed -- strokeHash/strokes are trail-only.
     let strokeHash = 0 >>> 0;
     let strokes = 0;
+    // Color-over-life PROBE (v1.12.0). A `lifeColors` burst moves ONLY ctx.fillStyle; it draws no
+    // translate, so it adds NOTHING to the position `hash` (colorHash is kept entirely out of the mix,
+    // like strokeHash/sumX/maxY -- every committed position fingerprint is byte-identical whether or
+    // not this is read). To still prove the body color sequence is deterministic AND that a ramp
+    // actually changes it, `colorHash` folds the current fillStyle STRING at each real paint op
+    // (fill / fillRect / fillText) in record mode. A `lifeColors` burst's colorHash differs from the
+    // same-seed plain burst's; the flat trail (strokeStyle) is unaffected. foldStr is a test-only
+    // char-code fold (allocation here is irrelevant -- shipped code never runs it).
+    let colorHash = 0 >>> 0;
+    const foldStr = (h, s) => {
+        for (let k = 0; k < s.length; k++) h = (Math.imul(h ^ s.charCodeAt(k), 16777619)) >>> 0;
+        return h >>> 0;
+    };
     let pathHash = 2166136261 >>> 0; // FNV-1a offset basis; reset per beginPath in record mode
     // Fingerprint INTEGER-pixel draw positions only. Rounding to whole pixels
     // absorbs the sub-pixel divergence libm sin/cos can show across platforms, so
@@ -180,7 +193,12 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     const ctx = {
         fillStyle: '', strokeStyle: '', lineWidth: 1, lineJoin: '', lineCap: '',
         font: '', textAlign: '', textBaseline: '', globalAlpha: 1,
-        clearRect() {}, fillRect() {}, arc() {}, fill() {}, closePath() {},
+        clearRect() {},
+        // Body paints: fold the current fillStyle into the color-over-life probe. Covers rect
+        // (fillRect), circle (arc + fill), and star/triangle/custom-vector (fill). Sprites blit
+        // via drawImage with no fillStyle, so they are intentionally not color-probed.
+        fillRect() { if (record) colorHash = foldStr(colorHash, ctx.fillStyle); },
+        arc() {}, fill() { if (record) colorHash = foldStr(colorHash, ctx.fillStyle); }, closePath() {},
         beginPath() { if (record) pathHash = 2166136261 >>> 0; }, // reset the subpath signature
         moveTo(x, y) { if (onPathPt) onPathPt(x, y); },
         lineTo(x, y) { if (onPathPt) onPathPt(x, y); },
@@ -191,7 +209,7 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
         drawImage() {},
         translate(x, y) { if (mix) mix(x, y); },
         rotate() {},
-        fillText() { globalThis.__fillTextCount = (globalThis.__fillTextCount || 0) + 1; },
+        fillText() { if (record) colorHash = foldStr(colorHash, ctx.fillStyle); globalThis.__fillTextCount = (globalThis.__fillTextCount || 0) + 1; },
         canvas: c,
     };
     c.getContext = () => ctx;
@@ -203,6 +221,7 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     Object.defineProperty(c, 'minY', { get() { return minY; } });
     Object.defineProperty(c, 'strokeHash', { get() { return strokeHash >>> 0; } });
     Object.defineProperty(c, 'strokes', { get() { return strokes; } });
+    Object.defineProperty(c, 'colorHash', { get() { return colorHash >>> 0; } });
     return c;
 }
 

@@ -29,6 +29,18 @@ import { createConfetti, makeCanvas, pump, makePrng, SEED, check } from './harne
 const CAP = 300;
 const SHAPES = ['rect', 'circle', 'star', 'triangle', 'emoji'];
 
+/** A random color-over-life ramp from the PRNG (v1.12.0): undefined half the time (off), else 2-3
+ *  OKLCH stops. Deterministic in the shared op stream, so A/B/C receive the identical ramp. */
+function genRamp(prng) {
+    if (prng() % 2 === 0) return undefined; // half off
+    const n = 2 + (prng() % 2);             // 2 or 3 stops
+    const stops = [];
+    for (let k = 0; k < n; k++) {
+        stops.push({ l: (prng() % 100) / 100, c: (prng() % 30) / 100, h: prng() % 360 });
+    }
+    return stops;
+}
+
 /** Build the op for index `i` from the PRNG, so A/B/C all receive identical ops. */
 function genOp(prng, allowReseed) {
     const roll = prng() % 100;
@@ -59,6 +71,7 @@ function genOp(prng, allowReseed) {
                 swirl: (prng() % 2 === 0) ? 0 : (prng() % 20) - 10,        // signed swirl, half off
                 attractX: 100 + (prng() % 500), attractY: 50 + (prng() % 400), // jittered center
                 trail: (prng() % 3 === 0) ? 0 : (prng() % 25),             // per-burst trail length, 1/3 off
+                lifeColors: genRamp(prng),                                 // color-over-life ramp, half off
                 lifeMin: 0.5 + (prng() % 200) / 100,
                 lifeMax: 2.5 + (prng() % 200) / 100,
             },
@@ -82,6 +95,7 @@ function genOp(prng, allowReseed) {
                 swirl: (prng() % 2 === 0) ? 0 : (prng() % 20) - 10,
                 attractX: 100 + (prng() % 500), attractY: 50 + (prng() % 400),
                 trail: (prng() % 3 === 0) ? 0 : (prng() % 25),
+                lifeColors: genRamp(prng), // color-over-life ramp, half off
             },
         };
     }

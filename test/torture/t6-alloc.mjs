@@ -115,7 +115,10 @@ export async function run() {
     // pool stays finite), arming the linear-spring point force + its accel-cap branch every frame.
     // It is ALSO built with a `trail` capacity, so every alive particle BOTH writes
     // a ring-buffer sample AND strokes a ribbon (beginPath + moveTo/lineTo + stroke) every
-    // frame -- the v1.9.0 render overlay must be as allocation-free as the physics. All must still
+    // frame -- the v1.9.0 render overlay must be as allocation-free as the physics. It is ALSO armed
+    // with a `lifeColors` ramp (v1.12.0), so every vector particle indexes the baked LUT (`ramp[step]`)
+    // every frame while the sprite skips it via blit -- the color overlay must be as allocation-free as
+    // everything else (the LUT is baked ONCE at burst; the hot path is a pure array read). All must still
     // integrate at ~0 B/frame. Includes a custom vector + a sprite in the mix so all three
     // dispatch kinds are hit from a single burst.
     const cm = createConfetti(makeCanvas(), { seed: 5150, maxParticles: MAXP, trail: 16 });
@@ -126,6 +129,7 @@ export async function run() {
         lifeMin: 1e6, lifeMax: 1e6, sizeMin: 4, sizeMax: 12, sway: 0.5, wind: 300,
         floor: 150, bounce: 0.4, wallLeft: 200, wallRight: 600, ceiling: 100,
         turbulence: 250, gust: 200, attract: 5, swirl: 4,
+        lifeColors: [{ l: 0.98, c: 0.02, h: 90 }, { l: 0.60, c: 0.20, h: 40 }, { l: 0.30, c: 0.12, h: 20 }],
     });
     pump(1, 1000);
     check(cm.count === MAXP, () => `T6: mixed-shape pool has ${cm.count} alive, expected ${MAXP}`);

@@ -3,6 +3,53 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.12.0] - 2026-08-05
+
+Feature release: `lifeColors` -- **color-over-life**, the second **render** feature (after trails).
+Until now a piece was painted one flat color from birth to death; now its **body** sweeps a multi-stop
+OKLCH ramp as it ages -- sparks cooling white -> orange -> red, embers dimming, a firework tail
+shifting hue. The ramp is baked **once per burst** into a small LUT of CSS strings (lite-color's
+`bakeCssGradient`) and indexed by the piece's own life fraction, so the hot path is a pure array read:
+no per-frame color math, no allocation. It draws **zero rng** and touches **no** position, velocity, or
+rotation, so it is a **pure color overlay** -- every committed *position* fingerprint is byte-identical,
+including a `lifeColors` burst's own (`1569828004` and all prior physics/trail hashes are preserved).
+The palette `colors` is still picked per particle and stays the flat **trail** color (and the body color
+when off). The new gate is the body's `fillStyle` sequence (`colorHash 2406267552`).
+
+### Added
+- **`lifeColors: Array<OklchColor | string>` on `burst()`/`spray()`** -- an ordered multi-stop OKLCH
+  life ramp (>= 2 stops, birth-color first). The body of each piece sweeps it over the piece's life;
+  the trail stays the flat `colors` pick. Default off. Invalid / fewer than two stops falls back to the
+  flat color.
+
+### Semantics
+- **Opt-in, zero-cost by default.** With `lifeColors` off (or invalid), each piece paints the flat
+  pre-parsed `colors[i]` exactly as before -- the render branch is a single `ramp ? ... : colors[i]`
+  guard, and color never enters the position fingerprint, so every prior committed hash is byte-identical.
+- **Pure color overlay.** `lifeColors` adds no rng draw and moves no position, so a `lifeColors` burst
+  reproduces the same-seed plain burst's position hash exactly. The only thing it changes is `fillStyle`.
+- **Ramp indexed by life.** `step = clamp(floor((1 - life/maxL) * (RAMP_N-1)))` -- birth = first stop,
+  death = last stop. All pieces share one baked ramp; variety comes from their different life phases.
+- **Trail stays flat.** The ribbon keeps drawing the flat `colors[i]`; only the body sweeps the ramp
+  (the per-segment trail taper tried in v1.9.0 was reverted in v1.10.0 -- the trail is a flat overlay).
+- **Deterministic when on.** The ramp is a pure function of life, so a `lifeColors` burst replays
+  identically under a fixed seed, with its own committed color fingerprint.
+- **Fail closed.** A non-array, fewer than two stops, or any non-finite / unparseable stop makes
+  `buildLifeRamp` return `null` (`parseOklch` throws on a bad string -- caught) and the body paints the
+  flat color. A ramp is a color, not a position, so no non-finite draw position can result.
+- **No reduced-motion effect** -- the static render does no life integration, so it paints the flat color.
+
+### Internal
+- One per-particle `colorRamp` `Array` column (holds the burst's baked LUT ref, or null); `spawn()`
+  always (re)assigns it, so a recycled slot can never inherit a prior burst's ramp. `colors[i]` is still
+  picked per particle (one `rng.pick`, unchanged), preserving the spawn rng sequence.
+- `buildLifeRamp()` bakes the ramp once per `burst()`/`spray()` via lite-color's `bakeCssGradient` +
+  `parseOklch` (off the hot path, like the existing `parsedColors` pre-parse); the render loop indexes
+  the LUT by life fraction (`RAMP_N = 32` steps).
+- Test harness: the mock canvas gains a `colorHash` probe (folds `fillStyle` at each `fill`/`fillRect`/
+  `fillText`), kept entirely out of the position `hash` (like `strokeHash`/`sumX`) -- it makes the pure
+  color overlay testable without perturbing any committed position fingerprint.
+
 ## [1.11.0] - 2026-08-04
 
 Feature release: `settle` -- **settle-and-pile**, the first **behaviour (lifecycle)** feature.

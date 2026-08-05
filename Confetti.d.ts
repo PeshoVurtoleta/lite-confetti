@@ -80,6 +80,17 @@ export interface BurstOptions {
      */
     shapes?: ShapeName[];
     emoji?: string; colors?: Array<OklchColor | string>;
+    /**
+     * Color-over-life ramp (v1.12.0). An ordered list of >= 2 OKLCH stops (birth-color first,
+     * death-color last) that the BODY of each piece sweeps as it ages -- sparks cooling
+     * white -> orange -> red, embers dimming. Baked once per burst into a small LUT of CSS
+     * strings and indexed by the piece's life fraction; the hot path is a pure array read.
+     * The palette `colors` is still picked per particle and stays the flat trail color (and the
+     * body color when this is off). Invalid / fewer than two stops falls back to that flat color.
+     * Default off. Opt-in, zero-RNG, a pure color overlay -- every position fingerprint is
+     * preserved; no effect under reduced motion.
+     */
+    lifeColors?: Array<OklchColor | string>;
     /** Tumble depth 0..1 (0 rigid, 1 full wobble). Default 1. Affects scale, not position. */
     flutter?: number;
     /** Horizontal drift 0..1 (0 straight fall). Default 0. */

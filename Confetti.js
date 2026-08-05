@@ -1,10 +1,20 @@
 /**
- * @zakkster/lite-confetti v1.11.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.12.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.12.0 adds: `lifeColors` -- color-over-life, the second RENDER feature (after trails). The body
+ * of each piece sweeps a multi-stop OKLCH ramp as it ages -- sparks cooling white -> orange -> red,
+ * embers dimming -- indexed by the piece's own life fraction (birth = first stop, death = last). The
+ * ramp is baked ONCE per burst into a small LUT of CSS strings (lite-color's bakeCssGradient), so the
+ * hot path is a pure index-by-life array read: zero per-frame color math, zero allocation. It draws
+ * ZERO rng and touches NO position/velocity/rotation, so it is a PURE COLOR OVERLAY -- every
+ * committed POSITION fingerprint is byte-identical, including a `lifeColors` burst's own (the only
+ * thing it moves is `ctx.fillStyle`). The palette `colors` is still picked per particle and stays the
+ * flat TRAIL color (and the body color when off); an invalid/short ramp fails closed to that flat
+ * color. Off => `lifeColors` changes nothing. The gate is the fillStyle sequence (`colorHash`).
  * v1.11.0 adds: `settle` -- settle-and-pile, the first BEHAVIOUR (lifecycle) feature (every prior
  * chapter changed how a particle MOVES or DRAWS; this changes how it ENDS). A piece bounces on the
  * `floor` (losing energy to `bounce` < 1 + `drag`) until the rebound is too weak to lift it -- its
@@ -79,7 +89,7 @@
  */
 
 import { Random } from '@zakkster/lite-random';
-import { toCssOklch } from '@zakkster/lite-color';
+import { toCssOklch, parseOklch, bakeCssGradient } from '@zakkster/lite-color';
 import { Ticker } from '@zakkster/lite-ticker';
 
 
@@ -142,6 +152,15 @@ const SWAY_PX = 60;
 // as a coherent breeze rather than per-particle noise.
 const GUST_HZ = 2 * Math.PI / 3;
 
+// Color-over-life (v1.12.0). A `lifeColors` burst bakes its multi-stop OKLCH ramp ONCE into a
+// fixed-resolution LUT of CSS strings (bakeCssGradient), and the render loop indexes it by the
+// particle's life fraction -- a pure array read, no per-frame color math. RAMP_N is the LUT
+// resolution (32 steps is visually smooth and a trivial one-time allocation); RAMP_LAST is the
+// top index. The ramp draws NO rng and touches no position, so it is a pure color overlay:
+// every committed POSITION fingerprint is byte-identical whether or not `lifeColors` is used.
+const RAMP_N = 32;
+const RAMP_LAST = RAMP_N - 1;
+
 // Motion trails (v1.9.0). A trail is a fixed-size ring buffer of a particle's recent world
 // positions, stroked as a single flat-alpha ribbon (uniform opacity along its length, so the
 // whole streak stays clearly visible). TRAIL_MAX bounds the one-time buffer allocation (`trail`
@@ -197,6 +216,27 @@ function resolveShapeIds(shapes, name2id) {
         if (id !== undefined) ids.push(id); // unknown names dropped (fail closed)
     }
     return ids.length ? ids : null; // nothing resolvable -> single-shape path
+}
+
+// Bake a `lifeColors` option (v1.12.0) into a fixed-resolution LUT of CSS strings the render loop
+// indexes by life fraction. Fail-closed: a non-array, fewer than two stops, or any stop that is
+// not a finite OKLCH triple (objects pass through; oklch() strings parse via parseOklch) returns
+// null -- the body then paints the flat `colors[i]` exactly as before (NOT the default rainbow).
+// Called ONCE per burst/spray, off the hot path (like the `parsedColors` pre-parse).
+function buildLifeRamp(lifeColors) {
+    if (!Array.isArray(lifeColors) || lifeColors.length < 2) return null;
+    try {
+        const stops = [];
+        for (let k = 0; k < lifeColors.length; k++) {
+            const c = lifeColors[k];
+            const o = typeof c === 'string' ? parseOklch(c) : c; // parseOklch THROWS on an unparseable string
+            if (!o || !Number.isFinite(o.l) || !Number.isFinite(o.c) || !Number.isFinite(o.h)) return null;
+            stops.push(o);
+        }
+        return bakeCssGradient(stops, RAMP_N); // RAMP_N CSS oklch() strings, birth -> death
+    } catch (_) {
+        return null; // any parse/bake failure => fail closed to the flat `colors[i]`
+    }
 }
 
 
@@ -504,6 +544,11 @@ export function createConfetti(canvas, {
     // Color and emoji stored as arrays (can't go in TypedArrays)
     const colors = new Array(maxParticles);
     const emojis = new Array(maxParticles);
+    // Per-particle color-over-life ramp (v1.12.0): the burst's baked `lifeColors` LUT (an array of
+    // CSS strings), or null/undefined when off. Holds a reference, not a number, so it is a plain
+    // Array alongside `colors`. Always (re)assigned in spawn(), so a recycled slot can never inherit
+    // a prior burst's ramp -- the fail-closed pool-reuse reset (cf. `landed = 0` / `trailN = 0`).
+    const colorRamp = new Array(maxParticles);
 
     // -- Motion-trail ring buffer (v1.9.0), allocated ONCE at construction ---------------
     // `trail` is the capacity: how many recent world positions each particle remembers. It
@@ -648,6 +693,10 @@ export function createConfetti(canvas, {
             ? config.shapeIds[(rng.next() * config.shapeIds.length) | 0]
             : config.shapeId;
         colors[i] = config.colorPick();
+        // Color-over-life: the shared baked ramp for this burst (or null when off). Always assigned,
+        // so a recycled slot can never keep a dead particle's ramp. `colors[i]` is still picked above
+        // (one rng.pick, unchanged) and stays the flat trail color + the body color when off.
+        colorRamp[i] = config.lifeRamp;
         emojis[i] = config.emoji || DEFAULT_EMOJI;
     }
 
@@ -864,7 +913,19 @@ export function createConfetti(canvas, {
 
             const id = pool.shape[i];
             if (!shapeBlit[id]) {
-                ctx.fillStyle = colors[i]; // Pre-parsed in burst()/spray() -- zero allocation
+                // Color-over-life: if this burst has a baked `lifeColors` ramp, index it by the
+                // particle's life fraction (birth -> step 0, death -> RAMP_LAST); else paint the flat
+                // pre-parsed `colors[i]`. `ramp` truthy-guards both null (off) and undefined (never
+                // spawned). Pure array read -- no per-frame color math, no allocation. Color is not in
+                // the position fingerprint, so this branch is hash-neutral regardless of its value.
+                const ramp = colorRamp[i];
+                if (ramp) {
+                    let step = ((1 - lifeT) * RAMP_LAST) | 0;
+                    if (step < 0) step = 0; else if (step > RAMP_LAST) step = RAMP_LAST;
+                    ctx.fillStyle = ramp[step];
+                } else {
+                    ctx.fillStyle = colors[i]; // Pre-parsed in burst()/spray() -- zero allocation
+                }
             }
             shapeDraw[id](ctx, pool.w[i], pool.h[i], i);
 
@@ -973,6 +1034,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.settle=0]    Rest-speed threshold px/sec: a piece whose post-bounce |vy| drops below it freezes on the `floor` and piles (keeps aging + fades). Needs a `floor`. Opt-in, zero-rng, fingerprint-safe
          * @param {number} [options.trail]       Per-particle motion-trail length 0..capacity (default: full capacity). Needs a construction `trail` budget; ignored otherwise. Render overlay, fingerprint-safe
          * @param {Array}  [options.colors]      Array of OKLCH objects or CSS strings
+         * @param {Array}  [options.lifeColors]  Multi-stop OKLCH life ramp (>= 2 stops, birth-color first): the body sweeps it over each particle's life (sparks cooling white->red). Baked once per burst; the trail stays the flat `colors` pick. Opt-in, zero-rng, a pure color overlay -- position fingerprints preserved
          * @param {number} [options.angle=-Math.PI/2] Center angle of emission cone
          * @param {Function} [options.onComplete] Called when all burst particles die
          */
@@ -1008,6 +1070,7 @@ export function createConfetti(canvas, {
                   attractY,
                   trail,
                   colors = DEFAULT_COLORS,
+                  lifeColors,
                   angle = -Math.PI / 2,
                   onComplete,
               } = {}) {
@@ -1059,6 +1122,8 @@ export function createConfetti(canvas, {
             // Pre-parse OKLCH objects to CSS strings ONCE per burst.
             // This keeps the render loop 100% zero-GC -- no toCssOklch() per frame.
             const parsedColors = colors.map(c => typeof c === 'string' ? c : toCssOklch(c));
+            // Bake the color-over-life ramp ONCE (or null when off) -- off the hot path, like parsedColors.
+            const lifeRamp = buildLifeRamp(lifeColors);
 
             // Reduced motion: show static confetti, no animation
             if (respectReducedMotion && _prefersReducedMotion) {
@@ -1084,7 +1149,7 @@ export function createConfetti(canvas, {
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
                 flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), turbulence, gust, trailLen: trailDraw,
-                attract, swirl, attractX: vortX, attractY: vortY, settle,
+                attract, swirl, attractX: vortX, attractY: vortY, settle, lifeRamp,
             };
 
             for (let i = 0; i < count; i++) {
@@ -1126,6 +1191,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.attractY]       Vortex center Y (CSS px); default: the spray origin y
          * @param {number} [options.settle=0]       Rest-speed threshold px/sec: a piece whose post-bounce |vy| drops below it freezes on the `floor` and piles (keeps aging + fades). Needs a `floor`. Opt-in, zero-rng
          * @param {number} [options.trail]          Per-particle motion-trail length 0..capacity (default: full). Needs a construction `trail` budget; render overlay, fingerprint-safe
+         * @param {Array}  [options.lifeColors]     Multi-stop OKLCH life ramp (>= 2 stops, birth-color first): the body sweeps it over each particle's life. Baked once; trail stays the flat `colors` pick. Opt-in, zero-rng, a pure color overlay
          */
         spray({
                   duration = 1000,
@@ -1160,6 +1226,7 @@ export function createConfetti(canvas, {
                   attractY,
                   trail,
                   colors = DEFAULT_COLORS,
+                  lifeColors,
                   angle = -Math.PI / 2,
                   followPointer = false,
               } = {}) {
@@ -1210,6 +1277,8 @@ export function createConfetti(canvas, {
 
             // Pre-parse OKLCH objects to CSS strings ONCE per spray.
             const parsedColors = colors.map(c => typeof c === 'string' ? c : toCssOklch(c));
+            // Bake the color-over-life ramp ONCE (or null when off) -- off the hot path, like parsedColors.
+            const lifeRamp = buildLifeRamp(lifeColors);
 
             if (respectReducedMotion && _prefersReducedMotion) {
                 renderStaticBurst(cx, cy, 30, parsedColors, shapeId, sizeMin, sizeMax, spread, emoji, shapeIds);
@@ -1233,7 +1302,7 @@ export function createConfetti(canvas, {
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
                 flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), turbulence, gust, trailLen: trailDraw,
-                attract, swirl, attractX: vortX, attractY: vortY, settle,
+                attract, swirl, attractX: vortX, attractY: vortY, settle, lifeRamp,
             };
 
             // Pointer-follow is opt-in and, by nature, NON-DETERMINISTIC: it injects

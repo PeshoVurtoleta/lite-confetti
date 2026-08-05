@@ -84,6 +84,17 @@ const VORTEX_HASH  = 1387388835; // attract: 6 + swirl: 6  (inward spiral)
 // differs from the same rig's no-settle (bouncy) hash.
 const SETTLE_HASH = 4157000621;
 
+// Committed fingerprint for color-over-life (v1.12.0, decision 0013) -- the `colorHash` of the mock
+// ctx, which folds the current fillStyle STRING at each body paint (fill/fillRect/fillText) and is
+// kept entirely out of the position `hash`. `lifeColors` moves ONLY the body color, drawing NO rng
+// and touching no position, so it is a pure color overlay: a lifeColors burst reproduces the plain
+// burst's position hash (COMMITTED_HASH) exactly -- see the color suite. This gate proves the body
+// color SEQUENCE is deterministic. Value probed on the runStd rig with the canonical 3-stop ember
+// ramp EMBER below (birth = near-white, death = deep orange).
+const COLOR_HASH = 2406267552;
+// Canonical ember life ramp: near-white -> gold -> deep orange, i.e. a spark cooling as it ages.
+const EMBER = [{ l: 0.98, c: 0.02, h: 90 }, { l: 0.72, c: 0.22, h: 60 }, { l: 0.40, c: 0.15, h: 30 }];
+
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
 function withSilencedWarn(fn) {
     const orig = console.warn;
@@ -1414,6 +1425,135 @@ describe('lite-confetti', () => {
     // -------------------------------------------------------------------------
     //  settle / pile -- the first BEHAVIOUR (lifecycle) feature (v1.11.0, decision 0012)
     // -------------------------------------------------------------------------
+    describe('color / lifeColors', () => {
+        // The shared seed-12345 runStd rig (a plain run reproduces COMMITTED_HASH), extended to read
+        // the record canvas's `colorHash` (the body fillStyle sequence, kept OUT of the position
+        // `hash`). `lifeColors` is a pure COLOR overlay: it draws no rng and moves no position, so a
+        // lifeColors run must reproduce the SAME position hash as the plain run -- the headline proof
+        // -- while its colorHash differs. `frames` lets a case age the pool along the ramp.
+        const runColor = (opts, frames = 29) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(frames, 16);
+            const out = { hash: canvas.hash, colorHash: canvas.colorHash, strokeHash: canvas.strokeHash };
+            c.destroy();
+            return out;
+        };
+
+        it('is a pure color overlay: a lifeColors burst keeps the exact position fingerprint', () => {
+            // The load-bearing property. lifeColors adds no rng draw and touches no position, so every
+            // committed POSITION hash is byte-identical -- including the lifeColors burst's own.
+            const plain = runColor({});
+            assert.equal(plain.hash, COMMITTED_HASH, 'the color branch perturbed the default stream');
+            assert.equal(runColor({ lifeColors: EMBER }).hash, COMMITTED_HASH,
+                'lifeColors changed the position stream (must be a pure color overlay)');
+        });
+
+        it('matches the committed color fingerprint (deterministic) and actually changes the body color', () => {
+            const plain = runColor({}).colorHash;
+            const lc = runColor({ lifeColors: EMBER });
+            if (COLOR_HASH === null) console.log('[color] fingerprint =', lc.colorHash);
+            else assert.equal(lc.colorHash, COLOR_HASH, 'color stream changed vs the committed baseline');
+            assert.notEqual(lc.colorHash, plain, 'lifeColors did not change the body color (else vacuous)');
+            // Zero rng: same seed -> same colorHash on replay.
+            assert.equal(runColor({ lifeColors: EMBER }).colorHash, lc.colorHash, 'lifeColors is not deterministic on replay');
+        });
+
+        it('omitting / empty / short / invalid lifeColors is a no-op vs the plain body color (opt-in, fail-closed)', () => {
+            const plain = runColor({}).colorHash;
+            for (const bad of [
+                undefined, [], [EMBER[0]], null, 'x', 42,
+                [{ l: NaN, c: 0, h: 0 }, EMBER[0]],   // a non-finite stop
+                ['not-a-color', 'also-bad'],          // unparseable strings (parseOklch throws -> caught)
+            ]) {
+                const r = runColor({ lifeColors: bad });
+                assert.equal(r.colorHash, plain, 'invalid lifeColors should paint the flat colors[i]');
+                assert.equal(r.hash, COMMITTED_HASH, 'invalid lifeColors perturbed the position stream');
+            }
+        });
+
+        it('sweeps the ramp over life: the body color moves as the pool ages (non-vacuous)', () => {
+            // A high-contrast 2-stop ramp. Sampled early (pieces near birth = first stop) the body
+            // color sequence differs from late (pieces aged toward the last stop).
+            const HICON = [{ l: 0.98, c: 0.02, h: 90 }, { l: 0.30, c: 0.20, h: 20 }];
+            const few = runColor({ lifeColors: HICON }, 8).colorHash;
+            const many = runColor({ lifeColors: HICON }, 120).colorHash;
+            assert.notEqual(few, many, 'the body color did not move along the ramp over life (else vacuous)');
+        });
+
+        it('leaves the trail flat: a trailed lifeColors burst keeps the committed trail geometry AND color', () => {
+            // Locked decision: the ribbon draws the flat spawn color, only the body sweeps the ramp.
+            // So a trail+lifeColors run reproduces the plain trail's strokeHash (geometry) exactly, and
+            // -- since the trail strokes colors[i], unaffected by the body ramp -- the position hash too.
+            const runTrail = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 12345, trail: 10 });
+                c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                pump(1, 1000); pump(29, 16);
+                const out = { strokeHash: canvas.strokeHash, hash: canvas.hash };
+                c.destroy();
+                return out;
+            };
+            const plain = runTrail({});
+            const lc = runTrail({ lifeColors: EMBER });
+            assert.equal(plain.strokeHash, TRAIL_HASH, 'trail geometry drifted');
+            assert.equal(lc.strokeHash, plain.strokeHash, 'lifeColors changed the trail ribbon (should stay flat)');
+            assert.equal(lc.hash, plain.hash, 'lifeColors perturbed the trailed position stream');
+        });
+
+        it('keeps positions finite under lifeColors + gravity in a box (guards the render branch)', () => {
+            const canvas = makeCanvas({ record: true, assertFinite: true });
+            const c = createConfetti(canvas, { seed: 3 });
+            assert.doesNotThrow(() => {
+                c.burst({
+                    x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 4, lifeMax: 4,
+                    wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350, bounce: 0.6,
+                    gravity: 4000, lifeColors: EMBER,
+                });
+                pump(1, 1000); pump(80, 16);
+            });
+            c.destroy();
+        });
+
+        it('spray() honours lifeColors (deterministic, changes the body color)', () => {
+            const sprayColor = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 400, rate: 15, x: 400, y: 200, spread: 1.2, shape: 'rect',
+                    lifeMin: 4, lifeMax: 4, ...opts });
+                pump(1, 1000); pump(60, 16);
+                const out = { hash: canvas.hash, colorHash: canvas.colorHash };
+                c.destroy();
+                return out;
+            };
+            const plain = sprayColor({});
+            const lc = sprayColor({ lifeColors: EMBER });
+            assert.notEqual(lc.colorHash, plain.colorHash, 'spray ignored lifeColors');
+            assert.equal(lc.hash, plain.hash, 'lifeColors perturbed the spray position stream (should be a pure overlay)');
+            assert.equal(sprayColor({ lifeColors: EMBER }).colorHash, lc.colorHash, 'lifeColors spray not deterministic');
+        });
+
+        it('has no effect under reduced motion (static path paints the flat colors[i])', () => {
+            const staticColor = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                    pump(1, 1000); pump(29, 16);
+                    const h = canvas.colorHash;
+                    c.destroy();
+                    return h;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            assert.equal(staticColor({ lifeColors: EMBER }), staticColor({}),
+                'lifeColors should be inert on the static reduced-motion path');
+        });
+    });
+
     describe('settle / pile', () => {
         // Two rigs. `runStd` is the shared seed-12345 force rig (a plain run reproduces
         // COMMITTED_HASH), used to prove the new physics-freeze wrap + settle guard perturb NOTHING

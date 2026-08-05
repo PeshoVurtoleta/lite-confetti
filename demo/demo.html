@@ -406,6 +406,7 @@
         <span class="badge">trails</span>
         <span class="badge">bounding box</span>
         <span class="badge">settle</span>
+        <span class="badge">lifeColors</span>
         <span class="badge">reduced-motion</span>
         <span class="badge">< 4KB</span>
     </div>
@@ -592,6 +593,11 @@
                                                                                        id="boxVal">off</span></div>
                 <input type="range" id="box" min="0" max="1" value="0" step="1">
             </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">spark (lifeColors)</span><span class="control-val"
+                                                                                       id="sparkVal">off</span></div>
+                <input type="range" id="spark" min="0" max="1" value="0" step="1">
+            </div>
         </div>
 
         <div class="section">
@@ -658,7 +664,10 @@
     const $codeBtn  = document.getElementById('codeBtn');
     const $seedBtn  = document.getElementById('seedBtn');
 
-    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'box'];
+    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'box', 'spark'];
+    // v1.12.0 color-over-life: a fixed 3-stop ember ramp (near-white -> gold -> deep orange) the demo
+    // injects when the `spark` toggle is on, so pieces cool as they age.
+    const EMBER_RAMP = [{ l: 0.98, c: 0.02, h: 90 }, { l: 0.72, c: 0.22, h: 60 }, { l: 0.40, c: 0.15, h: 30 }];
     const $in = {};   // id -> input element
     const $out = {};  // id -> value-display element
     for (const id of SLIDERS) { $in[id] = document.getElementById(id); $out[id] = document.getElementById(id + 'Val'); }
@@ -777,6 +786,9 @@
             cfg.ceiling = 0;
             if (floorPct === 0) cfg.floor = window.innerHeight;
         }
+        // v1.12.0 color-over-life: the spark toggle injects the ember ramp, so each piece's body
+        // cools from near-white to deep orange over its life. A fresh copy per action, never per frame.
+        if ((+$in.spark.value) === 1) cfg.lifeColors = EMBER_RAMP.map(s => ({ ...s }));
         return cfg;
     }
 
@@ -798,6 +810,7 @@
             out.textContent = id === 'drag' ? (+raw).toFixed(3)
                 : id === 'floor' ? (+raw === 0 ? 'off' : raw + '%')  // 0 = no floor (Infinity)
                 : id === 'box' ? (+raw === 0 ? 'off' : 'on')         // 0 = no walls/ceiling
+                : id === 'spark' ? (+raw === 0 ? 'off' : 'on')       // 0 = no lifeColors ramp
                 : (id === 'turbulence' || id === 'gust') ? (+raw === 0 ? 'off' : raw)  // 0 = no force
                 : id === 'trail' ? (+raw === 0 ? 'off' : raw)        // 0 = no ribbon
                 : id === 'settle' ? (+raw === 0 ? 'off' : raw)       // 0 = no settle (needs a floor)
@@ -981,6 +994,7 @@
             if (cfg.attract !== 0) code += `\n${indent}attract: <span class="num">${cfg.attract}</span>,`;
             if (cfg.swirl !== 0) code += `\n${indent}swirl: <span class="num">${cfg.swirl}</span>,`;
             if (cfg.settle !== 0) code += `\n${indent}settle: <span class="num">${cfg.settle}</span>,`;
+            if (cfg.lifeColors) code += `\n${indent}lifeColors: [<span class="num">{ l: .98, c: .02, h: 90 }</span>, <span class="num">{ l: .72, c: .22, h: 60 }</span>, <span class="num">{ l: .40, c: .15, h: 30 }</span>],`;
             code += `\n${indent}lifeMin: <span class="num">${cfg.lifeMin}</span>, lifeMax: <span class="num">${cfg.lifeMax}</span>,`;
             code += `\n});`;
             $codeBox.innerHTML = code;
