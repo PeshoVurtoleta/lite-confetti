@@ -407,6 +407,7 @@
         <span class="badge">bounding box</span>
         <span class="badge">settle</span>
         <span class="badge">lifeColors</span>
+        <span class="badge">emit</span>
         <span class="badge">reduced-motion</span>
         <span class="badge">< 4KB</span>
     </div>
@@ -598,6 +599,16 @@
                                                                                        id="sparkVal">off</span></div>
                 <input type="range" id="spark" min="0" max="1" value="0" step="1">
             </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">emit (shape)</span><span class="control-val"
+                                                                                       id="emitVal">off</span></div>
+                <input type="range" id="emit" min="0" max="3" value="0" step="1">
+            </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">emitSize</span><span class="control-val"
+                                                                                       id="emitSizeVal">120</span></div>
+                <input type="range" id="emitSize" min="0" max="300" value="120" step="10">
+            </div>
         </div>
 
         <div class="section">
@@ -664,7 +675,8 @@
     const $codeBtn  = document.getElementById('codeBtn');
     const $seedBtn  = document.getElementById('seedBtn');
 
-    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'box', 'spark'];
+    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'box', 'spark', 'emit', 'emitSize'];
+    const EMIT_SHAPES = ['off', 'line', 'ring', 'box']; // emit slider 0..3 -> shape name (v1.13.0)
     // v1.12.0 color-over-life: a fixed 3-stop ember ramp (near-white -> gold -> deep orange) the demo
     // injects when the `spark` toggle is on, so pieces cool as they age.
     const EMBER_RAMP = [{ l: 0.98, c: 0.02, h: 90 }, { l: 0.72, c: 0.22, h: 60 }, { l: 0.40, c: 0.15, h: 30 }];
@@ -789,6 +801,10 @@
         // v1.12.0 color-over-life: the spark toggle injects the ember ramp, so each piece's body
         // cools from near-white to deep orange over its life. A fresh copy per action, never per frame.
         if ((+$in.spark.value) === 1) cfg.lifeColors = EMBER_RAMP.map(s => ({ ...s }));
+        // v1.13.0 emit: the shape slider (1 line / 2 ring / 3 box) distributes the spawn origin,
+        // sized by emitSize. Read at action rate, never per frame. 0 or emitSize 0 -> point spawn.
+        const emitId = +$in.emit.value, emitSize = +$in.emitSize.value;
+        if (emitId > 0 && emitSize > 0) { cfg.emit = EMIT_SHAPES[emitId]; cfg.emitSize = emitSize; }
         return cfg;
     }
 
@@ -811,6 +827,8 @@
                 : id === 'floor' ? (+raw === 0 ? 'off' : raw + '%')  // 0 = no floor (Infinity)
                 : id === 'box' ? (+raw === 0 ? 'off' : 'on')         // 0 = no walls/ceiling
                 : id === 'spark' ? (+raw === 0 ? 'off' : 'on')       // 0 = no lifeColors ramp
+                : id === 'emit' ? EMIT_SHAPES[+raw]                  // 0 = off, else line/ring/box
+                : id === 'emitSize' ? (+raw === 0 ? 'off' : raw + 'px')
                 : (id === 'turbulence' || id === 'gust') ? (+raw === 0 ? 'off' : raw)  // 0 = no force
                 : id === 'trail' ? (+raw === 0 ? 'off' : raw)        // 0 = no ribbon
                 : id === 'settle' ? (+raw === 0 ? 'off' : raw)       // 0 = no settle (needs a floor)
@@ -874,9 +892,10 @@
         $shape.dispatchEvent(new Event('change'));
     }
 
-    for (const btn of document.querySelectorAll('.preset')) {
+    const $presets = document.querySelectorAll('.preset'); // cached once; the set never changes
+    for (const btn of $presets) {
         btn.addEventListener('click', () => {
-            for (const b of document.querySelectorAll('.preset')) b.classList.remove('active');
+            for (const b of $presets) b.classList.remove('active');
             btn.classList.add('active');
             const name = btn.dataset.preset;
             applyPreset(name);   // sync the sliders (for display + further tweaking)
@@ -995,6 +1014,7 @@
             if (cfg.swirl !== 0) code += `\n${indent}swirl: <span class="num">${cfg.swirl}</span>,`;
             if (cfg.settle !== 0) code += `\n${indent}settle: <span class="num">${cfg.settle}</span>,`;
             if (cfg.lifeColors) code += `\n${indent}lifeColors: [<span class="num">{ l: .98, c: .02, h: 90 }</span>, <span class="num">{ l: .72, c: .22, h: 60 }</span>, <span class="num">{ l: .40, c: .15, h: 30 }</span>],`;
+            if (cfg.emit) code += `\n${indent}emit: <span class="str">'${cfg.emit}'</span>, emitSize: <span class="num">${cfg.emitSize}</span>,`;
             code += `\n${indent}lifeMin: <span class="num">${cfg.lifeMin}</span>, lifeMax: <span class="num">${cfg.lifeMax}</span>,`;
             code += `\n});`;
             $codeBox.innerHTML = code;

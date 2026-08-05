@@ -95,6 +95,18 @@ const COLOR_HASH = 2406267552;
 // Canonical ember life ramp: near-white -> gold -> deep orange, i.e. a spark cooling as it ages.
 const EMBER = [{ l: 0.98, c: 0.02, h: 90 }, { l: 0.72, c: 0.22, h: 60 }, { l: 0.40, c: 0.15, h: 30 }];
 
+// Committed position fingerprints for the spawn emitter shapes (v1.13.0, decision 0014). `emit`
+// distributes the spawn ORIGIN over a shape; it is the FIRST feature to add a CONDITIONAL spawn-time
+// rng draw (the position along the shape), so it is opt-in by construction: OFF inserts NO draw and
+// reproduces COMMITTED_HASH exactly (see the emit suite). Per-shape draw counts differ (box draws 2,
+// line/ring 1), so each shape earns its OWN committed hash -- all distinct from COMMITTED_HASH and
+// each other. Probed on the runStd rig at emitSize 200. Ring couples geometry to velocity (radial
+// shell); line/box move only the origin. Deterministic (the emitter draws are seeded), so these are
+// cross-process stable and each is its own replay gate.
+const EMIT_LINE_HASH = 2558715937; // emit:'line', emitSize:200 (horizontal curtain)
+const EMIT_RING_HASH = 2441425203; // emit:'ring', emitSize:200 (radial shell)
+const EMIT_BOX_HASH  = 2748626140; // emit:'box',  emitSize:200 (square area)
+
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
 function withSilencedWarn(fn) {
     const orig = console.warn;
@@ -1551,6 +1563,148 @@ describe('lite-confetti', () => {
             };
             assert.equal(staticColor({ lifeColors: EMBER }), staticColor({}),
                 'lifeColors should be inert on the static reduced-motion path');
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    //  emit / emitter shapes (v1.13.0, decision 0014)
+    // -------------------------------------------------------------------------
+    describe('emit / emitter shapes', () => {
+        // The shared seed-12345 runStd rig (a plain run reproduces COMMITTED_HASH), extended to read
+        // the X/Y draw extents (minX/maxX/minY/maxY) so the geometry of an emitter can be probed
+        // directly, not just via a fingerprint. `emit` is the FIRST feature to add a CONDITIONAL
+        // spawn-rng draw, so OFF must reproduce COMMITTED_HASH byte-for-byte, and each ON shape must
+        // be its own deterministic fingerprint. `frames`/extra opts let a case shape the run.
+        const runEmit = (opts, frames = 29) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(frames, 16);
+            const out = {
+                hash: canvas.hash,
+                minX: canvas.minX, maxX: canvas.maxX,
+                minY: canvas.minY, maxY: canvas.maxY,
+            };
+            c.destroy();
+            return out;
+        };
+
+        it('is opt-in and fail-closed: off / unknown / non-positive size spawns at the point (byte-identical)', () => {
+            // The load-bearing property. The conditional spawn-rng draw must insert NOTHING when off,
+            // so the seeded stream -- and every committed fingerprint -- is preserved.
+            assert.equal(runEmit({}).hash, COMMITTED_HASH, 'the emit branch perturbed the default stream');
+            for (const o of [
+                { emit: 'arc' },                    // unknown shape name
+                { emit: 42 },                       // non-string
+                { emit: null },                     // null
+                { emit: 'line' },                   // shape but no size -> emitSize defaults off
+                { emit: 'line', emitSize: 0 },      // zero extent
+                { emit: 'ring', emitSize: -5 },     // negative -> nonneg 0
+                { emit: 'box', emitSize: NaN },     // non-finite -> nonneg default 0
+                { emit: 'box', emitSize: 'big' },   // non-numeric
+            ]) {
+                assert.equal(runEmit(o).hash, COMMITTED_HASH,
+                    `emit ${JSON.stringify(o)} should fall back to a point spawn`);
+            }
+        });
+
+        it('every prior committed fingerprint still reproduces with emit off (no sequence drift)', () => {
+            // The emit block sits between the speed draw and spawn(); off must not disturb any of them.
+            assert.equal(runEmit({ floor: FLOOR_Y, bounce: 0 }).hash, FLOOR_HASH, 'floor gate drifted');
+            assert.equal(runEmit({ ...BOX, bounce: 0 }).hash, BOX_HASH, 'box gate drifted');
+        });
+
+        it('matches a committed fingerprint per shape -- distinct + deterministic', () => {
+            const line = runEmit({ emit: 'line', emitSize: 200 }).hash;
+            const ring = runEmit({ emit: 'ring', emitSize: 200 }).hash;
+            const box  = runEmit({ emit: 'box', emitSize: 200 }).hash;
+            if (EMIT_LINE_HASH === null) console.log('[emit] line/ring/box =', line, ring, box);
+            else {
+                assert.equal(line, EMIT_LINE_HASH, 'line-emitter positions changed vs the committed baseline');
+                assert.equal(ring, EMIT_RING_HASH, 'ring-emitter positions changed vs the committed baseline');
+                assert.equal(box,  EMIT_BOX_HASH,  'box-emitter positions changed vs the committed baseline');
+            }
+            // Each shape is its own fingerprint, all distinct from the point spawn and each other
+            // (box draws 2 rng values, line/ring 1, so the sequences genuinely diverge).
+            assert.equal(new Set([COMMITTED_HASH, line, ring, box]).size, 4, 'emitter shapes are not all distinct');
+            // Zero non-emit rng change: same seed -> same hash on replay.
+            assert.equal(runEmit({ emit: 'line', emitSize: 200 }).hash, line, 'line emitter not deterministic');
+            assert.equal(runEmit({ emit: 'ring', emitSize: 200 }).hash, ring, 'ring emitter not deterministic');
+            assert.equal(runEmit({ emit: 'box', emitSize: 200 }).hash, box,  'box emitter not deterministic');
+        });
+
+        it('line widens the origin band along X (non-vacuous geometry)', () => {
+            // A horizontal curtain of half-length emitSize should broaden the X spread by ~2*emitSize
+            // over the point spawn; Y is untouched (velocity still from angle/spread).
+            const pt = runEmit({});
+            const line = runEmit({ emit: 'line', emitSize: 200 });
+            assert.ok(line.maxX - line.minX > (pt.maxX - pt.minX) + 300,
+                'the line emitter did not widen the X band (else vacuous)');
+        });
+
+        it('ring fires pieces radially outward -- a symmetric shell (non-vacuous coupling)', () => {
+            // With gravity off and a short window, a radial-shell ring expands symmetrically: its X
+            // and Y spreads are near-equal. A point burst (default narrow upward cone) is Y-dominant,
+            // and a line is X-only -- so near-1 symmetry is the fingerprint of the radial coupling.
+            const ring = runEmit({ emit: 'ring', emitSize: 150, gravity: 0 }, 8);
+            const xr = ring.maxX - ring.minX, yr = ring.maxY - ring.minY;
+            assert.ok(Math.abs(xr / yr - 1) < 0.15, `ring shell not radially symmetric (x=${xr} y=${yr})`);
+            // Contrast: a point burst at the same rig is clearly ASYMMETRIC (the emission cone fires
+            // in one direction), so near-1 symmetry is a genuine property of the radial ring, not of
+            // every burst -- the symmetry test would be vacuous if a point burst were symmetric too.
+            const pt = runEmit({ gravity: 0 }, 8);
+            const px = pt.maxX - pt.minX, py = pt.maxY - pt.minY;
+            assert.ok(Math.abs(px / py - 1) > 0.15, `the point contrast should be asymmetric (x=${px} y=${py})`);
+        });
+
+        it('keeps positions finite under emit + gravity + bounce in a box (guards the spawn branch)', () => {
+            const canvas = makeCanvas({ record: true, assertFinite: true });
+            const c = createConfetti(canvas, { seed: 3 });
+            assert.doesNotThrow(() => {
+                c.burst({
+                    x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 4, lifeMax: 4,
+                    wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350, bounce: 0.6,
+                    gravity: 4000, emit: 'box', emitSize: 120,
+                });
+                pump(1, 1000); pump(80, 16);
+            });
+            c.destroy();
+        });
+
+        it('spray() honours emit (deterministic, shifts the stream)', () => {
+            const sprayEmit = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 400, rate: 15, x: 400, y: 200, spread: 1.2, shape: 'rect',
+                    lifeMin: 4, lifeMax: 4, ...opts });
+                pump(1, 1000); pump(60, 16);
+                const h = canvas.hash;
+                c.destroy();
+                return h;
+            };
+            const plain = sprayEmit({});
+            const ring = sprayEmit({ emit: 'ring', emitSize: 120 });
+            assert.notEqual(ring, plain, 'spray ignored emit');
+            assert.equal(sprayEmit({ emit: 'ring', emitSize: 120 }), ring, 'spray emit not deterministic');
+        });
+
+        it('has no effect under reduced motion (static fan ignores the emitter)', () => {
+            const staticEmit = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                    pump(1, 1000); pump(29, 16);
+                    const h = canvas.hash;
+                    c.destroy();
+                    return h;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            assert.equal(staticEmit({ emit: 'ring', emitSize: 150 }), staticEmit({}),
+                'emit should be inert on the static reduced-motion path');
         });
     });
 

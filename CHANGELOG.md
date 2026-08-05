@@ -3,6 +3,54 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.13.0] - 2026-08-06
+
+Feature release: `emit` -- **spawn emitter shapes**, the first feature on a new **emission-geometry**
+axis. Every chapter until now changed how a particle *moves* (forces), how it *ends* (settle), or how
+it is *drawn* (trails, color-over-life); this changes **where it is born**. Instead of the single point
+`(x, y)`, a burst can distribute its spawn **origin** over a shape: a horizontal `line` curtain (rain /
+snow), a `ring` firework shell, or a `box` area -- each sized by the single `emitSize` scalar (line
+half-length / ring radius / box square half-extent). The `ring` is the one geometry-to-velocity
+coupling: pieces fly radially **outward** (`speed` = shell expansion rate, `spread` = angular fuzz);
+`line` and `box` leave velocity governed by `angle`/`spread` and move only the origin. `emit` is the
+first feature to add a **conditional spawn-time rng draw** (the position along the shape), so it is
+opt-in *by construction*: off / unknown / `emitSize <= 0` inserts **no draw** and spawns at the point
+-- byte-identical to a point burst, every committed position fingerprint preserved (`1569828004` and
+all prior physics/trail/color hashes). Per-shape draw counts differ (box draws 2, line/ring 1), so each
+shape earns its own committed fingerprint (`line 2558715937`, `ring 2441425203`, `box 2748626140`).
+
+### Added
+- **`emit: 'line' | 'ring' | 'box'` + `emitSize: number` on `burst()`/`spray()`** -- distribute the
+  spawn origin over a shape, sized by `emitSize`. Default: a single point. Ring fires each piece
+  radially outward; line/box move only the origin.
+
+### Semantics
+- **Opt-in, zero-cost by default.** With `emit` off (or unknown, or `emitSize <= 0`), the spawn loop
+  takes a single int-compare then the identical point `spawn()` call -- no new rng draw, no new
+  allocation -- so every prior committed fingerprint is byte-identical.
+- **The conditional spawn-rng contract.** The emitter branch sits between the speed draw and `spawn()`.
+  `EMIT_OFF` inserts nothing; `line`/`ring` draw 1 rng value (the position along the shape), `box`
+  draws 2. Because the counts differ, each shape has its own committed hash; within a shape the draw
+  count is fixed, so it replays identically under a fixed seed.
+- **Ring = radial shell.** For `emit:'ring'` each piece's velocity points outward from the centre
+  (`speed` = expansion, `spread` = angular fuzz), reusing the already-drawn spread jitter (no extra
+  draw). `line` and `box` leave velocity to `angle`/`spread`.
+- **Fail closed.** An unknown or non-string shape, or a non-positive / non-finite `emitSize`, collapses
+  to `EMIT_OFF` (a point spawn). The origin is an offset of the finite burst centre, so no non-finite
+  draw position can result.
+- **No reduced-motion effect** -- the static accessible fan has no rng origin, so `emit` is inert there.
+- **Hot path untouched** -- `emit` only moves the spawn origin; `update()` and the render loop are
+  unchanged.
+
+### Internal
+- Module consts `EMIT_OFF/LINE/RING/BOX` + an `EMIT_ID` string->int `Map`, resolved once per
+  `burst()`/`spray()` (`emitId`/`emitR` locals), so the spawn loop branches on an int, never a string.
+- `spawn()`'s signature is unchanged -- the emitter computes the origin `(ex, ey)` and (ring) velocity
+  in the caller and passes them in place of `cx, cy, cos(a)*s, sin(a)*s`.
+- No test-harness change: `emit` moves the spawn origin, and the mock canvas already folds `translate`
+  into the position `hash`, so the existing fingerprint observes the emitter directly (unlike
+  trails/lifeColors, which needed the `strokeHash`/`colorHash` probes).
+
 ## [1.12.0] - 2026-08-05
 
 Feature release: `lifeColors` -- **color-over-life**, the second **render** feature (after trails).

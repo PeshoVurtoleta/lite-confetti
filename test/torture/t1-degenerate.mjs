@@ -110,6 +110,18 @@ export function run() {
         ['lifeColors:[badnum]', { count: 60, lifeColors: [{ l: NaN, c: 0, h: 0 }, { l: 0.5, c: 0.1, h: 10 }], lifeMin: 0.3, lifeMax: 0.3 }],
         ['lifeColors:[badstr]', { count: 60, lifeColors: ['not-a-color', 'also-bad'], lifeMin: 0.3, lifeMax: 0.3 }],
         ['lifeColors:valid+box', { count: 60, floor: 200, bounce: 0.5, gravity: 3000, lifeColors: [{ l: 0.98, c: 0.02, h: 90 }, { l: 0.3, c: 0.15, h: 20 }], lifeMin: 0.3, lifeMax: 0.3 }],
+        // emit poison (v1.13.0): an unknown/non-string shape or a non-positive/non-finite/huge size
+        // must fail closed to EMIT_OFF (a point spawn) -- never a NaN origin at a draw. A VALID emitter
+        // in a box is finite by construction (the origin is an offset of the finite burst center).
+        ['emit:unknown', { count: 60, emit: 'arc', emitSize: 100, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['emit:nonstring', { count: 60, emit: 42, emitSize: 100, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['emit:size-NaN', { count: 60, emit: 'box', emitSize: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['emit:size-0', { count: 60, emit: 'ring', emitSize: 0, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['emit:size-neg', { count: 60, emit: 'line', emitSize: -50, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['emit:size-huge', { count: 60, emit: 'box', emitSize: 1e9, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['emit:size-Infinity', { count: 60, emit: 'ring', emitSize: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['emit:no-size', { count: 60, emit: 'ring', lifeMin: 0.3, lifeMax: 0.3 }],
+        ['emit:valid+box', { count: 60, emit: 'box', emitSize: 120, floor: 300, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],

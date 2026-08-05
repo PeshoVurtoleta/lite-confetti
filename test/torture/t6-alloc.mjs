@@ -161,6 +161,25 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- the frozen (landed) path is allocating');
     }
 
+    // (7) A continuous EMIT spray (v1.13.0): the other lanes burst ONCE, so their spawn cost is paid
+    // before the measured window. Emit lives entirely at spawn (the emitter branch only moves the
+    // origin), so it needs a lane that spawns INSIDE the window. A long-duration spray with the ring
+    // emitter armed spawns `rate` pieces through the emitter branch every measured frame -- the ring
+    // rng draw + the radial-outward re-derivation (a few Math.cos/sin on stack locals, the shape-id an
+    // int). Immortal pieces saturate the pool to MAXP (steady state), so any per-frame SPAWN allocation
+    // shows up as retained bytes exactly like a leaking update() would.
+    const ce = createConfetti(makeCanvas(), { seed: 1313, maxParticles: MAXP });
+    ce.spray({ duration: 1e9, rate: 24, x: 400, y: 300, speed: 300, gravity: 0,
+        lifeMin: 1e6, lifeMax: 1e6, emit: 'ring', emitSize: 120 });
+    pump(1, 1000); pump(40, 16); // saturate the pool through the emitter branch
+    check(ce.count === MAXP, () => `T6: emit-spray pool has ${ce.count} alive, expected ${MAXP}`);
+    const bpfEmit = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    ce.destroy();
+    if (bpfEmit > RETAIN_FLOOR_BPF) {
+        die('T6: emit-spray retains ' + bpfEmit.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the emitter spawn branch is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -173,6 +192,7 @@ export async function run() {
         + bpfCustom.toFixed(2) + ' B/frame custom vector+sprite+sway, '
         + bpfPoison.toFixed(2) + ' B/frame from sanitised garbage inputs, '
         + bpfMix.toFixed(2) + ' B/frame from a shapes[] mix under wind + full box + turbulence/gust + vortex + trails, '
-        + bpfSettle.toFixed(2) + ' B/frame from a fully-settled (frozen) pile); '
+        + bpfSettle.toFixed(2) + ' B/frame from a fully-settled (frozen) pile, '
+        + bpfEmit.toFixed(2) + ' B/frame from a continuous ring-emitter spray); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

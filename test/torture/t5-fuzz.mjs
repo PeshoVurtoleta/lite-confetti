@@ -28,6 +28,7 @@ import { createConfetti, makeCanvas, pump, makePrng, SEED, check } from './harne
 
 const CAP = 300;
 const SHAPES = ['rect', 'circle', 'star', 'triangle', 'emoji'];
+const EMIT_SHAPES = ['line', 'ring', 'box']; // spawn emitter shapes (v1.13.0)
 
 /** A random color-over-life ramp from the PRNG (v1.12.0): undefined half the time (off), else 2-3
  *  OKLCH stops. Deterministic in the shared op stream, so A/B/C receive the identical ramp. */
@@ -72,6 +73,8 @@ function genOp(prng, allowReseed) {
                 attractX: 100 + (prng() % 500), attractY: 50 + (prng() % 400), // jittered center
                 trail: (prng() % 3 === 0) ? 0 : (prng() % 25),             // per-burst trail length, 1/3 off
                 lifeColors: genRamp(prng),                                 // color-over-life ramp, half off
+                emit: (prng() % 2 === 0) ? undefined : EMIT_SHAPES[prng() % EMIT_SHAPES.length], // emitter shape, half off
+                emitSize: 20 + (prng() % 280),                             // emitter extent (line half-len / ring radius / box half-extent)
                 lifeMin: 0.5 + (prng() % 200) / 100,
                 lifeMax: 2.5 + (prng() % 200) / 100,
             },
@@ -96,6 +99,8 @@ function genOp(prng, allowReseed) {
                 attractX: 100 + (prng() % 500), attractY: 50 + (prng() % 400),
                 trail: (prng() % 3 === 0) ? 0 : (prng() % 25),
                 lifeColors: genRamp(prng), // color-over-life ramp, half off
+                emit: (prng() % 2 === 0) ? undefined : EMIT_SHAPES[prng() % EMIT_SHAPES.length], // emitter shape, half off
+                emitSize: 20 + (prng() % 280), // emitter extent
             },
         };
     }

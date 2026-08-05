@@ -11,7 +11,8 @@ Deterministic confetti engine with OKLCH colors, 5 built-in shapes plus custom
 `registerShape()` shapes (vector or image sprite), per-particle multi-shape mixing,
 tunable flutter, lateral wind, turbulence + gust (living-air forces), a vortex/attractor
 point force, a full bounding box (floor, walls, ceiling) with bounce, settle-and-pile,
-zero-GC motion trails, color-over-life ramps, and reduced-motion support.
+zero-GC motion trails, color-over-life ramps, spawn emitter shapes (line / ring / box),
+and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -108,6 +109,8 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `trail` | number | capacity | Per-particle trail length `0..capacity` — how many recent positions this burst's ribbon spans. Needs a construction `trail` budget; ignored without one. `0` opts a burst out. See [Motion trails](#motion-trails). |
 | `colors` | Array | 7 OKLCH defaults | Array of OKLCH objects `{ l, c, h }` or CSS strings |
 | `lifeColors` | Array | — | Multi-stop OKLCH life ramp (≥ 2 stops, birth-color first). The **body** sweeps it as each piece ages (sparks cooling white→red); the trail stays the flat `colors` pick. Opt-in; invalid falls back to flat. See [Color over life](#color-over-life). |
+| `emit` | string | — | Spawn-origin shape: `'line'` (horizontal curtain), `'ring'` (firework shell, velocity radial-outward), or `'box'` (square area), sized by `emitSize`. Default: a single point. Opt-in; unknown / `emitSize ≤ 0` = point spawn. See [Emitter shapes](#emitter-shapes). |
+| `emitSize` | number | — | Emitter extent in px: line half-length / ring radius / box square half-extent. Needs a shape in `emit`; `≤ 0` or non-finite = point spawn. |
 | `angle` | number | `-Math.PI / 2` | Center angle of emission cone in radians. -π/2 = upward. |
 | `onComplete` | Function | — | Called when all burst particles have died |
 
@@ -139,6 +142,7 @@ Spray accepts all burst options plus:
 Every frame, each alive particle runs through this pipeline:
 
 ```
+--  SPAWN       origin = EMIT ? point-on(line | ring | box, emitSize) : (x, y)   (opt-in, at BIRTH; ring also fires velocity radially outward)
 0.  FROZEN?     if the piece has SETTLED (landed on the floor), skip steps 1–13 entirely   (opt-in; it still ages, fades, and draws)
 1.  GRAVITY     vy += gravity × dt        (downward acceleration)
 2.  WIND        vx += wind × dt           (opt-in lateral acceleration)
@@ -161,7 +165,7 @@ Every frame, each alive particle runs through this pipeline:
                  └─ COLOR: body fillStyle = lifeColors ? ramp[lifeFraction] : flat colors[i]   (opt-in; pure color overlay)
 ```
 
-Steps 1–13 are **physics** (they mutate `x/y/vx/vy`); steps 14–16 are **rendering**. `trail` (step 15) is the first purely-render feature: it *reads* the position but draws a stroked polyline in world space (never `translate`), so it cannot move the determinism fingerprint — every committed physics hash is preserved at any trail depth. `lifeColors` (the COLOR sub-step of 16) is the second: it only chooses which pre-baked color string the body paints, touching no position, so it too preserves every physics fingerprint. Step 0 is the first **behaviour** feature: once a piece has `settle`d it is `landed`, so the whole physics block is skipped and it lies frozen — but it keeps ageing and drawing, so nothing else about the pipeline changes.
+Steps 1–13 are **physics** (they mutate `x/y/vx/vy`); steps 14–16 are **rendering**. `trail` (step 15) is the first purely-render feature: it *reads* the position but draws a stroked polyline in world space (never `translate`), so it cannot move the determinism fingerprint — every committed physics hash is preserved at any trail depth. `lifeColors` (the COLOR sub-step of 16) is the second: it only chooses which pre-baked color string the body paints, touching no position, so it too preserves every physics fingerprint. Step 0 is the first **behaviour** feature: once a piece has `settle`d it is `landed`, so the whole physics block is skipped and it lies frozen — but it keeps ageing and drawing, so nothing else about the pipeline changes. The **SPAWN** line runs once at birth, before the per-frame pipeline: `emit` (the first **emission-geometry** feature) chooses the origin — a point, or a point on a line / ring / box — and for a ring also aims the launch velocity radially outward. With `emit` off it is exactly the point `(x, y)`, so the seeded stream is untouched.
 
 ### Rotation & 3D Tumbling
 
@@ -293,6 +297,25 @@ c.burst({
 - **All pieces share one ramp.** Variety comes from pieces being at *different* life phases, so a stream reads as a coherent gradient of ages (perfect for sparks).
 
 `lifeColors` is a **pure color overlay**: it draws **zero random values** and moves no particle, so a `lifeColors` burst replays with the exact same positions as a plain one — every physics fingerprint is preserved byte-for-byte. An invalid or too-short ramp fails closed to the flat color. No effect under reduced motion — the static render paints the flat color.
+
+### Emitter shapes
+
+Every burst so far spawned from the **single point** `(x, y)`. **`emit`** (added in v1.13.0) distributes the spawn **origin** over a shape, sized by the single `emitSize` scalar — so confetti can rain from a line, expand from a shell, or fill an area.
+
+```js
+// A firework shell: pieces fly radially OUTWARD from a ring.
+c.burst({ x: 400, y: 300, emit: 'ring', emitSize: 140, speed: 6, count: 160 });
+
+// A rain / snow curtain: spawn along a horizontal line across the top, fall under gravity.
+c.spray({ x: 400, y: 0, emit: 'line', emitSize: 300, angle: Math.PI / 2, gravity: 0.4 });
+```
+
+- **`emit: 'line'`** — a horizontal segment centered on `(x, y)`, half-length `emitSize` (a rain / snow curtain).
+- **`emit: 'ring'`** — the circle of radius `emitSize` around `(x, y)`. Each piece is fired **radially outward** from the centre, so `speed` becomes the shell expansion rate and `spread` the angular fuzz — a firework shell.
+- **`emit: 'box'`** — the square `[x ± emitSize, y ± emitSize]` (an area burst).
+- **Line and box move only the origin** — velocity stays governed by `angle` / `spread`. The radial-outward coupling is **ring-only**.
+
+`emit` is a **pure origin choice**: it is the first knob to draw a random value *at spawn* (the position along the shape), so it is opt-in by construction — with `emit` off, unknown, or `emitSize ≤ 0`, the burst spawns at the point and every committed fingerprint is byte-identical. Each shape has its own deterministic fingerprint when on. Fails closed to a point spawn on a bad shape or size; no effect under reduced motion.
 
 ### Canvas Sizing
 
@@ -598,6 +621,13 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.13.0
+
+**Spawn emitter shapes.** The first feature on a new *emission-geometry* axis — a burst can spawn from a shape instead of a point: a `line` curtain (rain / snow), a `ring` firework shell, or a `box` area, sized by one `emitSize` scalar.
+
+- `emit: 'line' | 'ring' | 'box'` + `emitSize: number` on `burst()`/`spray()`. Ring fires each piece radially outward (`speed` = expansion, `spread` = fuzz); line/box move only the origin.
+- The first knob to draw a random value *at spawn*, so it is opt-in by construction: off / unknown / `emitSize ≤ 0` spawns at the point, byte-identical to a point burst (every prior fingerprint preserved). Each shape has its own deterministic fingerprint; fails closed on a bad shape or size. See [Emitter shapes](#emitter-shapes).
 
 ### v1.12.0
 

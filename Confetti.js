@@ -1,10 +1,22 @@
 /**
- * @zakkster/lite-confetti v1.12.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.13.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.13.0 adds: `emit` -- spawn emitter shapes, the FIRST feature on the emission-geometry axis
+ * (every prior chapter changed how a particle MOVES, ENDS, or is DRAWN; this changes WHERE it is
+ * BORN). Instead of the single point (x, y), a burst distributes its spawn ORIGIN over a shape:
+ * a horizontal `line` curtain (rain/snow), a `ring` firework shell, or a `box` area -- each sized
+ * by the single `emitSize` scalar (line half-length / ring radius / box square half-extent). Ring
+ * is the one geometry->velocity coupling: pieces fly radially OUTWARD (speed = shell expansion,
+ * spread = angular fuzz); line/box leave velocity to angle/spread. It is the FIRST feature to add a
+ * CONDITIONAL spawn-time rng draw (the position along the shape), so it is opt-in by construction:
+ * `emit` off/unknown/`emitSize<=0` inserts NO draw and spawns at the point -- byte-identical to a
+ * point burst, every committed position fingerprint preserved. Per-shape draw counts differ (box 2,
+ * line/ring 1), so each shape has its own committed hash. Inert under reduced motion; the hot render
+ * path is untouched (emit only moves the origin). Fail-closed: bad shape or size => point spawn.
  * v1.12.0 adds: `lifeColors` -- color-over-life, the second RENDER feature (after trails). The body
  * of each piece sweeps a multi-stop OKLCH ramp as it ages -- sparks cooling white -> orange -> red,
  * embers dimming -- indexed by the piece's own life fraction (birth = first stop, death = last). The
@@ -147,10 +159,17 @@ const DEFAULT_EMOJI = String.fromCodePoint(0x1F389);
 // Peak horizontal sway speed (CSS px/sec) at sway == 1. Amplitude scales with the knob.
 const SWAY_PX = 60;
 
+// Shared angle constants. TAU = a full turn (used for spin/tilt/ring phases + the circle arc);
+// HALF_PI = a quarter turn, so -HALF_PI is straight up (the default emission angle). Hoisted so
+// the value appears once; multiplying by the power-of-two 2 is exact, so `x * TAU` is bit-identical
+// to the former `x * Math.PI * 2` -- no committed fingerprint moves.
+const TAU = Math.PI * 2;
+const HALF_PI = Math.PI / 2;
+
 // Angular frequency of the global `gust` oscillation: one full swell-and-return every ~3s.
 // The whole pool shares this phase (driven by the instance `_elapsed` clock), so gust reads
 // as a coherent breeze rather than per-particle noise.
-const GUST_HZ = 2 * Math.PI / 3;
+const GUST_HZ = TAU / 3;
 
 // Color-over-life (v1.12.0). A `lifeColors` burst bakes its multi-stop OKLCH ramp ONCE into a
 // fixed-resolution LUT of CSS strings (bakeCssGradient), and the render loop indexes it by the
@@ -160,6 +179,21 @@ const GUST_HZ = 2 * Math.PI / 3;
 // every committed POSITION fingerprint is byte-identical whether or not `lifeColors` is used.
 const RAMP_N = 32;
 const RAMP_LAST = RAMP_N - 1;
+
+// Spawn emitter shapes (v1.13.0). `emit` distributes a burst's spawn ORIGIN over a shape instead
+// of the single point (x, y): a horizontal `line` curtain, a `ring` firework shell, or a `box`
+// area, each sized by the single `emitSize` scalar (line half-length / ring radius / box square
+// half-extent). `emit` resolves ONCE per burst to a small int id via EMIT_ID, so the spawn loop
+// branches on an int compare, never a string. It is the FIRST feature to add a CONDITIONAL
+// spawn-time rng draw (the parametric position along the shape); the OFF path (EMIT_OFF) inserts
+// NOTHING, so the draw sequence -- and thus every committed position fingerprint -- is byte-identical
+// to a point burst. Per-shape draw counts differ (box draws 2, line/ring 1), so each shape earns its
+// own committed hash. Ring is the one geometry->velocity coupling: velocity points radially outward
+// (speed = shell expansion, spread = angular fuzz), reusing the already-drawn spread jitter (no extra
+// draw); line/box leave velocity to angle/spread. Inert under reduced motion (the static fan has no
+// rng origin). The hot render path is UNTOUCHED -- emit only moves where a particle is born.
+const EMIT_OFF = 0, EMIT_LINE = 1, EMIT_RING = 2, EMIT_BOX = 3;
+const EMIT_ID = new Map([['line', EMIT_LINE], ['ring', EMIT_RING], ['box', EMIT_BOX]]);
 
 // Motion trails (v1.9.0). A trail is a fixed-size ring buffer of a particle's recent world
 // positions, stroked as a single flat-alpha ribbon (uniform opacity along its length, so the
@@ -252,7 +286,7 @@ export const presets = {
     fireworks: {
         count: 140, spread: 1.9, speed: 380, speedVariance: 220,
         gravity: 420, drag: 0.97, sizeMin: 6, sizeMax: 14,
-        lifeMin: 1.6, lifeMax: 3.2, shape: 'star', angle: -Math.PI / 2,
+        lifeMin: 1.6, lifeMax: 3.2, shape: 'star', angle: -HALF_PI,
     },
     /** Powerful angled launch -- side cannons, stage effects. */
     cannons: {
@@ -264,13 +298,13 @@ export const presets = {
     snow: {
         count: 180, spread: Math.PI * 0.95, speed: 60, speedVariance: 35,
         gravity: 95, drag: 0.996, sizeMin: 3.5, sizeMax: 7,
-        lifeMin: 3.5, lifeMax: 7.5, shape: 'circle', angle: -Math.PI / 2,
+        lifeMin: 3.5, lifeMax: 7.5, shape: 'circle', angle: -HALF_PI,
     },
     /** Vibrant rainbow burst using perceptually tuned OKLCH. */
     pride: {
         count: 110, spread: 1.6, speed: 320, speedVariance: 160,
         gravity: 480, drag: 0.975, sizeMin: 5, sizeMax: 13,
-        lifeMin: 1.7, lifeMax: 3.3, shape: 'rect', angle: -Math.PI / 2,
+        lifeMin: 1.7, lifeMax: 3.3, shape: 'rect', angle: -HALF_PI,
         colors: [
             { l: 0.62, c: 0.32, h:  15 }, // red
             { l: 0.68, c: 0.28, h:  45 }, // orange
@@ -295,7 +329,7 @@ const Shapes = {
 
     circle(ctx, w) {
         ctx.beginPath();
-        ctx.arc(0, 0, w / 2, 0, Math.PI * 2);
+        ctx.arc(0, 0, w / 2, 0, TAU);
         ctx.fill();
     },
 
@@ -304,7 +338,7 @@ const Shapes = {
         const ir = r * 0.4;
         ctx.beginPath();
         for (let i = 0; i < 10; i++) {
-            const a = (i * Math.PI) / 5 - Math.PI / 2;
+            const a = (i * Math.PI) / 5 - HALF_PI;
             const rad = i % 2 === 0 ? r : ir;
             if (i === 0) ctx.moveTo(Math.cos(a) * rad, Math.sin(a) * rad);
             else ctx.lineTo(Math.cos(a) * rad, Math.sin(a) * rad);
@@ -648,9 +682,9 @@ export function createConfetti(canvas, {
         pool.y[i] = y;
         pool.vx[i] = vx;
         pool.vy[i] = vy;
-        pool.spin[i] = rng.next() * Math.PI * 2;
+        pool.spin[i] = rng.next() * TAU;
         pool.spinV[i] = (rng.next() - 0.5) * 10;
-        pool.tilt[i] = rng.next() * Math.PI * 2;
+        pool.tilt[i] = rng.next() * TAU;
         pool.tiltV[i] = 1 + rng.next() * 4;
         pool.w[i] = config.sizeMin + rng.next() * (config.sizeMax - config.sizeMin);
         pool.h[i] = pool.w[i] * (0.4 + rng.next() * 0.6); // slight height variation
@@ -955,13 +989,13 @@ export function createConfetti(canvas, {
         ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
         for (let i = 0; i < Math.min(count, 40); i++) {
-            const angle = -Math.PI / 2 + (rng.next() - 0.5) * spread;
+            const angle = -HALF_PI + (rng.next() - 0.5) * spread;
             const dist = 30 + rng.next() * 120;
             const px = cx + Math.cos(angle) * dist;
             const py = cy + Math.sin(angle) * dist;
             const size = sizeMin + rng.next() * (sizeMax - sizeMin);
             const color = colors[Math.floor(rng.next() * colors.length)];
-            const rotation = rng.next() * Math.PI * 2;
+            const rotation = rng.next() * TAU;
             // Honour a `shapes` mix in the reduced-motion render too. Single-shape (null)
             // takes no extra rng draw, so the non-mixed static render is unchanged.
             const id = shapeIds ? shapeIds[(rng.next() * shapeIds.length) | 0] : shapeId;
@@ -1035,6 +1069,8 @@ export function createConfetti(canvas, {
          * @param {number} [options.trail]       Per-particle motion-trail length 0..capacity (default: full capacity). Needs a construction `trail` budget; ignored otherwise. Render overlay, fingerprint-safe
          * @param {Array}  [options.colors]      Array of OKLCH objects or CSS strings
          * @param {Array}  [options.lifeColors]  Multi-stop OKLCH life ramp (>= 2 stops, birth-color first): the body sweeps it over each particle's life (sparks cooling white->red). Baked once per burst; the trail stays the flat `colors` pick. Opt-in, zero-rng, a pure color overlay -- position fingerprints preserved
+         * @param {string} [options.emit]       Spawn-origin shape: 'line' (horizontal curtain), 'ring' (firework shell, velocity radial-outward), or 'box' (square area) -- sized by `emitSize`. Default: a single point. Opt-in; off/unknown/`emitSize<=0` => point spawn, byte-identical
+         * @param {number} [options.emitSize]   Emitter extent in CSS px: line half-length / ring radius / box square half-extent. Needs a shape in `emit`; <= 0 or non-finite => point spawn
          * @param {number} [options.angle=-Math.PI/2] Center angle of emission cone
          * @param {Function} [options.onComplete] Called when all burst particles die
          */
@@ -1071,7 +1107,9 @@ export function createConfetti(canvas, {
                   trail,
                   colors = DEFAULT_COLORS,
                   lifeColors,
-                  angle = -Math.PI / 2,
+                  emit,
+                  emitSize,
+                  angle = -HALF_PI,
                   onComplete,
               } = {}) {
             if (destroyed) return;
@@ -1102,7 +1140,7 @@ export function createConfetti(canvas, {
             sizeMax = nonneg(sizeMax, 12);
             lifeMin = nonneg(lifeMin, 1.5);
             lifeMax = nonneg(lifeMax, 3.0);
-            angle = num(angle, -Math.PI / 2);
+            angle = num(angle, -HALF_PI);
             // A null/empty colors array would throw on .map (fail open); fall back to the defaults.
             if (!Array.isArray(colors) || colors.length === 0) colors = DEFAULT_COLORS;
 
@@ -1124,8 +1162,15 @@ export function createConfetti(canvas, {
             const parsedColors = colors.map(c => typeof c === 'string' ? c : toCssOklch(c));
             // Bake the color-over-life ramp ONCE (or null when off) -- off the hot path, like parsedColors.
             const lifeRamp = buildLifeRamp(lifeColors);
+            // Spawn emitter (v1.13.0): resolve `emit` to a small int id ONCE, so the spawn loop
+            // branches on an int, not a string. Fail-closed: an unknown/non-string shape, or a
+            // non-positive/non-finite `emitSize`, collapses to EMIT_OFF (point spawn, byte-identical).
+            let emitId = EMIT_ID.get(emit) ?? EMIT_OFF;
+            const emitR = nonneg(emitSize, 0);
+            if (emitR <= 0) emitId = EMIT_OFF;
 
-            // Reduced motion: show static confetti, no animation
+            // Reduced motion: show static confetti, no animation. `emit` is inert here -- the static
+            // fan is a fixed accessible layout with no rng origin (like every motion feature).
             if (respectReducedMotion && _prefersReducedMotion) {
                 renderStaticBurst(cx, cy, count, parsedColors, shapeId, sizeMin, sizeMax, spread, emoji, shapeIds);
                 if (onComplete) setTimeout(onComplete, 1500);
@@ -1155,7 +1200,24 @@ export function createConfetti(canvas, {
             for (let i = 0; i < count; i++) {
                 const a = angle + (rng.next() - 0.5) * spread;
                 const s = speed + (rng.next() - 0.5) * speedVariance * 2;
-                spawn(cx, cy, Math.cos(a) * s, Math.sin(a) * s, config);
+                // Emitter branch: EMIT_OFF (default) inserts no rng draw and spawns at the point,
+                // byte-identical to a point burst. line/box offset the origin; ring places the piece
+                // on the circle AND fires it radially outward (reusing the spread jitter `a - angle`).
+                if (emitId === EMIT_OFF) {
+                    spawn(cx, cy, Math.cos(a) * s, Math.sin(a) * s, config);
+                } else if (emitId === EMIT_LINE) {
+                    const ex = cx + (rng.next() * 2 - 1) * emitR;
+                    spawn(ex, cy, Math.cos(a) * s, Math.sin(a) * s, config);
+                } else if (emitId === EMIT_RING) {
+                    const th = rng.next() * TAU;
+                    const j = a - angle; // reuse the already-drawn spread jitter, no new draw
+                    spawn(cx + Math.cos(th) * emitR, cy + Math.sin(th) * emitR,
+                          Math.cos(th + j) * s, Math.sin(th + j) * s, config);
+                } else { // EMIT_BOX
+                    const ex = cx + (rng.next() * 2 - 1) * emitR;
+                    const ey = cy + (rng.next() * 2 - 1) * emitR;
+                    spawn(ex, ey, Math.cos(a) * s, Math.sin(a) * s, config);
+                }
             }
 
             if (onComplete) {
@@ -1192,6 +1254,8 @@ export function createConfetti(canvas, {
          * @param {number} [options.settle=0]       Rest-speed threshold px/sec: a piece whose post-bounce |vy| drops below it freezes on the `floor` and piles (keeps aging + fades). Needs a `floor`. Opt-in, zero-rng
          * @param {number} [options.trail]          Per-particle motion-trail length 0..capacity (default: full). Needs a construction `trail` budget; render overlay, fingerprint-safe
          * @param {Array}  [options.lifeColors]     Multi-stop OKLCH life ramp (>= 2 stops, birth-color first): the body sweeps it over each particle's life. Baked once; trail stays the flat `colors` pick. Opt-in, zero-rng, a pure color overlay
+         * @param {string} [options.emit]          Spawn-origin shape: 'line' / 'ring' (radial-outward shell) / 'box', sized by `emitSize`. Default: a single point. Opt-in; off/unknown/`emitSize<=0` => point spawn, byte-identical
+         * @param {number} [options.emitSize]      Emitter extent in CSS px: line half-length / ring radius / box square half-extent. Needs a shape in `emit`; <= 0 or non-finite => point spawn
          */
         spray({
                   duration = 1000,
@@ -1227,7 +1291,9 @@ export function createConfetti(canvas, {
                   trail,
                   colors = DEFAULT_COLORS,
                   lifeColors,
-                  angle = -Math.PI / 2,
+                  emit,
+                  emitSize,
+                  angle = -HALF_PI,
                   followPointer = false,
               } = {}) {
             if (destroyed) return;
@@ -1257,7 +1323,7 @@ export function createConfetti(canvas, {
             sizeMax = nonneg(sizeMax, 10);
             lifeMin = nonneg(lifeMin, 1.2);
             lifeMax = nonneg(lifeMax, 2.5);
-            angle = num(angle, -Math.PI / 2);
+            angle = num(angle, -HALF_PI);
             if (!Number.isFinite(x)) x = undefined;
             if (!Number.isFinite(y)) y = undefined;
             if (!Array.isArray(colors) || colors.length === 0) colors = DEFAULT_COLORS;
@@ -1279,6 +1345,11 @@ export function createConfetti(canvas, {
             const parsedColors = colors.map(c => typeof c === 'string' ? c : toCssOklch(c));
             // Bake the color-over-life ramp ONCE (or null when off) -- off the hot path, like parsedColors.
             const lifeRamp = buildLifeRamp(lifeColors);
+            // Spawn emitter (v1.13.0): resolve `emit` once (see burst). Fail-closed to EMIT_OFF on an
+            // unknown/non-string shape or a non-positive/non-finite size; inert under reduced motion.
+            let emitId = EMIT_ID.get(emit) ?? EMIT_OFF;
+            const emitR = nonneg(emitSize, 0);
+            if (emitR <= 0) emitId = EMIT_OFF;
 
             if (respectReducedMotion && _prefersReducedMotion) {
                 renderStaticBurst(cx, cy, 30, parsedColors, shapeId, sizeMin, sizeMax, spread, emoji, shapeIds);
@@ -1327,7 +1398,22 @@ export function createConfetti(canvas, {
                 for (let i = 0; i < rate; i++) {
                     const a = angle + (rng.next() - 0.5) * spread;
                     const s = speed + (rng.next() - 0.5) * speedVariance * 2;
-                    spawn(sx, sy, Math.cos(a) * s, Math.sin(a) * s, config);
+                    // Emitter branch (see burst): EMIT_OFF spawns at the point, byte-identical.
+                    if (emitId === EMIT_OFF) {
+                        spawn(sx, sy, Math.cos(a) * s, Math.sin(a) * s, config);
+                    } else if (emitId === EMIT_LINE) {
+                        const ex = sx + (rng.next() * 2 - 1) * emitR;
+                        spawn(ex, sy, Math.cos(a) * s, Math.sin(a) * s, config);
+                    } else if (emitId === EMIT_RING) {
+                        const th = rng.next() * TAU;
+                        const j = a - angle; // reuse the spread jitter, no new draw
+                        spawn(sx + Math.cos(th) * emitR, sy + Math.sin(th) * emitR,
+                              Math.cos(th + j) * s, Math.sin(th + j) * s, config);
+                    } else { // EMIT_BOX
+                        const ex = sx + (rng.next() * 2 - 1) * emitR;
+                        const ey = sy + (rng.next() * 2 - 1) * emitR;
+                        spawn(ex, ey, Math.cos(a) * s, Math.sin(a) * s, config);
+                    }
                 }
             };
 

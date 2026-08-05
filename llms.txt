@@ -1,6 +1,6 @@
 # @zakkster/lite-confetti
 
-> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, turbulence + gust (time-varying living-air forces), a vortex/attractor point force (attract + swirl), a full bounding box (floor + walls + ceiling) with bounce, settle-and-pile (rest-threshold freeze on the floor), zero-GC motion trails (fading ribbons), color-over-life ramps (multi-stop OKLCH per-life gradients), reduced-motion support, and timeline composability.
+> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, turbulence + gust (time-varying living-air forces), a vortex/attractor point force (attract + swirl), a full bounding box (floor + walls + ceiling) with bounce, settle-and-pile (rest-threshold freeze on the floor), zero-GC motion trails (fading ribbons), color-over-life ramps (multi-stop OKLCH per-life gradients), spawn emitter shapes (line curtain / ring shell / box area), reduced-motion support, and timeline composability.
 
 ## Installation
 npm install @zakkster/lite-confetti
@@ -64,13 +64,15 @@ Full control instance bound to a specific canvas.
 | `trail` | capacity | Per-particle motion-trail length 0..capacity (how many recent positions the ribbon spans). Needs a construction `trail` budget; ignored without one. 0 opts a burst out. Pure render overlay; every physics fingerprint preserved (v1.9.0) |
 | `colors` | 7 OKLCH defaults | Array of OKLCH objects `{ l, c, h }` or CSS strings |
 | `lifeColors` | - | Multi-stop OKLCH life ramp (>= 2 stops, birth-color first): the BODY sweeps it over each particle's life (sparks cooling white->red). Baked once per burst via bakeCssGradient, indexed by life fraction; the trail stays the flat `colors` pick. Invalid/short -> flat color. Opt-in; zero-rng; a pure color overlay, every position fingerprint preserved (v1.12.0) |
+| `emit` | - (point) | Spawn-origin shape: 'line' (horizontal curtain), 'ring' (firework shell, velocity radial-outward), or 'box' (square area), sized by `emitSize`. Line/box move only the origin; ring also aims velocity outward. Opt-in; unknown/non-string/`emitSize<=0` -> point spawn, byte-identical. First feature with a CONDITIONAL spawn-rng draw (off inserts none); each shape its own committed hash (v1.13.0) |
+| `emitSize` | - | Emitter extent (CSS px): line half-length / ring radius / box square half-extent. Needs a shape in `emit`; <= 0 or non-finite -> point spawn |
 | `angle` | -π/2 (upward) | Center angle of emission cone (radians) |
 | `onComplete` | — | Called when all burst particles die |
 
 Spray-only: `duration` (ms, default 1000), `rate` (particles/frame, default 5)
 
 ## Particle Physics
-Each particle has: position (x, y), velocity (vx, vy), gravity, wind, turbulence, gust, vortex center (vortX/vortY) + attract + swirl, floor, bounce, settle (rest threshold) + landed (frozen flag), wallLeft, wallRight, ceiling, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame (the WHOLE block below is skipped for a `landed` piece — a settled piece is frozen in place): gravity → wind (guarded, opt-in) → turbulence (guarded, opt-in: per-particle rotating accel from the tilt+spin phases, both axes) → gust (guarded, opt-in: global sin(elapsed*GUST_HZ) horizontal accel) → vortex (guarded, opt-in: linear-spring point force, accel = [[attract,-swirl],[swirl,attract]]·(center-pos), component-capped) → drag → position update → floor + ceiling collision (guarded, opt-in: clamp + reflect vy; the floor block also holds the settle test: if `settle` and the reflected |vy| < settle, freeze the piece — landed=1, vx=vy=0) → spin → tilt → sway → wall collision (guarded, opt-in, after sway: clamp + reflect vx). The floor/ceiling/wall collisions together form an opt-in axis-aligned bounding box; turbulence + gust are time-varying forces; attract + swirl are a directed point force; settle is a lifecycle behaviour (a settled piece keeps aging + fading, so the pool still recycles); every force, edge, and the rest test draws no rng. After the physics, an opt-in RENDER overlay runs: if trails are on, the frame's final (x,y) is appended to a per-particle ring buffer and a fading ribbon is stroked through the recent positions in world space (moveTo/lineTo/stroke, never translate) — it reads but never mutates physics state, so it cannot move any position fingerprint (v1.9.0). The body's fill color is then chosen: if `lifeColors` is set, the piece's baked ramp is indexed by its life fraction (`step = clamp(floor((1 - life/maxL) * (RAMP_N-1)))`) for a pure array read; otherwise the flat per-particle `colors[i]`. Color-over-life draws no rng and moves no position, so it is a pure color overlay -- every position fingerprint is preserved, the palette `colors` still colors the flat trail, and an invalid ramp fails closed to the flat color (v1.12.0).
+Each particle has: position (x, y), velocity (vx, vy), gravity, wind, turbulence, gust, vortex center (vortX/vortY) + attract + swirl, floor, bounce, settle (rest threshold) + landed (frozen flag), wallLeft, wallRight, ceiling, drag, spin (rotation angle + angular velocity), tilt (wobble phase + speed producing 3D tumbling via X-scale oscillation), width, height, lifetime. Physics applied per-frame (the WHOLE block below is skipped for a `landed` piece — a settled piece is frozen in place): gravity → wind (guarded, opt-in) → turbulence (guarded, opt-in: per-particle rotating accel from the tilt+spin phases, both axes) → gust (guarded, opt-in: global sin(elapsed*GUST_HZ) horizontal accel) → vortex (guarded, opt-in: linear-spring point force, accel = [[attract,-swirl],[swirl,attract]]·(center-pos), component-capped) → drag → position update → floor + ceiling collision (guarded, opt-in: clamp + reflect vy; the floor block also holds the settle test: if `settle` and the reflected |vy| < settle, freeze the piece — landed=1, vx=vy=0) → spin → tilt → sway → wall collision (guarded, opt-in, after sway: clamp + reflect vx). The floor/ceiling/wall collisions together form an opt-in axis-aligned bounding box; turbulence + gust are time-varying forces; attract + swirl are a directed point force; settle is a lifecycle behaviour (a settled piece keeps aging + fading, so the pool still recycles); every force, edge, and the rest test draws no rng. After the physics, an opt-in RENDER overlay runs: if trails are on, the frame's final (x,y) is appended to a per-particle ring buffer and a fading ribbon is stroked through the recent positions in world space (moveTo/lineTo/stroke, never translate) — it reads but never mutates physics state, so it cannot move any position fingerprint (v1.9.0). The body's fill color is then chosen: if `lifeColors` is set, the piece's baked ramp is indexed by its life fraction (`step = clamp(floor((1 - life/maxL) * (RAMP_N-1)))`) for a pure array read; otherwise the flat per-particle `colors[i]`. Color-over-life draws no rng and moves no position, so it is a pure color overlay -- every position fingerprint is preserved, the palette `colors` still colors the flat trail, and an invalid ramp fails closed to the flat color (v1.12.0). At BIRTH (before the per-frame block), the spawn ORIGIN is chosen: with `emit` off it is the point (x, y); with `emit` set it is a point on a line (horizontal, half-length emitSize), a ring (radius emitSize), or a box (square half-extent emitSize), and for a ring the launch velocity is aimed radially outward (speed = shell expansion, spread = fuzz; line/box leave velocity to angle/spread). This is the FIRST feature with a conditional spawn-rng draw: `emit` off inserts none, so the seeded stream and every position fingerprint are byte-identical; per-shape draw counts differ (box 2, line/ring 1), so each shape earns its own committed hash; bad shape or non-positive size fails closed to a point spawn (v1.13.0).
 
 ## Rotation
 Particles rotate via `spin` (angular velocity applied each frame). The `spinV` is randomized per particle at spawn: `(rng.next() - 0.5) * 10` radians/sec. Combined with `tilt` wobble (cosine-driven X-scale oscillation), this produces realistic 3D tumbling.
@@ -79,7 +81,7 @@ Particles rotate via `spin` (angular velocity applied each frame). The `spinV` i
 - SoA flat TypedArrays for cache-friendly particle physics
 - Deterministic: `seed(42)` produces identical output every time
 - 5 built-in shapes (rect, circle, star, triangle, emoji) + `registerShape()` for custom vector/sprite shapes
-- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + turbulence/gust (time-varying living-air forces) + vortex/attractor (attract + swirl point force) + a full bounding box (floor/walls/ceiling) with bounce + settle-and-pile (rest-threshold freeze on the floor) + color-over-life (multi-stop OKLCH ramp swept over each particle's life), all deterministic
+- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + turbulence/gust (time-varying living-air forces) + vortex/attractor (attract + swirl point force) + a full bounding box (floor/walls/ceiling) with bounce + settle-and-pile (rest-threshold freeze on the floor) + color-over-life (multi-stop OKLCH ramp swept over each particle's life) + spawn emitter shapes (line curtain / ring shell / box area), all deterministic
 - Motion trails (v1.9.0): opt-in fading ribbons via a zero-GC fixed ring buffer; a pure render overlay (world-space stroke, never translate) so every physics fingerprint is preserved
 - OKLCH colors (perceptually uniform — every piece looks equally vibrant)
 - Reduced motion: auto-detects `prefers-reduced-motion: reduce`, renders static spread, fades out
@@ -445,6 +447,42 @@ finiteness case (the accel cap). Torture T5 threads signed attract/swirl + a jit
 the differential fuzz; T6 lane 5 arms a stable positive attract+swirl on the immortal pool; T1 adds
 attract/swirl/center poison AND strong finite-life repellers under the finite-position detector.
 See decision 0011. No runtime dep change. Unit suite 122 -> 132.
+
+## v1.13.0 -- emit / emitter shapes
+
+The FIRST feature on a new EMISSION-GEOMETRY axis. Every chapter changed how a particle MOVES (forces),
+ENDS (settle), or is DRAWN (trails, color); this changes WHERE it is BORN. Two knobs: `emit`
+('line' | 'ring' | 'box') + `emitSize` (one scalar). Instead of the single point (x, y), a burst
+distributes its spawn origin over a shape -- a horizontal `line` curtain (rain/snow), a `ring` firework
+shell, or a `box` area -- e.g. c.burst({ emit: 'ring', emitSize: 140, speed: 6 }).
+
+Locked decisions. (1) A single `emitSize` scalar sizes every shape (line half-length / ring radius / box
+square half-extent) -- house style over an `emit` object (angled lines / rectangular boxes deferred).
+(2) Ring = radial shell: for `emit:'ring'` ONLY, each piece's velocity points radially OUTWARD from the
+centre (speed = expansion rate, spread = angular fuzz), reusing the already-drawn spread jitter; line/box
+leave velocity to angle/spread and move only the origin.
+
+The conditional spawn-rng contract (the crux). `emit` is the FIRST feature to add a conditional spawn-time
+rng draw. The emitter branch sits in the spawn loop AFTER the speed draw and BEFORE spawn(). `EMIT_OFF`
+(the default) inserts NOTHING -- the loop draws the identical angle then speed then calls the point
+spawn() -- so the seeded stream and EVERY committed position fingerprint (1569828004, and all prior
+physics/trail/color hashes) are byte-identical to a point burst. Per-shape draw counts differ: line/ring
+draw 1 (the parametric position), box draws 2 (independent x/y). Because the counts differ, each shape
+earns its OWN committed hash -- line 2558715937, ring 2441425203, box 2748626140 -- all distinct from the
+point spawn and each other; within a shape the count is fixed, so it replays identically under a seed.
+
+No probe needed. Unlike trails/lifeColors (which draw in world space or move only fillStyle -- invisible
+to the position hash, needing strokeHash/colorHash), `emit` MOVES the spawn origin, and the mock canvas
+already folds translate(x,y) into the position hash, so the existing fingerprint observes it directly.
+
+Internal + fail closed. Module consts EMIT_OFF/LINE/RING/BOX + an EMIT_ID string->int Map, resolved once
+per burst/spray (emitId/emitR locals), so the spawn loop branches on an int, not a string. spawn()'s
+signature is UNCHANGED -- the emitter computes the origin (and, for ring, the velocity) in the caller.
+An unknown/non-string shape or a non-positive/non-finite emitSize collapses to EMIT_OFF (a point spawn);
+the origin is an offset of the finite burst centre, so no non-finite draw position can result. Inert
+under reduced motion (the static fan has no rng origin); the hot render path is untouched (emit only
+moves the origin). Unit suite 149 -> 157; every prior position/trail/color fingerprint preserved when
+off; ~0 B/frame at spawn (a few multiplies on stack locals, the shape-id an int).
 
 ## v1.12.0 -- color / lifeColors
 

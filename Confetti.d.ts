@@ -122,6 +122,26 @@ export interface BurstOptions {
      *  out. Trails are a pure RENDER overlay -- every committed physics fingerprint is preserved
      *  at any depth -- and have no effect under reduced motion. */
     trail?: number;
+    /**
+     * Spawn emitter shape (v1.13.0). Distributes a burst's spawn ORIGIN over a shape instead of
+     * the single point `(x, y)`:
+     *  - `'line'` -- a HORIZONTAL segment centred on `(x, y)`, half-length `emitSize` (a rain / snow
+     *    curtain);
+     *  - `'ring'` -- the circle of radius `emitSize` around `(x, y)`, with each piece fired radially
+     *    OUTWARD from the centre (a firework shell: `speed` = expansion rate, `spread` = angular fuzz);
+     *  - `'box'` -- the square `[x +/- emitSize, y +/- emitSize]` (an area burst).
+     * `line` and `box` leave velocity governed by `angle`/`spread` (only the origin moves). Default:
+     * a single point. Opt-in and fail-closed -- an unknown shape, a non-string value, or a
+     * non-positive/non-finite `emitSize` spawns at the point, byte-identical to a point burst; every
+     * committed position fingerprint is preserved when off. No effect under reduced motion.
+     */
+    emit?: 'line' | 'ring' | 'box';
+    /**
+     * Emitter extent in CSS px for `emit`: the line half-length, the ring radius, or the box square
+     * half-extent. Required for `emit` to take effect; `<= 0` or non-finite falls back to a point
+     * spawn. Ignored when `emit` is unset. Default: none (point spawn).
+     */
+    emitSize?: number;
     angle?: number; onComplete?: () => void;
 }
 export interface SprayOptions extends Omit<BurstOptions, 'onComplete'> {
