@@ -3,6 +3,53 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.14.0] - 2026-08-06
+
+Feature release: `stagger` -- **staggered emission**, the first feature on a new **emission-timing**
+axis. v1.13 opened emission *geometry* (**where** a piece is born); this opens **when**. A burst has
+always spawned its whole `count` at frame 0; an opt-in `stagger` (a duration in ms) spreads the births
+evenly across that window, so a burst **cascades / ripples in** instead of appearing all at once --
+`c.burst({ count: 120, stagger: 400 })`. It is the burst-only analog of a spray's `duration` (a spray
+already emits over time). The mechanism is a **birth-delay gate**: all `count` pieces still spawn at
+call time (so the rng sequence is *byte-identical* to a synchronous burst), each stamped with a
+per-piece `delay` of `stagger * i / count` -- a function of the loop index only, drawing **no rng**. An
+unborn piece is frozen and invisible (physics, life-countdown, trail, and render all skipped) until its
+delay elapses, then it lives its **full life from birth**. Off (`stagger <= 0` / non-finite) leaves the
+delay column `0`, the gate never fires, and the burst spawns synchronously -- byte-identical to every
+prior release (`1569828004` and all prior physics/trail/color/emit hashes preserved). On earns its own
+committed fingerprint (`3414676538`) purely from birth *timing* (the same per-piece draws, spread across
+frames).
+
+### Added
+- **`stagger: number` on `burst()`** -- a staggered-emission window in ms. Spreads the `count` births
+  evenly across it (piece `i` wakes at `stagger * i / count`). Burst-only; ignored by `spray()`.
+
+### Semantics
+- **Opt-in, zero-cost by default.** With `stagger` off (or `<= 0` / non-finite), every piece is born at
+  `t0` and the birth gate never fires -- byte-identical to every prior release.
+- **Byte-identical rng sequence.** All `count` pieces spawn at call time, drawing the identical rng
+  sequence as a synchronous burst; only the per-index `delay` (no rng) differs, so a staggered burst has
+  the *same* per-piece `(angle, speed, spin, ...)` -- only birth timing, and thus positions per frame,
+  change. Hence its own committed hash, deterministic under a fixed seed + fixed dt.
+- **Full life from birth.** An unborn piece does not age; its full lifetime begins when it is born, so a
+  late piece outlives the early ones by the width of the window.
+- **Burst-only.** `spray()` already emits over time, so it ignores `stagger` (the shared `delay` column
+  is simply always `0` for spray pieces).
+- **Fail closed.** `NaN` / negative / `Infinity` / non-numeric coerce to `0` (synchronous). The delay is
+  a time offset of the finite spawn origin, so no non-finite draw position can result. Inert under
+  reduced motion (the static fan has no per-piece animation).
+
+### Internal
+- One new per-particle pool column: `delay` (Float32, seconds until birth; 4 B/particle), reset to `0`
+  in `spawn()` (fail-closed pool-reuse guard, like `landed`). `spawn()` now **returns its slot** so the
+  caller can stamp the delay; the guarded write runs only when `stagger` is armed.
+- The birth gate is one Float32 read + compare per alive piece per frame (mirrors the `life <= 0` /
+  `!landed` guards); an unborn piece counts as alive so the loop stays registered through the window.
+  Zero allocation -- torture T6 measures a staggered burst mid-emission at ~0 B/frame.
+- New test-harness probe `translates` (pieces actually drawn per frame), kept out of the position hash,
+  as the non-vacuous witness that stagger delays births.
+- Unit suite 157 -> 165.
+
 ## [1.13.0] - 2026-08-06
 
 Feature release: `emit` -- **spawn emitter shapes**, the first feature on a new **emission-geometry**

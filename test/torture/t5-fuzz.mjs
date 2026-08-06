@@ -75,6 +75,7 @@ function genOp(prng, allowReseed) {
                 lifeColors: genRamp(prng),                                 // color-over-life ramp, half off
                 emit: (prng() % 2 === 0) ? undefined : EMIT_SHAPES[prng() % EMIT_SHAPES.length], // emitter shape, half off
                 emitSize: 20 + (prng() % 280),                             // emitter extent (line half-len / ring radius / box half-extent)
+                stagger: (prng() % 2 === 0) ? 0 : 50 + (prng() % 450),     // staggered-emission window (ms), half off; burst-only, zero-rng
                 lifeMin: 0.5 + (prng() % 200) / 100,
                 lifeMax: 2.5 + (prng() % 200) / 100,
             },

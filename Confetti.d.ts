@@ -142,6 +142,15 @@ export interface BurstOptions {
      * spawn. Ignored when `emit` is unset. Default: none (point spawn).
      */
     emitSize?: number;
+    /**
+     * Staggered-emission window in milliseconds (v1.14.0). A burst normally spawns its whole `count`
+     * at once; `stagger` spreads the births evenly across this window (piece `i` wakes at
+     * `stagger * i / count` ms), so the burst cascades / ripples in. This is the BURST-only analog of
+     * a spray's `duration` -- a spray already emits over time, so `stagger` is ignored on `spray()`.
+     * Opt-in and fail-closed: off / `<= 0` / non-finite spawns synchronously, byte-identical to every
+     * prior release. Zero-rng (the delay schedule is index-based); no effect under reduced motion.
+     */
+    stagger?: number;
     angle?: number; onComplete?: () => void;
 }
 export interface SprayOptions extends Omit<BurstOptions, 'onComplete'> {

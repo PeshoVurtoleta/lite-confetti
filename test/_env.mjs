@@ -130,6 +130,14 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     // built for a filled shape is simply never committed -- strokeHash/strokes are trail-only.
     let strokeHash = 0 >>> 0;
     let strokes = 0;
+    // Staggered-emission PROBE (v1.14.0). Every DRAWN piece calls ctx.translate exactly once per
+    // frame (the body transform); an unborn (staggered) piece `continue`s before that, so it emits no
+    // translate. `translates` counts translate() calls in record mode -- the "pieces actually drawn"
+    // tally a bare position hash cannot expose. Kept OUT of `hash` (like strokes/colorHash), so every
+    // committed position fingerprint is byte-identical whether or not it is read. It is the
+    // non-vacuous witness that `stagger` delays births: a staggered burst draws strictly fewer pieces
+    // in the early frames than a synchronous one, converging once the window elapses.
+    let translates = 0;
     // Color-over-life PROBE (v1.12.0). A `lifeColors` burst moves ONLY ctx.fillStyle; it draws no
     // translate, so it adds NOTHING to the position `hash` (colorHash is kept entirely out of the mix,
     // like strokeHash/sumX/maxY -- every committed position fingerprint is byte-identical whether or
@@ -207,7 +215,7 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
         stroke() { if (record) { strokeHash = (Math.imul(strokeHash ^ pathHash, 16777619)) >>> 0; strokes++; } },
         save() {}, restore() {}, scale() {}, setTransform() {},
         drawImage() {},
-        translate(x, y) { if (mix) mix(x, y); },
+        translate(x, y) { if (record) translates++; if (mix) mix(x, y); },
         rotate() {},
         fillText() { if (record) colorHash = foldStr(colorHash, ctx.fillStyle); globalThis.__fillTextCount = (globalThis.__fillTextCount || 0) + 1; },
         canvas: c,
@@ -221,6 +229,7 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     Object.defineProperty(c, 'minY', { get() { return minY; } });
     Object.defineProperty(c, 'strokeHash', { get() { return strokeHash >>> 0; } });
     Object.defineProperty(c, 'strokes', { get() { return strokes; } });
+    Object.defineProperty(c, 'translates', { get() { return translates; } });
     Object.defineProperty(c, 'colorHash', { get() { return colorHash >>> 0; } });
     return c;
 }

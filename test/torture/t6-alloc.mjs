@@ -180,6 +180,25 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- the emitter spawn branch is allocating');
     }
 
+    // (8) A staggered burst mid-emission (v1.14.0): the birth gate + the per-frame `delay -= dtSec`
+    // decrement are NEW hot-path code, and they must run INSIDE the measured window. A huge stagger
+    // window over a full MAXP burst keeps nearly every piece UNBORN for the whole soak, so the
+    // gate's unborn branch (`delay -= dtSec; alive++; continue;`) executes for ~MAXP pieces every
+    // frame -- a Float32 read + subtract + compare, no allocation. Immortal pieces + the huge window
+    // hold the pool at MAXP (all unborn count as alive), so any per-frame allocation on the gate path
+    // shows up as retained bytes.
+    const cg = createConfetti(makeCanvas(), { seed: 1414, maxParticles: MAXP });
+    cg.burst({ count: MAXP, x: 400, y: 300, speed: 200, gravity: 500,
+        lifeMin: 1e6, lifeMax: 1e6, stagger: 1e7 }); // ~all pieces stay unborn across the window
+    pump(1, 16);
+    check(cg.count === MAXP, () => `T6: stagger pool has ${cg.count} alive (unborn count as alive), expected ${MAXP}`);
+    const bpfStagger = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    cg.destroy();
+    if (bpfStagger > RETAIN_FLOOR_BPF) {
+        die('T6: staggered-emission update() retains ' + bpfStagger.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the birth-delay gate is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -193,6 +212,7 @@ export async function run() {
         + bpfPoison.toFixed(2) + ' B/frame from sanitised garbage inputs, '
         + bpfMix.toFixed(2) + ' B/frame from a shapes[] mix under wind + full box + turbulence/gust + vortex + trails, '
         + bpfSettle.toFixed(2) + ' B/frame from a fully-settled (frozen) pile, '
-        + bpfEmit.toFixed(2) + ' B/frame from a continuous ring-emitter spray); '
+        + bpfEmit.toFixed(2) + ' B/frame from a continuous ring-emitter spray, '
+        + bpfStagger.toFixed(2) + ' B/frame from a staggered burst mid-emission); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

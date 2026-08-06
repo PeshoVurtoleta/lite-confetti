@@ -122,6 +122,15 @@ export function run() {
         ['emit:size-Infinity', { count: 60, emit: 'ring', emitSize: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
         ['emit:no-size', { count: 60, emit: 'ring', lifeMin: 0.3, lifeMax: 0.3 }],
         ['emit:valid+box', { count: 60, emit: 'box', emitSize: 120, floor: 300, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
+        // stagger poison (v1.14.0): garbage windows must coerce to 0 (synchronous spawn); the delay is
+        // a time offset, so a bad value can never yield a non-finite draw position. A VALID stagger in
+        // a bouncing box confirms the birth gate stays finite while pieces are still being born.
+        ['stagger:NaN', { count: 60, stagger: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['stagger:neg', { count: 60, stagger: -200, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['stagger:0', { count: 60, stagger: 0, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['stagger:Infinity', { count: 60, stagger: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['stagger:nonnumeric', { count: 60, stagger: 'later', lifeMin: 0.3, lifeMax: 0.3 }],
+        ['stagger:valid+box', { count: 60, stagger: 250, floor: 300, bounce: 0.5, gravity: 3000, lifeMin: 0.6, lifeMax: 0.6 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],

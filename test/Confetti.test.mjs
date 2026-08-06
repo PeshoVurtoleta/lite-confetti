@@ -107,6 +107,16 @@ const EMIT_LINE_HASH = 2558715937; // emit:'line', emitSize:200 (horizontal curt
 const EMIT_RING_HASH = 2441425203; // emit:'ring', emitSize:200 (radial shell)
 const EMIT_BOX_HASH  = 2748626140; // emit:'box',  emitSize:200 (square area)
 
+// Committed position fingerprint for staggered emission (v1.14.0, decision 0015). `stagger` opens
+// the emission-TIMING axis: a burst spreads its `count` births evenly over a ms window instead of
+// spawning them all at frame 0. It uses a birth-delay gate -- all pieces spawn at CALL TIME (so the
+// rng sequence is byte-identical to a synchronous burst), each stamped with a NO-rng per-index delay;
+// an unborn piece is frozen + invisible until its delay elapses. So OFF reproduces COMMITTED_HASH
+// exactly, and ON earns its own hash purely from birth TIMING (same per-piece draws, spread across
+// frames). Probed on a SMALL-dt-from-t0 rig (the canonical pump(1,1000) would blow a sub-second
+// window in one frame); deterministic under a fixed seed + fixed dt, so it is its own replay gate.
+const STAGGER_HASH = 3414676538; // burst({ stagger: 300 }), 40 x 16ms frames from t0
+
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
 function withSilencedWarn(fn) {
     const orig = console.warn;
@@ -1705,6 +1715,155 @@ describe('lite-confetti', () => {
             };
             assert.equal(staticEmit({ emit: 'ring', emitSize: 150 }), staticEmit({}),
                 'emit should be inert on the static reduced-motion path');
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    //  stagger / staggered emission (v1.14.0, decision 0015)
+    // -------------------------------------------------------------------------
+    describe('stagger / staggered emission', () => {
+        // Two rigs. `runStd` is the canonical seed-12345 rig (a plain run reproduces COMMITTED_HASH),
+        // used to prove OFF is byte-identical. `runStagger` pumps SMALL dt FROM t0 -- the canonical
+        // pump(1,1000) first frame would blow a sub-second window in a single tick, so a stagger run
+        // must spread across many small frames. It also reads `translates` (pieces actually drawn) so
+        // the timing effect can be probed directly, not just via a fingerprint.
+        const runStd = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const h = canvas.hash;
+            c.destroy();
+            return h;
+        };
+        const runStagger = (opts, frames = 40) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(frames, 16);
+            const out = { hash: canvas.hash, translates: canvas.translates };
+            c.destroy();
+            return out;
+        };
+
+        it('is opt-in and fail-closed: off / <= 0 / non-finite spawns synchronously (byte-identical)', () => {
+            // The load-bearing property. The birth gate + guarded delay write must insert NOTHING when
+            // off, so the seeded stream -- and every committed fingerprint -- is byte-for-byte preserved.
+            assert.equal(runStd({}), COMMITTED_HASH, 'the birth gate perturbed the default stream');
+            for (const o of [
+                { stagger: 0 },          // explicit off
+                { stagger: -100 },       // negative -> nonneg 0
+                { stagger: NaN },        // non-finite -> nonneg default 0
+                { stagger: Infinity },   // non-finite -> nonneg default 0
+                { stagger: 'soon' },     // non-numeric -> nonneg default 0
+            ]) {
+                assert.equal(runStd(o), COMMITTED_HASH,
+                    `stagger ${JSON.stringify(o)} should spawn synchronously`);
+            }
+        });
+
+        it('every prior committed fingerprint still reproduces with stagger off (no sequence drift)', () => {
+            // The gate sits before the life countdown; off must not disturb the physics stream.
+            assert.equal(runStd({ floor: FLOOR_Y }), FLOOR_HASH, 'floor gate drifted');
+            assert.equal(runStd({ ...BOX, bounce: 0 }), BOX_HASH, 'box gate drifted');
+        });
+
+        it('matches the committed STAGGER fingerprint -- distinct + deterministic', () => {
+            const st = runStagger({ stagger: 300 }).hash;
+            if (STAGGER_HASH === null) console.log('[stagger] 300ms =', st);
+            else assert.equal(st, STAGGER_HASH, 'staggered positions changed vs the committed baseline');
+            // Distinct from a synchronous burst (births are spread, so positions differ per frame)...
+            assert.notEqual(st, COMMITTED_HASH, 'a staggered burst should differ from a synchronous one');
+            // ...and deterministic: same seed + fixed dt -> same hash on replay (the delay draws no rng).
+            assert.equal(runStagger({ stagger: 300 }).hash, st, 'stagger not deterministic');
+        });
+
+        it('spreads births across the window (non-vacuous timing via the translates probe)', () => {
+            // Every DRAWN piece calls translate once/frame; an unborn piece skips it. So in the early
+            // frames a staggered burst has drawn strictly FEWER pieces than a synchronous one, which
+            // draws all `count` from frame 1. A bare position hash cannot see this.
+            const syncEarly = runStagger({}, 4).translates;
+            const stagEarly = runStagger({ stagger: 300 }, 4).translates;
+            assert.ok(stagEarly < syncEarly * 0.5,
+                `stagger should delay births (early: sync=${syncEarly} stagger=${stagEarly})`);
+            // Once the window (300ms) has fully elapsed, every piece is born, so a single late frame
+            // draws all 120 -- the same per-frame count as a synchronous burst (convergence).
+            const perFrame = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 12345 });
+                c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                pump(30, 16);                        // 480ms > the 300ms window: all born
+                const before = canvas.translates;
+                pump(1, 16);
+                c.destroy();
+                return canvas.translates - before;
+            };
+            assert.equal(perFrame({ stagger: 300 }), perFrame({}),
+                'after the window, a staggered burst should draw every piece per frame (all born)');
+        });
+
+        it('a late-born piece lives its FULL life from birth (not from t0)', () => {
+            // life = 1s, window = 400ms. By ~1.12s a synchronous burst (all born at t0) is fully dead;
+            // a staggered burst still has its late-born pieces alive -- proof life starts at birth.
+            const aliveAt = (opts, frames) => {
+                const c = createConfetti(makeCanvas(), { seed: 12345 });
+                c.burst({ count: 120, shape: 'rect', lifeMin: 1, lifeMax: 1, spread: 1.8, ...opts });
+                pump(frames, 16);
+                const n = c.count;
+                c.destroy();
+                return n;
+            };
+            assert.equal(aliveAt({}, 70), 0, 'a synchronous 1s burst should be dead by 1.12s');
+            assert.ok(aliveAt({ stagger: 400 }, 70) > 0,
+                'a staggered burst should still have late-born pieces alive (full life from birth)');
+        });
+
+        it('keeps positions finite under stagger + gravity + bounce in a box (guards the birth gate)', () => {
+            const canvas = makeCanvas({ record: true, assertFinite: true });
+            const c = createConfetti(canvas, { seed: 3 });
+            assert.doesNotThrow(() => {
+                c.burst({
+                    x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 4, lifeMax: 4,
+                    wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350, bounce: 0.6,
+                    gravity: 4000, stagger: 250,
+                });
+                pump(80, 16);
+            });
+            c.destroy();
+        });
+
+        it('is ignored by spray() (spray already emits over time)', () => {
+            // stagger is a burst-only knob; spray must be byte-identical with or without it.
+            const spray = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 400, rate: 15, x: 400, y: 200, spread: 1.2, shape: 'rect',
+                    lifeMin: 4, lifeMax: 4, ...opts });
+                pump(1, 1000); pump(60, 16);
+                const h = canvas.hash;
+                c.destroy();
+                return h;
+            };
+            assert.equal(spray({ stagger: 300 }), spray({}), 'spray should ignore stagger');
+        });
+
+        it('has no effect under reduced motion (static fan is inert)', () => {
+            const staticStagger = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                    pump(1, 1000); pump(29, 16);
+                    const h = canvas.hash;
+                    c.destroy();
+                    return h;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            assert.equal(staticStagger({ stagger: 300 }), staticStagger({}),
+                'stagger should be inert on the static reduced-motion path');
         });
     });
 

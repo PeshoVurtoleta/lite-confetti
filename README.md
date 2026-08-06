@@ -12,7 +12,7 @@ Deterministic confetti engine with OKLCH colors, 5 built-in shapes plus custom
 tunable flutter, lateral wind, turbulence + gust (living-air forces), a vortex/attractor
 point force, a full bounding box (floor, walls, ceiling) with bounce, settle-and-pile,
 zero-GC motion trails, color-over-life ramps, spawn emitter shapes (line / ring / box),
-and reduced-motion support.
+staggered emission (a burst cascades in over a ms window), and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -111,6 +111,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `lifeColors` | Array | — | Multi-stop OKLCH life ramp (≥ 2 stops, birth-color first). The **body** sweeps it as each piece ages (sparks cooling white→red); the trail stays the flat `colors` pick. Opt-in; invalid falls back to flat. See [Color over life](#color-over-life). |
 | `emit` | string | — | Spawn-origin shape: `'line'` (horizontal curtain), `'ring'` (firework shell, velocity radial-outward), or `'box'` (square area), sized by `emitSize`. Default: a single point. Opt-in; unknown / `emitSize ≤ 0` = point spawn. See [Emitter shapes](#emitter-shapes). |
 | `emitSize` | number | — | Emitter extent in px: line half-length / ring radius / box square half-extent. Needs a shape in `emit`; `≤ 0` or non-finite = point spawn. |
+| `stagger` | number | — | Staggered-emission window in ms: spread the `count` births evenly over it (piece `i` wakes at `stagger·i/count`), so the burst cascades in instead of appearing at once. **Burst-only** (a spray already emits over time; it ignores `stagger`). Opt-in; off / `≤ 0` / non-finite = synchronous spawn, byte-identical. See [Staggered emission](#staggered-emission). |
 | `angle` | number | `-Math.PI / 2` | Center angle of emission cone in radians. -π/2 = upward. |
 | `onComplete` | Function | — | Called when all burst particles have died |
 
@@ -143,7 +144,8 @@ Every frame, each alive particle runs through this pipeline:
 
 ```
 --  SPAWN       origin = EMIT ? point-on(line | ring | box, emitSize) : (x, y)   (opt-in, at BIRTH; ring also fires velocity radially outward)
-0.  FROZEN?     if the piece has SETTLED (landed on the floor), skip steps 1–13 entirely   (opt-in; it still ages, fades, and draws)
+0a. UNBORN?     if STAGGER delayed this piece's birth, skip steps 0b–13 entirely   (opt-in; frozen + invisible, life not yet counting, until its delay elapses)
+0b. FROZEN?     if the piece has SETTLED (landed on the floor), skip steps 1–13 entirely   (opt-in; it still ages, fades, and draws)
 1.  GRAVITY     vy += gravity × dt        (downward acceleration)
 2.  WIND        vx += wind × dt           (opt-in lateral acceleration)
 3.  TURBULENCE  vx += cos(p) × turb × dt, vy += sin(p) × turb × dt   (opt-in, p = tilt+spin phase)
@@ -316,6 +318,19 @@ c.spray({ x: 400, y: 0, emit: 'line', emitSize: 300, angle: Math.PI / 2, gravity
 - **Line and box move only the origin** — velocity stays governed by `angle` / `spread`. The radial-outward coupling is **ring-only**.
 
 `emit` is a **pure origin choice**: it is the first knob to draw a random value *at spawn* (the position along the shape), so it is opt-in by construction — with `emit` off, unknown, or `emitSize ≤ 0`, the burst spawns at the point and every committed fingerprint is byte-identical. Each shape has its own deterministic fingerprint when on. Fails closed to a point spawn on a bad shape or size; no effect under reduced motion.
+
+### Staggered emission
+
+`emit` chose *where* a piece is born; **`stagger`** (added in v1.14.0) chooses *when*. A burst has always spawned its whole `count` at frame 0; `stagger` (a duration in **ms**) spreads those births evenly across the window, so a burst **cascades / ripples in** instead of appearing all at once.
+
+```js
+// A 120-piece burst that pours in over 400ms instead of popping instantly.
+c.burst({ x: 400, y: 300, count: 120, stagger: 400 });
+```
+
+- Piece `i` wakes at `stagger · i / count` ms and then lives its **full life from birth** — so a late piece outlives the early ones by the width of the window.
+- **Burst-only.** This is the burst analog of a spray's `duration`; a `spray()` already emits over time, so it ignores `stagger`.
+- **How it stays deterministic.** All `count` pieces still spawn at call time, drawing the *identical* rng sequence as a synchronous burst; each is stamped with a **no-rng** per-index delay, and an unborn piece is frozen and invisible until it elapses. So with `stagger` off (or `≤ 0` / non-finite) the burst spawns synchronously and every committed fingerprint is byte-identical; on, it earns its own deterministic fingerprint purely from birth *timing*. Fails closed; no effect under reduced motion.
 
 ### Canvas Sizing
 
@@ -621,6 +636,13 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.14.0
+
+**Staggered emission.** The first feature on a new *emission-timing* axis — a burst can cascade / ripple in over a ms window instead of spawning its whole `count` at once. The burst analog of a spray's `duration`.
+
+- `stagger: number` (ms) on `burst()`. Spreads the `count` births evenly across the window (piece `i` wakes at `stagger·i/count`); each piece lives its full life from birth. Burst-only (a spray already emits over time).
+- A birth-delay gate: all pieces spawn at call time, so the rng sequence is **byte-identical** to a synchronous burst; each carries a no-rng delay and is frozen + invisible until it elapses. Off / `≤ 0` / non-finite spawns synchronously (every prior fingerprint preserved); on earns its own deterministic fingerprint. Fails closed; inert under reduced motion. See [Staggered emission](#staggered-emission).
 
 ### v1.13.0
 

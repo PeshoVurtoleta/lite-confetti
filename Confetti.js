@@ -1,10 +1,23 @@
 /**
- * @zakkster/lite-confetti v1.13.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.14.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.14.0 adds: `stagger` -- staggered emission, the FIRST feature on the emission-TIMING axis (1.13
+ * opened emission GEOMETRY -- WHERE a piece is born; this opens WHEN). A burst has always spawned its
+ * whole `count` at frame 0; an opt-in `stagger` (a duration in ms) spreads the births evenly across
+ * that window, so a burst cascades / ripples in instead of appearing at once. It is a BURST-ONLY knob
+ * -- the burst analog of spray's `duration` (spray already emits over time). Mechanism: a birth-delay
+ * gate. All `count` pieces still spawn at CALL TIME (so the rng sequence is byte-identical to a
+ * synchronous burst), each stamped with a per-piece `delay` of `staggerSec * i / count` -- a function
+ * of the loop index only, NO rng draw. An unborn piece is frozen + invisible (physics, life-countdown,
+ * trail, render all skipped) until its delay elapses, then it lives its FULL life from birth. Off
+ * (staggerSec 0) => the delay column stays 0, the gate never fires, and the burst spawns synchronously
+ * -- byte-identical to every prior release, COMMITTED_HASH preserved. On => the same per-piece draws,
+ * only births are spread, so it earns its own committed hash. Fail-closed (NaN/negative/Infinity =>
+ * off); inert under reduced motion; zero allocation (a Float32 store at spawn + a read/compare/frame).
  * v1.13.0 adds: `emit` -- spawn emitter shapes, the FIRST feature on the emission-geometry axis
  * (every prior chapter changed how a particle MOVES, ENDS, or is DRAWN; this changes WHERE it is
  * BORN). Instead of the single point (x, y), a burst distributes its spawn ORIGIN over a shape:
@@ -572,6 +585,7 @@ export function createConfetti(canvas, {
         swirl: new Float32Array(maxParticles),   // tangential strength (1/sec^2); 0 = off, sign = spin
         settle:new Float32Array(maxParticles),   // rest-speed threshold (px/sec); 0 = off (never settles)
         landed:new Uint8Array(maxParticles),     // 1 = at rest on the floor (physics frozen); 0 = active
+        delay: new Float32Array(maxParticles),   // seconds until birth (staggered emission); 0 = born/active
         shape: new Uint8Array(maxParticles),     // 0..4 built-in, 5+ = registerShape() custom
     };
 
@@ -711,6 +725,9 @@ export function createConfetti(canvas, {
         // or a fresh piece would spawn already "landed" and skip all physics. (Same pool-reuse
         // subtlety as the trail `trailN = 0` reset.)
         pool.landed[i] = 0;
+        // Staggered emission (v1.14.0): reset the birth delay so a recycled slot is born at once
+        // unless the caller stamps a fresh delay (same fail-closed pool-reuse guard as `landed`).
+        pool.delay[i] = 0;
         // Motion trail: reset the live sample count to 0 and stamp this burst's draw length.
         // Resetting trailN is the fail-closed guard on pool reuse -- the recycled ring slots
         // still hold the DEAD particle's positions, but we only ever read the last trailN of
@@ -732,6 +749,7 @@ export function createConfetti(canvas, {
         // (one rng.pick, unchanged) and stays the flat trail color + the body color when off.
         colorRamp[i] = config.lifeRamp;
         emojis[i] = config.emoji || DEFAULT_EMOJI;
+        return i; // the slot filled, so the caller can stamp a per-particle stagger delay on it
     }
 
     // -- Render loop --
@@ -751,6 +769,14 @@ export function createConfetti(canvas, {
 
         for (let i = 0; i < maxParticles; i++) {
             if (pool.life[i] <= 0) continue;
+
+            // Staggered birth (v1.14.0): an unborn piece waits, frozen and invisible, until its
+            // delay elapses -- its FULL life begins at birth, so life is NOT counted down here, and
+            // physics + trail record + render are all skipped below. It still counts as alive so the
+            // loop stays registered through the whole window (no premature auto-detach). `delay` is 0
+            // for every piece unless `stagger` armed it, so this branch never fires by default and
+            // every committed fingerprint is byte-identical.
+            if (pool.delay[i] > 0) { pool.delay[i] -= dtSec; alive++; continue; }
 
             pool.life[i] -= dtSec;
             if (pool.life[i] <= 0) { pool.life[i] = 0; continue; }
@@ -1071,6 +1097,7 @@ export function createConfetti(canvas, {
          * @param {Array}  [options.lifeColors]  Multi-stop OKLCH life ramp (>= 2 stops, birth-color first): the body sweeps it over each particle's life (sparks cooling white->red). Baked once per burst; the trail stays the flat `colors` pick. Opt-in, zero-rng, a pure color overlay -- position fingerprints preserved
          * @param {string} [options.emit]       Spawn-origin shape: 'line' (horizontal curtain), 'ring' (firework shell, velocity radial-outward), or 'box' (square area) -- sized by `emitSize`. Default: a single point. Opt-in; off/unknown/`emitSize<=0` => point spawn, byte-identical
          * @param {number} [options.emitSize]   Emitter extent in CSS px: line half-length / ring radius / box square half-extent. Needs a shape in `emit`; <= 0 or non-finite => point spawn
+         * @param {number} [options.stagger]    Staggered-emission window in ms: spread the `count` births evenly over it (piece i wakes at `stagger*i/count`), so the burst cascades in instead of appearing at once. Burst-only (spray already emits over time). Opt-in; off/<=0/non-finite => synchronous spawn, byte-identical. Zero-rng; inert under reduced motion
          * @param {number} [options.angle=-Math.PI/2] Center angle of emission cone
          * @param {Function} [options.onComplete] Called when all burst particles die
          */
@@ -1109,6 +1136,7 @@ export function createConfetti(canvas, {
                   lifeColors,
                   emit,
                   emitSize,
+                  stagger,
                   angle = -HALF_PI,
                   onComplete,
               } = {}) {
@@ -1168,9 +1196,14 @@ export function createConfetti(canvas, {
             let emitId = EMIT_ID.get(emit) ?? EMIT_OFF;
             const emitR = nonneg(emitSize, 0);
             if (emitR <= 0) emitId = EMIT_OFF;
+            // Staggered emission (v1.14.0): spread the `count` births evenly over `stagger` ms (ms ->
+            // seconds). Fail-closed via nonneg (NaN / negative / undefined / Infinity -> 0 -> OFF); the
+            // delay is stamped per-piece below and draws NO rng, so off (staggerSec 0) is byte-identical.
+            const staggerSec = nonneg(stagger, 0) / 1000;
 
-            // Reduced motion: show static confetti, no animation. `emit` is inert here -- the static
-            // fan is a fixed accessible layout with no rng origin (like every motion feature).
+            // Reduced motion: show static confetti, no animation. `emit` and `stagger` are both inert
+            // here -- the static fan is a fixed accessible layout with no rng origin or per-piece
+            // animation (like every motion feature).
             if (respectReducedMotion && _prefersReducedMotion) {
                 renderStaticBurst(cx, cy, count, parsedColors, shapeId, sizeMin, sizeMax, spread, emoji, shapeIds);
                 if (onComplete) setTimeout(onComplete, 1500);
@@ -1203,21 +1236,27 @@ export function createConfetti(canvas, {
                 // Emitter branch: EMIT_OFF (default) inserts no rng draw and spawns at the point,
                 // byte-identical to a point burst. line/box offset the origin; ring places the piece
                 // on the circle AND fires it radially outward (reusing the spread jitter `a - angle`).
+                let slot;
                 if (emitId === EMIT_OFF) {
-                    spawn(cx, cy, Math.cos(a) * s, Math.sin(a) * s, config);
+                    slot = spawn(cx, cy, Math.cos(a) * s, Math.sin(a) * s, config);
                 } else if (emitId === EMIT_LINE) {
                     const ex = cx + (rng.next() * 2 - 1) * emitR;
-                    spawn(ex, cy, Math.cos(a) * s, Math.sin(a) * s, config);
+                    slot = spawn(ex, cy, Math.cos(a) * s, Math.sin(a) * s, config);
                 } else if (emitId === EMIT_RING) {
                     const th = rng.next() * TAU;
                     const j = a - angle; // reuse the already-drawn spread jitter, no new draw
-                    spawn(cx + Math.cos(th) * emitR, cy + Math.sin(th) * emitR,
+                    slot = spawn(cx + Math.cos(th) * emitR, cy + Math.sin(th) * emitR,
                           Math.cos(th + j) * s, Math.sin(th + j) * s, config);
                 } else { // EMIT_BOX
                     const ex = cx + (rng.next() * 2 - 1) * emitR;
                     const ey = cy + (rng.next() * 2 - 1) * emitR;
-                    spawn(ex, ey, Math.cos(a) * s, Math.sin(a) * s, config);
+                    slot = spawn(ex, ey, Math.cos(a) * s, Math.sin(a) * s, config);
                 }
+                // Staggered birth: piece i wakes at `staggerSec * i / count` s (linear, even, NO rng),
+                // so the whole burst cascades over the window. Guarded so the default (staggerSec 0)
+                // never writes -- the delay column stays 0 and the burst spawns synchronously,
+                // byte-identical to every prior release.
+                if (staggerSec > 0) pool.delay[slot] = staggerSec * i / count;
             }
 
             if (onComplete) {
