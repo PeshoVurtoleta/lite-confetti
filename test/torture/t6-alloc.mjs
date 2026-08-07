@@ -199,6 +199,23 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- the birth-delay gate is allocating');
     }
 
+    // (9) A velocity-aligned live pool (v1.15.0): with align:1 every rendered piece runs the NEW
+    // render-rotation blend (atan2 + shortest-arc wrap + a lerp) INSIDE the measured window. Wind +
+    // gravity keep the velocity non-trivial every frame, so atan2 is exercised on a real heading for
+    // ~MAXP pieces/frame. It is pure stack arithmetic (no allocation); immortal long-life pieces hold
+    // the pool full so any per-frame allocation on the align path would show as retained bytes.
+    const cl = createConfetti(makeCanvas({ record: true }), { seed: 1515, maxParticles: MAXP });
+    cl.burst({ count: MAXP, x: 400, y: 300, speed: 300, spread: 2.5, gravity: 700, wind: 400,
+        lifeMin: 1e6, lifeMax: 1e6, align: 1 });
+    pump(1, 16);
+    check(cl.count === MAXP, () => `T6: align pool has ${cl.count} alive, expected ${MAXP}`);
+    const bpfAlign = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    cl.destroy();
+    if (bpfAlign > RETAIN_FLOOR_BPF) {
+        die('T6: velocity-aligned update() retains ' + bpfAlign.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the align render-rotation blend is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -213,6 +230,7 @@ export async function run() {
         + bpfMix.toFixed(2) + ' B/frame from a shapes[] mix under wind + full box + turbulence/gust + vortex + trails, '
         + bpfSettle.toFixed(2) + ' B/frame from a fully-settled (frozen) pile, '
         + bpfEmit.toFixed(2) + ' B/frame from a continuous ring-emitter spray, '
-        + bpfStagger.toFixed(2) + ' B/frame from a staggered burst mid-emission); '
+        + bpfStagger.toFixed(2) + ' B/frame from a staggered burst mid-emission, '
+        + bpfAlign.toFixed(2) + ' B/frame from a velocity-aligned live pool); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

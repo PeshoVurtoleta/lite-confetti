@@ -117,6 +117,15 @@ const EMIT_BOX_HASH  = 2748626140; // emit:'box',  emitSize:200 (square area)
 // window in one frame); deterministic under a fixed seed + fixed dt, so it is its own replay gate.
 const STAGGER_HASH = 3414676538; // burst({ stagger: 300 }), 40 x 16ms frames from t0
 
+// Committed ROTATION fingerprint for velocity-aligned orientation (v1.15.0). `align` changes ONLY the
+// ctx.rotate argument, never ctx.translate, so an aligned burst reproduces the same-seed plain burst's
+// POSITION hash (COMMITTED_HASH) exactly -- a pure orientation overlay. This gate proves the rotation
+// itself is deterministic and non-vacuous: `rotateHash` (kept out of the position hash, like
+// strokeHash/colorHash) folds the quantized rotate angle. Value probed on the canonical seed-12345 rig
+// with align:1; distinct from the OFF rotateHash and its own replay gate.
+const ALIGN_HASH = 1909618495; // burst({ align: 1 }) rotateHash on the canonical rig
+const HALF_PI = Math.PI / 2;
+
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
 function withSilencedWarn(fn) {
     const orig = console.warn;
@@ -1864,6 +1873,145 @@ describe('lite-confetti', () => {
             };
             assert.equal(staticStagger({ stagger: 300 }), staticStagger({}),
                 'stagger should be inert on the static reduced-motion path');
+        });
+    });
+
+    describe('align / velocity-aligned orientation', () => {
+        // The canonical seed-12345 rig. `run` reports BOTH fingerprints: `hash` (position, folds only
+        // translate) and `rotateHash` (rotation, kept out of `hash`). `align` moves ONLY rotation, so
+        // its headline property is that the POSITION hash is byte-identical whether off or on -- a pure
+        // orientation overlay (the analog of what lifeColors did on the color axis).
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = { hash: canvas.hash, rotateHash: canvas.rotateHash };
+            c.destroy();
+            return out;
+        };
+
+        it('is opt-in and fail-closed: off / <= 0 / non-finite emits the raw spin (byte-identical)', () => {
+            // The load-bearing property: when off, the render must emit `pool.spin[i]` exactly as before,
+            // so BOTH the position hash AND the rotation sequence match a pre-align run. A plain run
+            // reproduces COMMITTED_HASH; capture its rotateHash as the OFF rotation baseline.
+            const base = run({});
+            assert.equal(base.hash, COMMITTED_HASH, 'the align branch perturbed the default position stream');
+            for (const o of [
+                { align: 0 },            // explicit off
+                { align: -1 },           // negative -> clamp01 0
+                { align: NaN },          // non-finite -> clamp01 default 0
+                { align: Infinity },     // non-finite -> clamp01 default 0
+                { align: 'lots' },       // non-numeric -> clamp01 default 0
+            ]) {
+                const r = run(o);
+                assert.equal(r.hash, COMMITTED_HASH, `align ${JSON.stringify(o)} should not move positions`);
+                assert.equal(r.rotateHash, base.rotateHash,
+                    `align ${JSON.stringify(o)} should emit the raw spin (rotation unchanged)`);
+            }
+        });
+
+        it('every prior committed fingerprint still reproduces with align off (no sequence drift)', () => {
+            assert.equal(run({ floor: FLOOR_Y }).hash, FLOOR_HASH, 'floor fingerprint drifted');
+            assert.equal(run({ ...BOX, bounce: 0 }).hash, BOX_HASH, 'box fingerprint drifted');
+        });
+
+        it('is a PURE orientation overlay: align:1 leaves the position hash identical, changes only rotation', () => {
+            const off = run({});
+            const on = run({ align: 1 });
+            // The headline: orientation moved NOTHING in world space -- same seed, same positions.
+            assert.equal(on.hash, off.hash, 'align:1 perturbed the position stream (not a pure overlay)');
+            // ...but the rotation sequence genuinely changed (non-vacuous).
+            assert.notEqual(on.rotateHash, off.rotateHash, 'align:1 should change the rotation sequence');
+        });
+
+        it('matches the committed ALIGN fingerprint -- distinct + deterministic + partial blends', () => {
+            const on = run({ align: 1 });
+            if (ALIGN_HASH === null) console.log('[align] 1 rotateHash =', on.rotateHash);
+            else assert.equal(on.rotateHash, ALIGN_HASH, 'aligned rotation changed vs the committed baseline');
+            // Deterministic: same seed + fixed dt -> same rotation on replay (align draws no rng).
+            assert.equal(run({ align: 1 }).rotateHash, on.rotateHash, 'align not deterministic');
+            // A partial blend is genuinely between off and full -- distinct from both.
+            const half = run({ align: 0.5 }).rotateHash;
+            assert.notEqual(half, run({}).rotateHash, 'align:0.5 should differ from off');
+            assert.notEqual(half, on.rotateHash, 'align:0.5 should differ from align:1');
+        });
+
+        it('orients BROADSIDE to the live velocity (non-vacuous direction via the lastRotate probe)', () => {
+            // A single piece blown hard rightward: vx dominates, so heading ~ 0 and the broadside
+            // rotation ~ HALF_PI (the flat face square to the wind). align:0 gives the spin-driven value
+            // instead. A bare hash proves determinism but not that rotation TRACKS the heading.
+            const dir = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 7 });
+                c.burst({ count: 1, x: 400, y: 300, spread: 0.001, speed: 10, wind: 20000,
+                    gravity: 0, drag: 0.98, lifeMin: 5, lifeMax: 5, ...opts });
+                pump(30, 16);   // let the wind dominate the velocity
+                const r = canvas.lastRotate;
+                c.destroy();
+                return r;
+            };
+            const norm = (a) => { let d = a; d -= 2 * Math.PI * Math.floor((d + Math.PI) / (2 * Math.PI)); return d; };
+            const on = norm(dir({ align: 1 }));
+            const off = norm(dir({ align: 0 }));
+            assert.ok(Math.abs(on - HALF_PI) < 0.05,
+                `a rightward-blown aligned piece should stand broadside (~HALF_PI); got ${on.toFixed(4)}`);
+            assert.ok(Math.abs(off - HALF_PI) > 0.1,
+                `align:0 should keep the random spin, not the heading; got ${off.toFixed(4)}`);
+        });
+
+        it('keeps positions finite under align + gravity + wind + bounce in a box', () => {
+            const canvas = makeCanvas({ record: true, assertFinite: true });
+            const c = createConfetti(canvas, { seed: 3 });
+            assert.doesNotThrow(() => {
+                c.burst({
+                    x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 4, lifeMax: 4,
+                    wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350, bounce: 0.6,
+                    gravity: 4000, wind: 1200, align: 1,
+                });
+                pump(80, 16);
+            });
+            c.destroy();
+        });
+
+        it('is honored by spray() too (a render property of any moving piece, unlike burst-only stagger)', () => {
+            // Unlike stagger, align is NOT burst-only: a spraying piece has velocity to orient to, so the
+            // rotation sequence must change while positions stay identical.
+            const spray = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 400, rate: 15, x: 400, y: 200, spread: 1.2, shape: 'rect',
+                    lifeMin: 4, lifeMax: 4, ...opts });
+                pump(1, 1000); pump(60, 16);
+                const out = { hash: canvas.hash, rotateHash: canvas.rotateHash };
+                c.destroy();
+                return out;
+            };
+            const off = spray({});
+            const on = spray({ align: 1 });
+            assert.equal(on.hash, off.hash, 'align should not move spray positions (pure overlay)');
+            assert.notEqual(on.rotateHash, off.rotateHash, 'spray should honor align (rotation changed)');
+        });
+
+        it('has no effect under reduced motion (static fan is inert)', () => {
+            const staticAlign = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                    pump(1, 1000); pump(29, 16);
+                    const out = { hash: canvas.hash, rotateHash: canvas.rotateHash };
+                    c.destroy();
+                    return out;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            const off = staticAlign({});
+            const on = staticAlign({ align: 1 });
+            assert.equal(on.hash, off.hash, 'align should be inert on the static reduced-motion positions');
+            assert.equal(on.rotateHash, off.rotateHash, 'align should not touch the static fan rotation');
         });
     });
 

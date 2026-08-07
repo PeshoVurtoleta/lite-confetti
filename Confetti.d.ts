@@ -95,6 +95,16 @@ export interface BurstOptions {
     flutter?: number;
     /** Horizontal drift 0..1 (0 straight fall). Default 0. */
     sway?: number;
+    /**
+     * Velocity-aligned orientation, a 0..1 blend. `0` (default) is pure random tumble; `1` rotates
+     * each piece BROADSIDE to its LIVE velocity (`atan2(vy, vx) + PI/2`), so its flat face meets the
+     * airflow like a falling leaf, re-banking every frame as forces bend the path; partial values
+     * blend the two along the shortest arc. Coerced to `[0, 1]` (non-finite/negative -> 0, `> 1` -> 1).
+     * A pure ORIENTATION overlay: it changes only rotation, never position, so the seeded position
+     * fingerprint is byte-identical whether off or on. Honored by both `burst()` and `spray()`.
+     * Draws no RNG; no effect under reduced motion. (v1.15.0)
+     */
+    align?: number;
     /** Per-particle turbulence: a rotating acceleration (px/sec^2) that makes each particle
      *  wander organically. Default 0 (none). Opt-in, fingerprint-safe, draws no RNG; no effect
      *  under reduced motion. */

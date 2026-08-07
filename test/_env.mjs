@@ -84,10 +84,12 @@ export function pointerListenerCount() { return (_win._listeners.pointermove || 
 
 /**
  * A headless canvas whose 2D context is a set of no-op sinks. With `record:true`
- * the context accumulates a position/rotation fingerprint over `translate` and
- * `rotate` calls -- the per-particle draw transform -- readable as `canvas.hash`,
- * which is how the determinism gate proves seeded replays are byte-identical
- * without reaching into private pool arrays.
+ * the context accumulates a POSITION fingerprint over `translate(x, y)` calls only
+ * -- the per-particle draw origin -- readable as `canvas.hash`, which is how the
+ * determinism gate proves seeded replays are byte-identical without reaching into
+ * private pool arrays. Rotation is deliberately NOT in `hash` (so `flutter`/`align`
+ * and any orientation-only feature are provable pure overlays); it feeds the separate
+ * `rotateHash` probe instead, kept out of the position mix like strokeHash/colorHash.
  */
 export function makeCanvas({ record = false, assertFinite = false } = {}) {
     const c = { style: {}, parentElement: null, width: 0, height: 0, id: '' };
@@ -138,6 +140,16 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     // non-vacuous witness that `stagger` delays births: a staggered burst draws strictly fewer pieces
     // in the early frames than a synchronous one, converging once the window elapses.
     let translates = 0;
+    // Velocity-aligned-orientation PROBE (v1.15.0). `align` changes ONLY the argument to ctx.rotate;
+    // it never moves ctx.translate, so it adds NOTHING to the position `hash` -- that is what makes it
+    // a provable pure orientation overlay (an aligned burst reproduces the same-seed plain burst's
+    // position hash EXACTLY). To still prove the rotation is deterministic and non-vacuous, `rotateHash`
+    // folds the QUANTIZED angle at each rotate() call in record mode (kept OUT of `hash`, like
+    // strokeHash/colorHash/translates), and `lastRotate` keeps the most recent angle -- a hash-neutral
+    // DIRECTION witness (the sumX analog) so a test can assert the rotation TRACKS the velocity heading,
+    // not merely "some different number".
+    let rotateHash = 0 >>> 0;
+    let lastRotate = 0;
     // Color-over-life PROBE (v1.12.0). A `lifeColors` burst moves ONLY ctx.fillStyle; it draws no
     // translate, so it adds NOTHING to the position `hash` (colorHash is kept entirely out of the mix,
     // like strokeHash/sumX/maxY -- every committed position fingerprint is byte-identical whether or
@@ -216,7 +228,14 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
         save() {}, restore() {}, scale() {}, setTransform() {},
         drawImage() {},
         translate(x, y) { if (record) translates++; if (mix) mix(x, y); },
-        rotate() {},
+        rotate(a) {
+            if (record) {
+                lastRotate = a;
+                // Quantize the angle (round to 1/4096 rad) before folding, mirroring the translate
+                // `Math.round` precedent so the fingerprint is stable across runs. Kept out of `hash`.
+                rotateHash = (Math.imul(rotateHash ^ (Math.round(a * 4096) | 0), 16777619)) >>> 0;
+            }
+        },
         fillText() { if (record) colorHash = foldStr(colorHash, ctx.fillStyle); globalThis.__fillTextCount = (globalThis.__fillTextCount || 0) + 1; },
         canvas: c,
     };
@@ -230,6 +249,8 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     Object.defineProperty(c, 'strokeHash', { get() { return strokeHash >>> 0; } });
     Object.defineProperty(c, 'strokes', { get() { return strokes; } });
     Object.defineProperty(c, 'translates', { get() { return translates; } });
+    Object.defineProperty(c, 'rotateHash', { get() { return rotateHash >>> 0; } });
+    Object.defineProperty(c, 'lastRotate', { get() { return lastRotate; } });
     Object.defineProperty(c, 'colorHash', { get() { return colorHash >>> 0; } });
     return c;
 }

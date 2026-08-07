@@ -12,7 +12,8 @@ Deterministic confetti engine with OKLCH colors, 5 built-in shapes plus custom
 tunable flutter, lateral wind, turbulence + gust (living-air forces), a vortex/attractor
 point force, a full bounding box (floor, walls, ceiling) with bounce, settle-and-pile,
 zero-GC motion trails, color-over-life ramps, spawn emitter shapes (line / ring / box),
-staggered emission (a burst cascades in over a ms window), and reduced-motion support.
+staggered emission (a burst cascades in over a ms window), velocity-aligned orientation
+(pieces bank broadside to their flight, like leaves), and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -112,6 +113,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `emit` | string | — | Spawn-origin shape: `'line'` (horizontal curtain), `'ring'` (firework shell, velocity radial-outward), or `'box'` (square area), sized by `emitSize`. Default: a single point. Opt-in; unknown / `emitSize ≤ 0` = point spawn. See [Emitter shapes](#emitter-shapes). |
 | `emitSize` | number | — | Emitter extent in px: line half-length / ring radius / box square half-extent. Needs a shape in `emit`; `≤ 0` or non-finite = point spawn. |
 | `stagger` | number | — | Staggered-emission window in ms: spread the `count` births evenly over it (piece `i` wakes at `stagger·i/count`), so the burst cascades in instead of appearing at once. **Burst-only** (a spray already emits over time; it ignores `stagger`). Opt-in; off / `≤ 0` / non-finite = synchronous spawn, byte-identical. See [Staggered emission](#staggered-emission). |
+| `align` | number | `0` | Velocity-align blend `0..1`: rotate each piece **broadside** to its live velocity (its flat face meets the airflow, like a leaf), `0` = pure random spin, `1` = fully locked. Coerced to `[0, 1]`. A pure orientation overlay — the seeded position stream is byte-identical off or on. Honored by `burst()` **and** `spray()`. See [Velocity-aligned orientation](#velocity-aligned-orientation). |
 | `angle` | number | `-Math.PI / 2` | Center angle of emission cone in radians. -π/2 = upward. |
 | `onComplete` | Function | — | Called when all burst particles have died |
 
@@ -331,6 +333,19 @@ c.burst({ x: 400, y: 300, count: 120, stagger: 400 });
 - Piece `i` wakes at `stagger · i / count` ms and then lives its **full life from birth** — so a late piece outlives the early ones by the width of the window.
 - **Burst-only.** This is the burst analog of a spray's `duration`; a `spray()` already emits over time, so it ignores `stagger`.
 - **How it stays deterministic.** All `count` pieces still spawn at call time, drawing the *identical* rng sequence as a synchronous burst; each is stamped with a **no-rng** per-index delay, and an unborn piece is frozen and invisible until it elapses. So with `stagger` off (or `≤ 0` / non-finite) the burst spawns synchronously and every committed fingerprint is byte-identical; on, it earns its own deterministic fingerprint purely from birth *timing*. Fails closed; no effect under reduced motion.
+
+### Velocity-aligned orientation
+
+For fourteen releases a piece's rotation was only ever *random tumble*. **`align`** (added in v1.15.0, a `0..1` blend) rotates each piece **broadside to its live velocity** — its flat face square to the airflow, like a falling leaf — re-banking every frame as gravity, wind, or a vortex bend its path.
+
+```js
+// Leaves banking into a gentle drift — face-first to wherever the air pushes them.
+c.burst({ x: 400, y: 200, count: 80, gravity: 200, wind: 300, spread: 0.4, align: 1 });
+```
+
+- **`0`** is pure random spin (the classic look); **`1`** is fully velocity-locked; partial values blend the two along the shortest arc.
+- **Live + broadside.** The heading is recomputed from the current velocity each frame and offset by 90° so the broad face meets the direction of travel. Draws **no rng**.
+- **A pure orientation overlay.** `align` changes only *rotation*, never position — so the seeded position stream (and every committed fingerprint) is byte-identical whether `align` is off or on; only the rotation earns its own deterministic fingerprint. Honored by both `burst()` and `spray()`. Fails closed (coerced to `[0, 1]`); no effect under reduced motion.
 
 ### Canvas Sizing
 
@@ -636,6 +651,13 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.15.0
+
+**Velocity-aligned orientation.** The first feature on a new *render-orientation* axis — for fourteen releases rotation was only ever random tumble; now a piece can bank **broadside to its live velocity**, its flat face square to the airflow like a falling leaf.
+
+- `align: number` (`0..1`) on `burst()` **and** `spray()`. `0` = random spin, `1` = fully velocity-locked, partial blends along the shortest arc. The heading (`atan2(vy, vx) + 90°`) is recomputed each frame, so pieces re-bank as forces curve their path.
+- A **pure orientation overlay**: it changes only rotation, never position, so the seeded position stream (and every committed fingerprint) is byte-identical whether off or on; only the rotation earns its own deterministic fingerprint. Draws no rng; fails closed (coerced to `[0, 1]`); inert under reduced motion. See [Velocity-aligned orientation](#velocity-aligned-orientation).
 
 ### v1.14.0
 

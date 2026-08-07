@@ -1,10 +1,23 @@
 /**
- * @zakkster/lite-confetti v1.14.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.15.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.15.0 adds: `align` -- velocity-aligned orientation, the FIRST feature on the render-ORIENTATION
+ * axis. For fourteen releases a piece's rotation was only ever RANDOM tumble (a seeded `spin` + a
+ * `flutter` X-scale wobble); this opens WHICH WAY it faces. An opt-in `align` (0..1) rotates each piece
+ * BROADSIDE to its LIVE velocity -- `atan2(vy, vx) + HALF_PI`, so its flat face meets the airflow, like
+ * a falling leaf -- blended along the SHORT arc from pure spin (0) to fully locked (1), recomputed every
+ * frame so it re-banks as gravity/wind/vortex bend the path. Zero rng (rotation derives from the
+ * deterministic velocity). It is a PURE ORIENTATION overlay: rotation never touches `ctx.translate`, so
+ * the seeded POSITION stream is untouched -- an aligned burst reproduces the same-seed plain burst's
+ * position hash EXACTLY (the orientation analog of what `lifeColors` did for color), while the rotation
+ * sequence earns its own committed hash (a separate `rotateHash` probe). Off (align 0) => the raw `spin`
+ * is emitted, byte-identical to every prior release. Both burst AND spray honor it (a render property of
+ * any moving piece, unlike burst-only `stagger`). Fail-closed: non-finite/negative => 0, > 1 caps at 1;
+ * inert under reduced motion; zero allocation (one atan2 + arithmetic per aligned piece, no per-frame GC).
  * v1.14.0 adds: `stagger` -- staggered emission, the FIRST feature on the emission-TIMING axis (1.13
  * opened emission GEOMETRY -- WHERE a piece is born; this opens WHEN). A burst has always spawned its
  * whole `count` at frame 0; an opt-in `stagger` (a duration in ms) spreads the births evenly across
@@ -577,6 +590,7 @@ export function createConfetti(canvas, {
         drag:  new Float32Array(maxParticles),
         flut:  new Float32Array(maxParticles),   // flutter: tumble depth 0..1 (X-scale wobble)
         sway:  new Float32Array(maxParticles),   // sway: horizontal drift amplitude 0..1
+        align: new Float32Array(maxParticles),   // velocity-align blend 0..1 (0 = pure random spin)
         turb:  new Float32Array(maxParticles),   // turbulence accel magnitude (px/sec^2); 0 = none
         gust:  new Float32Array(maxParticles),   // gust accel magnitude (px/sec^2); 0 = none
         vortX: new Float32Array(maxParticles),   // vortex/attractor center X (CSS px)
@@ -714,6 +728,7 @@ export function createConfetti(canvas, {
         pool.drag[i] = config.drag;
         pool.flut[i] = config.flutter;
         pool.sway[i] = config.sway;
+        pool.align[i] = config.align;   // velocity-align blend (v1.15.0); 0 = pure random spin
         pool.turb[i] = config.turbulence;
         pool.gust[i] = config.gust;
         pool.vortX[i] = config.attractX;
@@ -964,10 +979,26 @@ export function createConfetti(canvas, {
                 ctx.stroke();
             }
 
+            // Velocity-aligned orientation (v1.15.0). Off (align == 0) emits the raw random `spin`,
+            // byte-identical to every prior release. When armed, blend the render rotation from `spin`
+            // toward BROADSIDE of the LIVE velocity (heading + HALF_PI, so the flat face meets the
+            // airflow -- a leaf/petal) along the SHORT arc, so a spin near a full turn never unwinds the
+            // long way. atan2 is the only added cost and is paid ONLY for aligned pieces; it is total
+            // (atan2(0,0) === 0 for a settled piece), so `rot` is finite for any finite velocity and any
+            // align in [0,1]. Rotation never touches ctx.translate, so the seeded POSITION stream is
+            // untouched -- a pure orientation overlay (the analog of lifeColors on the color axis).
+            let rot = pool.spin[i];
+            if (pool.align[i] > 0) {
+                const heading = Math.atan2(pool.vy[i], pool.vx[i]) + HALF_PI;
+                let d = heading - rot;
+                d -= TAU * Math.floor((d + Math.PI) / TAU);   // wrap the delta into [-PI, PI)
+                rot += d * pool.align[i];
+            }
+
             // Render
             ctx.save();
             ctx.translate(pool.x[i], pool.y[i]);
-            ctx.rotate(pool.spin[i]);
+            ctx.rotate(rot);
             ctx.scale(wobbleScale, 1);
             ctx.globalAlpha = alpha;
 
@@ -1021,6 +1052,9 @@ export function createConfetti(canvas, {
             const py = cy + Math.sin(angle) * dist;
             const size = sizeMin + rng.next() * (sizeMax - sizeMin);
             const color = colors[Math.floor(rng.next() * colors.length)];
+            // `align` (v1.15.0) is INERT here: the static fan has no velocity to orient to, so pieces
+            // keep their random rotation (emission timing / orientation are motion-time concerns,
+            // consistent with every prior motion feature under reduced motion).
             const rotation = rng.next() * TAU;
             // Honour a `shapes` mix in the reduced-motion render too. Single-shape (null)
             // takes no extra rng draw, so the non-mixed static render is unchanged.
@@ -1085,6 +1119,7 @@ export function createConfetti(canvas, {
          * @param {string} [options.emoji]       Emoji character (shape must be 'emoji'); defaults to a party popper
          * @param {number} [options.flutter=1]   Tumble depth 0..1 (0 rigid, 1 full wobble)
          * @param {number} [options.sway=0]      Horizontal drift 0..1 (0 straight fall)
+         * @param {number} [options.align=0]     Velocity-align blend 0..1: rotate each piece BROADSIDE to its live velocity (its flat face meets the airflow, like a leaf), 0 = pure random spin, 1 = fully locked. Coerced to [0,1] (non-finite/negative => 0). A pure orientation overlay (rotation only) -- the seeded POSITION stream is byte-identical whether off or on. Zero-rng; inert under reduced motion
          * @param {number} [options.turbulence=0] Per-particle rotating accel px/sec^2 (organic wander). Opt-in, zero-rng, fingerprint-safe
          * @param {number} [options.gust=0]      Global oscillating horizontal accel px/sec^2 layered on wind (~3s swells). Opt-in, zero-rng
          * @param {number} [options.attract=0]   Vortex radial spring strength (1/sec^2, scaled by distance): + pulls toward the center, - repels. Opt-in, zero-rng, fingerprint-safe
@@ -1125,6 +1160,7 @@ export function createConfetti(canvas, {
                   emoji = DEFAULT_EMOJI,
                   flutter = 1,
                   sway = 0,
+                  align = 0,
                   turbulence = 0,
                   gust = 0,
                   attract = 0,
@@ -1226,7 +1262,7 @@ export function createConfetti(canvas, {
                 : (trail === undefined ? trailCap : Math.min(trailCap, Math.floor(nonneg(trail, trailCap))));
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), turbulence, gust, trailLen: trailDraw,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), turbulence, gust, trailLen: trailDraw,
                 attract, swirl, attractX: vortX, attractY: vortY, settle, lifeRamp,
             };
 
@@ -1284,6 +1320,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.ceiling=-Infinity]   Ceiling Y in CSS px (default none). Opt-in
          * @param {number} [options.flutter=1]      Tumble depth 0..1
          * @param {number} [options.sway=0]         Horizontal drift 0..1
+         * @param {number} [options.align=0]        Velocity-align blend 0..1: rotate each piece broadside to its live velocity (0 = random spin, 1 = locked). A pure orientation overlay -- the seeded position stream is byte-identical off or on. Zero-rng
          * @param {number} [options.turbulence=0]   Per-particle rotating accel px/sec^2 (organic wander). Opt-in, zero-rng
          * @param {number} [options.gust=0]         Global oscillating horizontal accel px/sec^2 layered on wind. Opt-in, zero-rng
          * @param {number} [options.attract=0]      Vortex radial spring strength (1/sec^2): + pulls toward the center, - repels. Opt-in, zero-rng
@@ -1321,6 +1358,7 @@ export function createConfetti(canvas, {
                   emoji = DEFAULT_EMOJI,
                   flutter = 1,
                   sway = 0,
+                  align = 0,
                   turbulence = 0,
                   gust = 0,
                   attract = 0,
@@ -1411,7 +1449,7 @@ export function createConfetti(canvas, {
                 : (trail === undefined ? trailCap : Math.min(trailCap, Math.floor(nonneg(trail, trailCap))));
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), turbulence, gust, trailLen: trailDraw,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), turbulence, gust, trailLen: trailDraw,
                 attract, swirl, attractX: vortX, attractY: vortY, settle, lifeRamp,
             };
 

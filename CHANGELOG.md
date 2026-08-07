@@ -3,6 +3,48 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.15.0] - 2026-08-06
+
+Feature release: `align` -- **velocity-aligned orientation**, the first feature on a new
+**render-orientation** axis. For fourteen releases a piece's rotation was only ever *random tumble* (a
+seeded `spin` plus a `flutter` X-scale wobble); this opens **which way** it faces. An opt-in `align`
+(a `0..1` blend) rotates each piece **broadside to its live velocity** -- `atan2(vy, vx) + PI/2`, so its
+flat face meets the airflow like a falling leaf -- re-banking every frame as gravity/wind/vortex bend the
+path: `c.burst({ align: 1, gravity: 200, spread: 0.4 })`. It is a **pure orientation overlay**: rotation
+never touches `ctx.translate`, so the seeded *position* stream is untouched -- an aligned burst reproduces
+the same-seed plain burst's position hash (`1569828004`) *exactly*, while the rotation earns its own
+committed fingerprint (`1909618495`). Off (`align <= 0` / non-finite) emits the raw `spin`, byte-identical
+to every prior release.
+
+### Added
+- **`align: number` on `burst()` and `spray()`** -- a `0..1` velocity-align blend. `0` = pure random spin,
+  `1` = fully broadside to the live velocity, partial blends along the shortest arc. A render property of
+  any moving piece, so **both** `burst()` and `spray()` honor it (unlike burst-only `stagger`).
+
+### Semantics
+- **Opt-in, zero-cost by default.** With `align` off (or `<= 0` / non-finite), the render emits the raw
+  `spin` argument exactly as before -- byte-identical rotation *and* position to every prior release.
+- **Pure orientation overlay.** `align` changes only the `ctx.rotate` argument, never `ctx.translate`, so
+  an aligned burst reproduces the same-seed plain burst's *position* hash exactly; only the rotation
+  sequence changes (its own committed hash). The orientation analog of what `lifeColors` did for color.
+- **Live velocity, broadside.** The heading is recomputed from the current `(vx, vy)` each frame (the
+  piece re-orients as forces curve its path) and offset by `PI/2` so the flat face meets the airflow.
+  Draws **no rng** (rotation derives from the deterministic velocity), so an aligned run replays identically.
+- **Fail closed.** Coerced to `[0, 1]` via `clamp01` (non-finite / negative -> `0`, `> 1` -> `1`).
+  `atan2` is total (`atan2(0, 0) === 0` for a settled piece), so the rotation is finite for any finite
+  velocity. Inert under reduced motion (the static fan has no velocity to orient to).
+
+### Internal
+- One new per-particle pool column: `align` (Float32, blend `0..1`; 4 B/particle), assigned from config
+  in `spawn()` like `flut` / `sway`.
+- The render-rotation blend is guarded (`if (pool.align[i] > 0)`): one `Math.atan2` + a shortest-arc wrap
+  + a lerp, paid ONLY for aligned pieces, on the render path. Zero allocation -- torture T6 measures a
+  velocity-aligned live pool at ~0 B/frame.
+- New test-harness probe `rotateHash` (the quantized rotate-argument fingerprint, kept out of the position
+  hash like `strokeHash` / `colorHash`) plus a `lastRotate` direction accessor; the stale `_env.mjs`
+  header comment claiming the hash folds rotate is corrected (it folds translate only).
+- Unit suite 165 -> 173.
+
 ## [1.14.0] - 2026-08-06
 
 Feature release: `stagger` -- **staggered emission**, the first feature on a new **emission-timing**

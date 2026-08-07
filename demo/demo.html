@@ -409,6 +409,7 @@
         <span class="badge">lifeColors</span>
         <span class="badge">emit</span>
         <span class="badge">stagger</span>
+        <span class="badge">align</span>
         <span class="badge">reduced-motion</span>
         <span class="badge">< 4KB</span>
     </div>
@@ -615,6 +616,11 @@
                                                                                        id="staggerVal">off</span></div>
                 <input type="range" id="stagger" min="0" max="800" value="0" step="20">
             </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">align (leaf)</span><span class="control-val"
+                                                                                       id="alignVal">off</span></div>
+                <input type="range" id="align" min="0" max="1" value="0" step="0.05">
+            </div>
         </div>
 
         <div class="section">
@@ -681,7 +687,7 @@
     const $codeBtn  = document.getElementById('codeBtn');
     const $seedBtn  = document.getElementById('seedBtn');
 
-    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'box', 'spark', 'emit', 'emitSize', 'stagger'];
+    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'box', 'spark', 'emit', 'emitSize', 'stagger', 'align'];
     const EMIT_SHAPES = ['off', 'line', 'ring', 'box']; // emit slider 0..3 -> shape name (v1.13.0)
     // v1.12.0 color-over-life: a fixed 3-stop ember ramp (near-white -> gold -> deep orange) the demo
     // injects when the `spark` toggle is on, so pieces cool as they age.
@@ -815,6 +821,10 @@
         // Read at action rate, never per frame. 0 -> synchronous spawn.
         const stagger = +$in.stagger.value;
         if (stagger > 0) cfg.stagger = stagger;
+        // v1.15.0 align: rotate each piece broadside to its live velocity (leaf-like). Read at action
+        // rate, never per frame. 0 -> pure random spin (a render-only overlay; positions unchanged).
+        const align = +$in.align.value;
+        if (align > 0) cfg.align = align;
         return cfg;
     }
 
@@ -840,6 +850,7 @@
                 : id === 'emit' ? EMIT_SHAPES[+raw]                  // 0 = off, else line/ring/box
                 : id === 'emitSize' ? (+raw === 0 ? 'off' : raw + 'px')
                 : id === 'stagger' ? (+raw === 0 ? 'off' : raw + 'ms')   // 0 = synchronous spawn
+                : id === 'align' ? (+raw === 0 ? 'off' : (+raw).toFixed(2))  // 0 = random spin
                 : (id === 'turbulence' || id === 'gust') ? (+raw === 0 ? 'off' : raw)  // 0 = no force
                 : id === 'trail' ? (+raw === 0 ? 'off' : raw)        // 0 = no ribbon
                 : id === 'settle' ? (+raw === 0 ? 'off' : raw)       // 0 = no settle (needs a floor)
@@ -1027,6 +1038,7 @@
             if (cfg.lifeColors) code += `\n${indent}lifeColors: [<span class="num">{ l: .98, c: .02, h: 90 }</span>, <span class="num">{ l: .72, c: .22, h: 60 }</span>, <span class="num">{ l: .40, c: .15, h: 30 }</span>],`;
             if (cfg.emit) code += `\n${indent}emit: <span class="str">'${cfg.emit}'</span>, emitSize: <span class="num">${cfg.emitSize}</span>,`;
             if (cfg.stagger) code += `\n${indent}stagger: <span class="num">${cfg.stagger}</span>,`;
+            if (cfg.align) code += `\n${indent}align: <span class="num">${cfg.align.toFixed(2)}</span>,`;
             code += `\n${indent}lifeMin: <span class="num">${cfg.lifeMin}</span>, lifeMax: <span class="num">${cfg.lifeMax}</span>,`;
             code += `\n});`;
             $codeBox.innerHTML = code;

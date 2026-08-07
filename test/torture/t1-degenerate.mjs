@@ -131,6 +131,16 @@ export function run() {
         ['stagger:Infinity', { count: 60, stagger: Infinity, lifeMin: 0.3, lifeMax: 0.3 }],
         ['stagger:nonnumeric', { count: 60, stagger: 'later', lifeMin: 0.3, lifeMax: 0.3 }],
         ['stagger:valid+box', { count: 60, stagger: 250, floor: 300, bounce: 0.5, gravity: 3000, lifeMin: 0.6, lifeMax: 0.6 }],
+        // align poison (v1.15.0): garbage blends coerce via clamp01 (non-finite/negative -> 0, > 1 -> 1);
+        // the render rotation is atan2(vy,vx) blended toward spin, finite for any finite velocity, so a
+        // bad align can never yield a non-finite draw. A VALID align in a bouncing box confirms the
+        // aligned rotation stays finite while forces bend the velocity every frame.
+        ['align:NaN', { count: 60, align: NaN, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['align:neg', { count: 60, align: -3, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['align:huge', { count: 60, align: 1e9, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['align:Infinity', { count: 60, align: Infinity, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['align:nonnumeric', { count: 60, align: 'lots', wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['align:valid+box', { count: 60, align: 1, floor: 300, bounce: 0.5, gravity: 3000, wind: 800, lifeMin: 0.6, lifeMax: 0.6 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
