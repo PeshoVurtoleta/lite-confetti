@@ -13,7 +13,8 @@ tunable flutter, lateral wind, turbulence + gust (living-air forces), a vortex/a
 point force, a full bounding box (floor, walls, ceiling) with bounce, settle-and-pile,
 zero-GC motion trails, color-over-life ramps, spawn emitter shapes (line / ring / box),
 staggered emission (a burst cascades in over a ms window), velocity-aligned orientation
-(pieces bank broadside to their flight, like leaves), and reduced-motion support.
+(pieces bank broadside to their flight, like leaves), tunable tumble speed (slow drift to
+reverse spin), and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -114,6 +115,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `emitSize` | number | — | Emitter extent in px: line half-length / ring radius / box square half-extent. Needs a shape in `emit`; `≤ 0` or non-finite = point spawn. |
 | `stagger` | number | — | Staggered-emission window in ms: spread the `count` births evenly over it (piece `i` wakes at `stagger·i/count`), so the burst cascades in instead of appearing at once. **Burst-only** (a spray already emits over time; it ignores `stagger`). Opt-in; off / `≤ 0` / non-finite = synchronous spawn, byte-identical. See [Staggered emission](#staggered-emission). |
 | `align` | number | `0` | Velocity-align blend `0..1`: rotate each piece **broadside** to its live velocity (its flat face meets the airflow, like a leaf), `0` = pure random spin, `1` = fully locked. Coerced to `[0, 1]`. A pure orientation overlay — the seeded position stream is byte-identical off or on. Honored by `burst()` **and** `spray()`. See [Velocity-aligned orientation](#velocity-aligned-orientation). |
+| `spinRate` | number | `1` | Tumble-speed multiplier on the seeded random spin: `1` = as seeded, `0` = rigid at the random birth tilt, `0.3` = slow drift, `2` = double, negative = reverse. Coerced with `num` (non-finite → `1`; `0` and negatives are valid). A pure render-orientation overlay — the seeded position stream is byte-identical off or on, **even with `turbulence` armed**. Honored by `burst()` **and** `spray()`. See [Tumble speed](#tumble-speed). |
 | `angle` | number | `-Math.PI / 2` | Center angle of emission cone in radians. -π/2 = upward. |
 | `onComplete` | Function | — | Called when all burst particles have died |
 
@@ -346,6 +348,18 @@ c.burst({ x: 400, y: 200, count: 80, gravity: 200, wind: 300, spread: 0.4, align
 - **`0`** is pure random spin (the classic look); **`1`** is fully velocity-locked; partial values blend the two along the shortest arc.
 - **Live + broadside.** The heading is recomputed from the current velocity each frame and offset by 90° so the broad face meets the direction of travel. Draws **no rng**.
 - **A pure orientation overlay.** `align` changes only *rotation*, never position — so the seeded position stream (and every committed fingerprint) is byte-identical whether `align` is off or on; only the rotation earns its own deterministic fingerprint. Honored by both `burst()` and `spray()`. Fails closed (coerced to `[0, 1]`); no effect under reduced motion.
+
+### Tumble speed
+
+`align` opened *which way* a piece faces; **`spinRate`** (added in v1.16.0) tunes *how fast* it tumbles. For fifteen releases the tumble rate was a fixed seeded random, so slow drifting petals, frozen rigid chips, and reverse tumble were all unreachable. `spinRate` is a plain multiplier on the accumulated tumble.
+
+```js
+// Slow, lazy petals drifting down — a third of the seeded tumble rate.
+c.burst({ spinRate: 0.3, gravity: 200 });
+```
+
+- **`1`** (default) is the seeded rate as-is; **`0`** is rigid — frozen at each piece's *random birth tilt* (varied, not axis-aligned); **`0.3`** is a lazy drift; **`2`** doubles the tumble; a **negative** value reverses it. Coerced with `num` (`0` and negatives are valid; non-finite → `1`), never `clamp01` — a rate multiplier is not a `0..1` blend.
+- **A pure orientation overlay, turbulence-safe.** `spinRate` is a render-time *angle scale*: it scales only the accumulated tumble about the birth orientation and **never touches the physics spin** the turbulence phase reads. So it is fully decoupled from `turbulence`, and the seeded position stream (and every committed fingerprint) is byte-identical whether off, on, or on-with-turbulence — only the rotation earns its own deterministic fingerprint. Composes with `align` (the tumble scale runs first, then `align` blends toward the velocity heading). Draws **no rng**. Honored by both `burst()` and `spray()`; inert under reduced motion.
 
 ### Canvas Sizing
 
@@ -651,6 +665,13 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.16.0
+
+**Tumble speed.** The second feature on the *render-orientation* axis — `align` opened *which way* a piece faces; this tunes *how fast* it tumbles. For fifteen releases the tumble rate was a fixed seeded random; now it is a plain multiplier.
+
+- `spinRate: number` on `burst()` **and** `spray()`. `1` (default) = as seeded, `0` = rigid at the random birth tilt, `0.3` = slow drift, `2` = double, negative = reverse. Coerced with `num` (`0` and negatives valid; non-finite → `1`).
+- A **pure orientation overlay, turbulence-safe**: a render-time angle scale that never touches the physics spin the turbulence phase reads, so it is decoupled from `turbulence` and the seeded position stream (and every committed fingerprint) is byte-identical whether off, on, or on-with-turbulence; only the rotation earns its own deterministic fingerprint. Composes with `align`. Draws no rng; inert under reduced motion. See [Tumble speed](#tumble-speed).
 
 ### v1.15.0
 

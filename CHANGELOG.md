@@ -3,6 +3,56 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.16.0] - 2026-08-08
+
+Feature release: `spinRate` -- **tunable tumble speed**, the second feature on the
+**render-orientation** axis (part 2 of what `align` opened). For fifteen releases a piece's tumble *rate*
+was a fixed seeded random (`spinV`, ~5 rad/s), so slow drifting petals, frozen rigid chips, and reverse
+tumble were unreachable. An opt-in `spinRate` **multiplies the accumulated tumble**: `0` = rigid (frozen
+at each piece's *random birth tilt* -- varied, not axis-aligned), `0.3` = a lazy drift, `2` = double,
+negative = reverse; default `1` = as seeded: `c.burst({ spinRate: 0.3, gravity: 200 })`. The crux: it is
+a **render-time angle scale, never a spawn-time `spinV` scale**. `pool.spin[i]` -- the physics spin the
+turbulence curl phase *reads* to drive `vx`/`vy` -- is **never touched**; the draw block scales only the
+accumulated delta `(spin - spin0)` about a stored random birth column into a stack local. So `spinRate`
+and `turbulence` are fully **decoupled**, and the seeded *position* stream is byte-identical whether off,
+on, or on-with-turbulence -- the same position hash (`1569828004`) in all three, while the rotation earns
+its own committed fingerprint (`1105261140`). It reuses the v1.15.0 `rotateHash` probe -- the first
+orientation feature to ship without a harness change. Off (`spinRate: 1` / non-finite) emits the raw
+`spin`, byte-identical to every prior release.
+
+### Added
+- **`spinRate: number` on `burst()` and `spray()`** -- a tumble-speed multiplier on the seeded random
+  spin. `1` (default) = as seeded, `0` = rigid at the random birth tilt, `0.3` = slow drift, `2` = double,
+  negative = reverse. A render property of any moving piece, so **both** `burst()` and `spray()` honor it.
+
+### Semantics
+- **Multiplier, default 1.** Any *finite* value passes (`0` and negatives are valid -- rigid and reverse
+  tumble); coerced with `num` (non-finite / non-numeric -> `1`), **not** `clamp01` -- a rate multiplier is
+  not a `0..1` blend.
+- **Rate-only via a birth pivot.** Only the accumulated tumble `(spin - spin0)` is scaled, about each
+  piece's stored *random* birth orientation, so `spinRate: 0` freezes each piece at its own varied tilt
+  (rigid but organic) rather than collapsing every piece to angle `0`.
+- **Pure orientation overlay, turbulence-safe.** A render-time angle scale that never touches
+  `pool.spin[i]` or `ctx.translate`, so the seeded *position* stream is byte-identical off, on, and
+  on-with-turbulence; only the rotation sequence moves. Composes with `align` (the tumble scale runs
+  first, then `align` blends toward the velocity heading). Draws **no rng**.
+- **Fail closed.** Non-finite / non-numeric -> `1`. `rot` is finite for any finite `spinRate` (a bounded
+  seeded angle times a finite multiplier). Inert under reduced motion (the static fan has no accumulated
+  tumble to scale).
+
+### Internal
+- Two new per-particle pool columns: `spin0` (Float32, the random birth orientation the scale pivots
+  about) and `spinRate` (Float32, the render-time multiplier); 8 B/particle. `spawn()` always writes both,
+  so the TypedArray zero-init is never relied on (a zero `spinRate` means "frozen", a fail-closed
+  requirement).
+- The render angle scale is guarded (`if (pool.spinRate[i] !== 1)`): `spin0 + (spin - spin0) * rate`, paid
+  ONLY for scaled pieces, on the render path, BEFORE the `align` blend. The turbulence phase keeps reading
+  the *unscaled* `pool.spin[i]`, so the two are decoupled. Zero allocation -- torture T6 measures a
+  tumble-scaled (`spinRate` + `turbulence`) live pool at ~0 B/frame.
+- No harness change: reuses the v1.15.0 `rotateHash` / `lastRotate` probe. New committed constant
+  `SPINRATE_HASH` (`1105261140`).
+- Unit suite 173 -> 182.
+
 ## [1.15.0] - 2026-08-06
 
 Feature release: `align` -- **velocity-aligned orientation**, the first feature on a new

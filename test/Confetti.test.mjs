@@ -124,6 +124,15 @@ const STAGGER_HASH = 3414676538; // burst({ stagger: 300 }), 40 x 16ms frames fr
 // strokeHash/colorHash) folds the quantized rotate angle. Value probed on the canonical seed-12345 rig
 // with align:1; distinct from the OFF rotateHash and its own replay gate.
 const ALIGN_HASH = 1909618495; // burst({ align: 1 }) rotateHash on the canonical rig
+
+// Committed ROTATION fingerprint for tunable tumble speed (v1.16.0, decision 0017). `spinRate` is a
+// render-time ANGLE SCALE: the draw block scales only the ACCUMULATED tumble (spin - spin0) about a
+// stored random birth column, never touching `pool.spin[i]` -- the physics spin the turbulence phase
+// reads. So the POSITION hash stays COMMITTED_HASH whether spinRate is off, on, or on-with-turbulence
+// (the headline), and only the rotate sequence moves. It reuses the v1.15.0 `rotateHash` probe -- no new
+// harness probe. Value probed on the canonical seed-12345 rig with spinRate:2; distinct from the OFF
+// rotateHash (and from align/0.5) and its own deterministic-replay gate.
+const SPINRATE_HASH = 1105261140; // burst({ spinRate: 2 }) rotateHash on the canonical rig
 const HALF_PI = Math.PI / 2;
 
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
@@ -2012,6 +2021,156 @@ describe('lite-confetti', () => {
             const on = staticAlign({ align: 1 });
             assert.equal(on.hash, off.hash, 'align should be inert on the static reduced-motion positions');
             assert.equal(on.rotateHash, off.rotateHash, 'align should not touch the static fan rotation');
+        });
+    });
+
+    describe('spinRate / tumble speed', () => {
+        // The canonical seed-12345 rig (shared with the align suite). `run` reports BOTH fingerprints:
+        // `hash` (position, folds only translate) and `rotateHash` (rotation, kept out of `hash`).
+        // spinRate is a render-time angle scale that NEVER touches pool.spin, so its headline property
+        // is that the POSITION hash is byte-identical whether off or on -- a pure orientation overlay.
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = { hash: canvas.hash, rotateHash: canvas.rotateHash };
+            c.destroy();
+            return out;
+        };
+
+        it('is opt-in and fail-closed: off / 1 / non-finite emits the raw spin (byte-identical)', () => {
+            // Headline: when off (or non-finite -> num defaults to 1), the render emits pool.spin[i]
+            // verbatim, so BOTH the position hash AND the rotation sequence match a pre-spinRate run.
+            const base = run({});
+            assert.equal(base.hash, COMMITTED_HASH, 'the spinRate branch perturbed the default position stream');
+            for (const o of [
+                { spinRate: 1 },          // explicit default
+                { spinRate: NaN },        // non-finite -> num default 1
+                { spinRate: Infinity },   // non-finite -> num default 1
+                { spinRate: '2' },        // non-numeric -> num default 1
+            ]) {
+                const r = run(o);
+                assert.equal(r.hash, COMMITTED_HASH, `spinRate ${JSON.stringify(o)} should not move positions`);
+                assert.equal(r.rotateHash, base.rotateHash,
+                    `spinRate ${JSON.stringify(o)} should emit the raw spin (rotation unchanged)`);
+            }
+        });
+
+        it('every prior committed fingerprint still reproduces with spinRate off (no sequence drift)', () => {
+            assert.equal(run({}).hash, COMMITTED_HASH, 'default fingerprint drifted');
+            assert.equal(run({ floor: FLOOR_Y }).hash, FLOOR_HASH, 'floor fingerprint drifted');
+            assert.equal(run({ ...BOX, bounce: 0 }).hash, BOX_HASH, 'box fingerprint drifted');
+            assert.equal(run({ align: 1 }).rotateHash, ALIGN_HASH, 'align rotation fingerprint drifted');
+        });
+
+        it('is a PURE orientation overlay: 2 / 0 / 0.5 / -1 keep the position hash, change only rotation', () => {
+            const off = run({});
+            for (const sr of [2, 0, 0.5, -1]) {
+                const on = run({ spinRate: sr });
+                // The headline: orientation moved NOTHING in world space -- same seed, same positions.
+                assert.equal(on.hash, off.hash, `spinRate:${sr} perturbed the position stream (not a pure overlay)`);
+                // ...but the rotation sequence genuinely changed (non-vacuous).
+                assert.notEqual(on.rotateHash, off.rotateHash, `spinRate:${sr} should change the rotation sequence`);
+            }
+        });
+
+        it('is fully decoupled from turbulence: same positions, different rotation (the crux)', () => {
+            // pool.spin[i] feeds the turbulence curl phase (Confetti.js:824). A spawn-time spinV scale
+            // would leak into vx/vy and diverge positions; the render-time angle scale does not. So with
+            // turbulence armed, spinRate:2 vs spinRate:1 must give IDENTICAL positions but DIFFERENT
+            // rotation -- the test that proves the render-scale resolution.
+            const a = run({ spinRate: 2, turbulence: 400 });
+            const b = run({ spinRate: 1, turbulence: 400 });
+            assert.equal(a.hash, b.hash, 'spinRate leaked into positions through the turbulence phase');
+            assert.notEqual(a.rotateHash, b.rotateHash, 'spinRate did not change rotation under turbulence');
+        });
+
+        it('matches the committed SPINRATE fingerprint -- distinct + deterministic', () => {
+            const on = run({ spinRate: 2 });
+            if (SPINRATE_HASH === null) console.log('[spinRate] 2 rotateHash =', on.rotateHash);
+            else assert.equal(on.rotateHash, SPINRATE_HASH, 'spinRate rotation changed vs the committed baseline');
+            // Deterministic: same seed + fixed dt -> same rotation on replay (spinRate draws no rng).
+            assert.equal(run({ spinRate: 2 }).rotateHash, on.rotateHash, 'spinRate not deterministic');
+            // A different rate is genuinely distinct from both off (1) and 2.
+            const half = run({ spinRate: 0.5 }).rotateHash;
+            assert.notEqual(half, run({}).rotateHash, 'spinRate:0.5 should differ from off');
+            assert.notEqual(half, on.rotateHash, 'spinRate:0.5 should differ from spinRate:2');
+        });
+
+        it('scales the RATE, not noise: spinRate:0 freezes at the birth tilt; spinRate:1 advances (lastRotate)', () => {
+            // A single piece with no velocity, pumped twice so its seeded tumble accumulates. With
+            // spinRate:0 the render freezes at the piece's random birth orientation (spin0) and does NOT
+            // advance between pumps; with spinRate:1 the raw spin keeps turning. A bare hash proves
+            // determinism but not that the knob scales the RATE.
+            const pumped = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 7 });
+                c.burst({ count: 1, x: 400, y: 300, spread: 0.001, speed: 10, gravity: 0, drag: 1,
+                    lifeMin: 5, lifeMax: 5, ...opts });
+                pump(1, 500);
+                const a = canvas.lastRotate;
+                pump(1, 500);
+                const b = canvas.lastRotate;
+                c.destroy();
+                return { a, b };
+            };
+            const frozen = pumped({ spinRate: 0 });
+            assert.equal(frozen.a, frozen.b, 'spinRate:0 should freeze the tumble at the birth tilt (no advance)');
+            const live = pumped({ spinRate: 1 });
+            assert.notEqual(live.a, live.b, 'spinRate:1 should keep advancing the tumble');
+        });
+
+        it('keeps positions finite under spinRate + gravity + wind + turbulence + bounce in a box', () => {
+            const canvas = makeCanvas({ record: true, assertFinite: true });
+            const c = createConfetti(canvas, { seed: 3 });
+            assert.doesNotThrow(() => {
+                c.burst({
+                    x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 4, lifeMax: 4,
+                    wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350, bounce: 0.6,
+                    gravity: 4000, wind: 1200, turbulence: 600, spinRate: 2,
+                });
+                pump(80, 16);
+            });
+            c.destroy();
+        });
+
+        it('is honored by spray() too (a render property of any moving piece, unlike burst-only stagger)', () => {
+            const spray = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 400, rate: 15, x: 400, y: 200, spread: 1.2, shape: 'rect',
+                    lifeMin: 4, lifeMax: 4, ...opts });
+                pump(1, 1000); pump(60, 16);
+                const out = { hash: canvas.hash, rotateHash: canvas.rotateHash };
+                c.destroy();
+                return out;
+            };
+            const off = spray({});
+            const on = spray({ spinRate: 2 });
+            assert.equal(on.hash, off.hash, 'spinRate should not move spray positions (pure overlay)');
+            assert.notEqual(on.rotateHash, off.rotateHash, 'spray should honor spinRate (rotation changed)');
+        });
+
+        it('has no effect under reduced motion (static fan is inert)', () => {
+            const staticSpin = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                    pump(1, 1000); pump(29, 16);
+                    const out = { hash: canvas.hash, rotateHash: canvas.rotateHash };
+                    c.destroy();
+                    return out;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            const off = staticSpin({});
+            const on = staticSpin({ spinRate: 0 });
+            assert.equal(on.hash, off.hash, 'spinRate should be inert on the static reduced-motion positions');
+            assert.equal(on.rotateHash, off.rotateHash, 'spinRate should not touch the static fan rotation');
         });
     });
 

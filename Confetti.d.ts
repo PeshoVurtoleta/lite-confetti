@@ -105,6 +105,18 @@ export interface BurstOptions {
      * Draws no RNG; no effect under reduced motion. (v1.15.0)
      */
     align?: number;
+    /**
+     * Tumble-speed multiplier on the seeded random spin. `1` (default) is the seeded rate as-is;
+     * `0` is RIGID -- frozen at each piece's RANDOM birth tilt (varied, not axis-aligned); `0.3` is a
+     * slow lazy drift; `2` doubles the tumble; a negative value REVERSES it. A render-time ANGLE SCALE:
+     * it scales only the accumulated tumble about the birth orientation and never touches the physics
+     * spin, so it is fully decoupled from `turbulence` and the seeded POSITION fingerprint is
+     * byte-identical whether off, on, or on-with-turbulence -- a pure orientation overlay. Composes with
+     * `align` (the tumble scale runs first, then `align` blends toward the velocity heading). Coerced
+     * with `num` -- any FINITE value passes (0 and negatives are valid); non-finite/non-numeric -> 1.
+     * Honored by both `burst()` and `spray()`. Draws no RNG; no effect under reduced motion. (v1.16.0)
+     */
+    spinRate?: number;
     /** Per-particle turbulence: a rotating acceleration (px/sec^2) that makes each particle
      *  wander organically. Default 0 (none). Opt-in, fingerprint-safe, draws no RNG; no effect
      *  under reduced motion. */

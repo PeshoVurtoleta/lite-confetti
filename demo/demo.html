@@ -410,6 +410,7 @@
         <span class="badge">emit</span>
         <span class="badge">stagger</span>
         <span class="badge">align</span>
+        <span class="badge">spinRate</span>
         <span class="badge">reduced-motion</span>
         <span class="badge">< 4KB</span>
     </div>
@@ -621,6 +622,11 @@
                                                                                        id="alignVal">off</span></div>
                 <input type="range" id="align" min="0" max="1" value="0" step="0.05">
             </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">spinRate (tumble)</span><span class="control-val"
+                                                                                       id="spinRateVal">default</span></div>
+                <input type="range" id="spinRate" min="0" max="3" value="1" step="0.1">
+            </div>
         </div>
 
         <div class="section">
@@ -687,7 +693,7 @@
     const $codeBtn  = document.getElementById('codeBtn');
     const $seedBtn  = document.getElementById('seedBtn');
 
-    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'box', 'spark', 'emit', 'emitSize', 'stagger', 'align'];
+    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'box', 'spark', 'emit', 'emitSize', 'stagger', 'align', 'spinRate'];
     const EMIT_SHAPES = ['off', 'line', 'ring', 'box']; // emit slider 0..3 -> shape name (v1.13.0)
     // v1.12.0 color-over-life: a fixed 3-stop ember ramp (near-white -> gold -> deep orange) the demo
     // injects when the `spark` toggle is on, so pieces cool as they age.
@@ -825,6 +831,10 @@
         // rate, never per frame. 0 -> pure random spin (a render-only overlay; positions unchanged).
         const align = +$in.align.value;
         if (align > 0) cfg.align = align;
+        // v1.16.0 spinRate: tumble-speed multiplier on the seeded spin (0 = rigid, 2 = double, default 1).
+        // Read at action rate, never per frame. A render-only overlay; positions unchanged even with turbulence.
+        const sr = +$in.spinRate.value;
+        if (sr !== 1) cfg.spinRate = sr;
         return cfg;
     }
 
@@ -851,6 +861,7 @@
                 : id === 'emitSize' ? (+raw === 0 ? 'off' : raw + 'px')
                 : id === 'stagger' ? (+raw === 0 ? 'off' : raw + 'ms')   // 0 = synchronous spawn
                 : id === 'align' ? (+raw === 0 ? 'off' : (+raw).toFixed(2))  // 0 = random spin
+                : id === 'spinRate' ? (+raw === 1 ? 'default' : (+raw === 0 ? 'rigid' : (+raw).toFixed(1)))  // 1 = as seeded, 0 = rigid
                 : (id === 'turbulence' || id === 'gust') ? (+raw === 0 ? 'off' : raw)  // 0 = no force
                 : id === 'trail' ? (+raw === 0 ? 'off' : raw)        // 0 = no ribbon
                 : id === 'settle' ? (+raw === 0 ? 'off' : raw)       // 0 = no settle (needs a floor)
@@ -1039,6 +1050,7 @@
             if (cfg.emit) code += `\n${indent}emit: <span class="str">'${cfg.emit}'</span>, emitSize: <span class="num">${cfg.emitSize}</span>,`;
             if (cfg.stagger) code += `\n${indent}stagger: <span class="num">${cfg.stagger}</span>,`;
             if (cfg.align) code += `\n${indent}align: <span class="num">${cfg.align.toFixed(2)}</span>,`;
+            if (cfg.spinRate !== undefined) code += `\n${indent}spinRate: <span class="num">${cfg.spinRate.toFixed(1)}</span>,`;
             code += `\n${indent}lifeMin: <span class="num">${cfg.lifeMin}</span>, lifeMax: <span class="num">${cfg.lifeMax}</span>,`;
             code += `\n});`;
             $codeBox.innerHTML = code;

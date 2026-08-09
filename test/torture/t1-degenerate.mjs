@@ -141,6 +141,17 @@ export function run() {
         ['align:Infinity', { count: 60, align: Infinity, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
         ['align:nonnumeric', { count: 60, align: 'lots', wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
         ['align:valid+box', { count: 60, align: 1, floor: 300, bounce: 0.5, gravity: 3000, wind: 800, lifeMin: 0.6, lifeMax: 0.6 }],
+        // spinRate poison (v1.16.0): garbage multipliers coerce via num (non-finite/non-numeric -> 1);
+        // the render rotation is spin0 + (spin - spin0) * rate -- a bounded seeded angle times a finite
+        // multiplier, so 0 / negative / 1e6 are all VALID and can never yield a non-finite draw. Armed
+        // with turbulence + wind so the [:824] curl read runs beside the render scale every frame.
+        ['spinRate:NaN', { count: 60, spinRate: NaN, turbulence: 400, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinRate:Infinity', { count: 60, spinRate: Infinity, turbulence: 400, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinRate:-Infinity', { count: 60, spinRate: -Infinity, turbulence: 400, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinRate:nonnumeric', { count: 60, spinRate: 'fast', turbulence: 400, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinRate:0', { count: 60, spinRate: 0, turbulence: 400, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinRate:neg', { count: 60, spinRate: -2, turbulence: 400, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinRate:huge', { count: 60, spinRate: 1e6, turbulence: 400, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],

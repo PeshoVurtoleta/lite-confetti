@@ -216,6 +216,23 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- the align render-rotation blend is allocating');
     }
 
+    // (10) A tumble-scaled live pool (v1.16.0): with spinRate:2 every rendered piece runs the NEW
+    // render angle scale (spin0 + (spin - spin0) * rate) INSIDE the measured window, AND turbulence is
+    // armed so the [:824] curl read runs too -- proving the two are decoupled at zero cost. Immortal
+    // long-life pieces hold the pool full so any per-frame allocation on the spinRate path would show
+    // as retained bytes. Pure stack arithmetic, so ~0 B/frame over ~MAXP pieces.
+    const sr = createConfetti(makeCanvas({ record: true }), { seed: 1616, maxParticles: MAXP });
+    sr.burst({ count: MAXP, x: 400, y: 300, speed: 300, spread: 2.5, gravity: 700, wind: 400,
+        turbulence: 500, spinRate: 2, lifeMin: 1e6, lifeMax: 1e6 });
+    pump(1, 16);
+    check(sr.count === MAXP, () => `T6: spinRate pool has ${sr.count} alive, expected ${MAXP}`);
+    const bpfSpin = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    sr.destroy();
+    if (bpfSpin > RETAIN_FLOOR_BPF) {
+        die('T6: tumble-scaled update() retains ' + bpfSpin.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the spinRate render angle scale is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -231,6 +248,7 @@ export async function run() {
         + bpfSettle.toFixed(2) + ' B/frame from a fully-settled (frozen) pile, '
         + bpfEmit.toFixed(2) + ' B/frame from a continuous ring-emitter spray, '
         + bpfStagger.toFixed(2) + ' B/frame from a staggered burst mid-emission, '
-        + bpfAlign.toFixed(2) + ' B/frame from a velocity-aligned live pool); '
+        + bpfAlign.toFixed(2) + ' B/frame from a velocity-aligned live pool, '
+        + bpfSpin.toFixed(2) + ' B/frame from a tumble-scaled (spinRate + turbulence) live pool); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }
