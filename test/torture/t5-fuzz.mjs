@@ -78,6 +78,7 @@ function genOp(prng, allowReseed) {
                 stagger: (prng() % 2 === 0) ? 0 : 50 + (prng() % 450),     // staggered-emission window (ms), half off; burst-only, zero-rng
                 align: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100,       // velocity-align blend 0..1, half off; render-only, zero-rng
                 spinRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // tumble-speed multiplier, half at 1 (off); else [-2,3], render-only, zero-rng
+                scaleTo: (prng() % 2 === 0) ? 1 : (prng() % 301) / 100, // size-over-life target, half at 1 (off); else [0,3], render-only, zero-rng
                 lifeMin: 0.5 + (prng() % 200) / 100,
                 lifeMax: 2.5 + (prng() % 200) / 100,
             },
@@ -106,6 +107,7 @@ function genOp(prng, allowReseed) {
                 emitSize: 20 + (prng() % 280), // emitter extent
                 align: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100, // velocity-align blend, half off; spray honors it, zero-rng
                 spinRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // tumble-speed multiplier, half at 1 (off); else [-2,3], spray honors it, zero-rng
+                scaleTo: (prng() % 2 === 0) ? 1 : (prng() % 301) / 100, // size-over-life target, half at 1 (off); else [0,3], spray honors it, zero-rng
             },
         };
     }
@@ -131,11 +133,12 @@ export function run() {
         const ca = makeCanvas({ record: true });
         const cb = makeCanvas({ record: true });
         // A trail capacity is given to BOTH so the ring buffer + global head + per-burst trail
-        // lengths are exercised under fuzz; the trail GEOMETRY (strokeHash) AND the render rotation
-        // (rotateHash -- driven by both `align` and the v1.16.0 `spinRate` tumble scale) are checked
-        // alongside the position hash, proving every render overlay is as deterministic as the physics.
-        // spinRate armed must NOT move the position hash (a render-time angle scale, never pool.spin),
-        // so ca.hash === cb.hash still holds with the fuzzed multiplier live.
+        // lengths are exercised under fuzz; the trail GEOMETRY (strokeHash), the render rotation
+        // (rotateHash -- driven by both `align` and the v1.16.0 `spinRate` tumble scale) AND the render
+        // size fold (scaleHash -- the v1.17.0 `scaleTo` size-over-life ramp) are checked alongside the
+        // position hash, proving every render overlay is as deterministic as the physics. Both spinRate
+        // and scaleTo armed must NOT move the position hash (render-time scales, never pool.spin/w/h),
+        // so ca.hash === cb.hash still holds with the fuzzed multipliers live.
         const A = createConfetti(ca, { seed, maxParticles: CAP, trail: 24 });
         const B = createConfetti(cb, { seed, maxParticles: CAP, trail: 24 });
         const prng = makePrng(SEED);
@@ -146,9 +149,9 @@ export function run() {
             apply(B, op);
             if (op.kind === 'pump') {
                 pump(1, op.dt); // one pump drives BOTH updates on the shared rAF queue
-                check(ca.hash === cb.hash && ca.strokeHash === cb.strokeHash && ca.rotateHash === cb.rotateHash, () =>
+                check(ca.hash === cb.hash && ca.strokeHash === cb.strokeHash && ca.rotateHash === cb.rotateHash && ca.scaleHash === cb.scaleHash, () =>
                     `T5 F1: op ${i} seed ${SEED}: same-seed instances diverged ` +
-                    `(A ${ca.hash}/${ca.strokeHash}/${ca.rotateHash} != B ${cb.hash}/${cb.strokeHash}/${cb.rotateHash})`);
+                    `(A ${ca.hash}/${ca.strokeHash}/${ca.rotateHash}/${ca.scaleHash} != B ${cb.hash}/${cb.strokeHash}/${cb.rotateHash}/${cb.scaleHash})`);
             }
         }
         A.destroy();

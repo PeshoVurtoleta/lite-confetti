@@ -153,6 +153,35 @@ export function run() {
             () => `T3 A6: 200 bind/destroy cycles leaked ${pointerListenerCount() - baseListeners} listener(s)`);
     }
 
+    // A8 -- pool-recycle retention for scaleTo (v1.17.0). scaleTo is ALWAYS written at spawn (never
+    // zero-init), so a recycled slot cannot inherit a prior burst's target. A single-slot pool
+    // (maxParticles:1) FORCES slot 0 reuse: fire 5 "vanish at death" (scaleTo:0) pieces, expiring each
+    // so the pool drains to 0 every cycle, then a PLAIN burst (default scaleTo 1) into the same recycled
+    // slot. With scaleTo reset to 1 the render leaves ctx.scale's Y factor at EXACTLY 1 (the guard is
+    // false -- an exact identity, robust to dt); a leaked scaleTo:0 would instead fold s = lifeT < 1.
+    // lastScale (flutter 0, so the recorded Y factor is the pure size fold) is the witness.
+    {
+        const canvas = makeCanvas({ record: true });
+        const c = createConfetti(canvas, { seed: 7, maxParticles: 1 });
+        const err = capture(() => {
+            for (let cycle = 0; cycle < 5; cycle++) {
+                c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 0,
+                    scaleTo: 0, lifeMin: 0.3, lifeMax: 0.3 });
+                for (let f = 0; f < 20; f++) pump(1, 50);
+                check(c.count === 0, () => `T3 A8: cycle ${cycle} single-slot pool did not drain the scaleTo:0 piece (count ${c.count})`);
+            }
+            // Recycle slot 0 with a constant-size piece; its Y size factor must be exactly 1.
+            c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 0,
+                lifeMin: 5, lifeMax: 5 });
+            pump(1, 100);
+            check(c.count === 1, () => `T3 A8: recycled plain burst did not spawn (count ${c.count})`);
+            check(canvas.lastScale === 1, () =>
+                `T3 A8: a recycled slot leaked a stale scaleTo -- Y size factor ${canvas.lastScale} != 1`);
+        });
+        check(err === null, () => `T3 A8: threw ${err && err.message}`);
+        c.destroy();
+    }
+
     check(pointerListenerCount() === baseListeners,
         () => `T3: tier leaked ${pointerListenerCount() - baseListeners} pointer listener(s) overall`);
 }

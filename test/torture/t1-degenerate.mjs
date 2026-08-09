@@ -152,6 +152,20 @@ export function run() {
         ['spinRate:0', { count: 60, spinRate: 0, turbulence: 400, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
         ['spinRate:neg', { count: 60, spinRate: -2, turbulence: 400, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
         ['spinRate:huge', { count: 60, spinRate: 1e6, turbulence: 400, wind: 500, lifeMin: 0.3, lifeMax: 0.3 }],
+        // scaleTo poison (v1.17.0): garbage targets coerce via nonneg (non-finite/non-numeric/negative
+        // -> the default 1 for garbage, 0 for a negative). The render fold is 1 + (scaleTo - 1)*(1 - lifeT)
+        // -- a bounded age fraction times a finite, non-negative target -- so 0 / 1e-9 / 1e6 are all VALID
+        // and can never yield a non-finite draw. Armed with turbulence + wind + a bouncing box so the
+        // render size fold runs beside live physics every frame.
+        ['scaleTo:NaN', { count: 60, scaleTo: NaN, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleTo:Infinity', { count: 60, scaleTo: Infinity, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleTo:-Infinity', { count: 60, scaleTo: -Infinity, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleTo:nonnumeric', { count: 60, scaleTo: 'big', turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleTo:null', { count: 60, scaleTo: null, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleTo:0', { count: 60, scaleTo: 0, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleTo:neg', { count: 60, scaleTo: -5, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleTo:tiny', { count: 60, scaleTo: 1e-9, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleTo:huge', { count: 60, scaleTo: 1e6, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],

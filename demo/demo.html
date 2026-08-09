@@ -639,6 +639,10 @@
                 <button class="btn" id="mixBtn">🎨 Mix shapes</button>
             </div>
             <div class="btn-row">
+                <button class="btn" id="shrinkBtn">🔻 Shrink out</button>
+                <button class="btn" id="bloomBtn">🌸 Bloom</button>
+            </div>
+            <div class="btn-row">
                 <button class="btn" id="followBtn" aria-pressed="false">🧲 Follow</button>
                 <button class="btn" id="clearBtn">✕ Clear</button>
             </div>
@@ -688,6 +692,8 @@
     const $burstBtn = document.getElementById('burstBtn');
     const $sprayBtn = document.getElementById('sprayBtn');
     const $mixBtn   = document.getElementById('mixBtn');
+    const $shrinkBtn = document.getElementById('shrinkBtn');
+    const $bloomBtn  = document.getElementById('bloomBtn');
     const $followBtn = document.getElementById('followBtn');
     const $clearBtn = document.getElementById('clearBtn');
     const $codeBtn  = document.getElementById('codeBtn');
@@ -696,8 +702,10 @@
     const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'box', 'spark', 'emit', 'emitSize', 'stagger', 'align', 'spinRate'];
     const EMIT_SHAPES = ['off', 'line', 'ring', 'box']; // emit slider 0..3 -> shape name (v1.13.0)
     // v1.12.0 color-over-life: a fixed 3-stop ember ramp (near-white -> gold -> deep orange) the demo
-    // injects when the `spark` toggle is on, so pieces cool as they age.
-    const EMBER_RAMP = [{ l: 0.98, c: 0.02, h: 90 }, { l: 0.72, c: 0.22, h: 60 }, { l: 0.40, c: 0.15, h: 30 }];
+    // injects when the `spark` toggle is on, so pieces cool as they age. Frozen + shared: the engine
+    // bakes lifeColors into a LUT once per burst and never mutates the input, so one const serves every
+    // call with zero per-action allocation.
+    const EMBER_RAMP = Object.freeze([{ l: 0.98, c: 0.02, h: 90 }, { l: 0.72, c: 0.22, h: 60 }, { l: 0.40, c: 0.15, h: 30 }].map(Object.freeze));
     const $in = {};   // id -> input element
     const $out = {};  // id -> value-display element
     for (const id of SLIDERS) { $in[id] = document.getElementById(id); $out[id] = document.getElementById(id + 'Val'); }
@@ -817,8 +825,8 @@
             if (floorPct === 0) cfg.floor = window.innerHeight;
         }
         // v1.12.0 color-over-life: the spark toggle injects the ember ramp, so each piece's body
-        // cools from near-white to deep orange over its life. A fresh copy per action, never per frame.
-        if ((+$in.spark.value) === 1) cfg.lifeColors = EMBER_RAMP.map(s => ({ ...s }));
+        // cools from near-white to deep orange over its life. Shared frozen const, never per frame.
+        if ((+$in.spark.value) === 1) cfg.lifeColors = EMBER_RAMP;
         // v1.13.0 emit: the shape slider (1 line / 2 ring / 3 box) distributes the spawn origin,
         // sized by emitSize. Read at action rate, never per frame. 0 or emitSize 0 -> point spawn.
         const emitId = +$in.emit.value, emitSize = +$in.emitSize.value;
@@ -967,6 +975,15 @@
         delete cfg.emoji;
         cfg.shapes = ['rect', 'circle', 'star', 'triangle', 'heart', 'hexagon'];
         c.burst(cfg);
+    });
+
+    // Size-over-life (v1.17.0). Shrink out: pieces vanish as they age. Bloom: pieces grow as
+    // they fade, composed with the ember color ramp on the SAME life fraction.
+    $shrinkBtn.addEventListener('click', () => {
+        c.burst({ scaleTo: 0.1, gravity: 300, count: 120, lifeMin: 2, lifeMax: 3 });
+    });
+    $bloomBtn.addEventListener('click', () => {
+        c.burst({ scaleTo: 2.5, gravity: 200, shape: 'circle', lifeColors: EMBER_RAMP });
     });
 
     // Follow-spray: a continuous stream that chases the pointer (v1.2.0 followPointer).

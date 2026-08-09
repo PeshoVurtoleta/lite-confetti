@@ -3,6 +3,54 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.17.0] - 2026-08-09
+
+Feature release: `scaleTo` -- **size-over-life**, the first feature on the **render-scale** axis. For
+sixteen releases a piece's *size* was fixed at birth (`pool.w`/`pool.h` drawn once in `spawn()` and never
+changed), and the only `ctx.scale` was `flutter`'s X-wobble -- so a piece that shrinks away to nothing, or
+an ember that blooms as it dies, was unreachable. An opt-in `scaleTo` scalar **lerps each piece's rendered
+size** from `1.0` at birth to `scaleTo` at death by the *same* age fraction (`1 - life/maxL`) the
+`lifeColors` ramp already indexes: `0.2` shrinks out, `2` grows, `0` vanishes at death; default `1` =
+constant size: `c.burst({ scaleTo: 0.1, gravity: 300 })`. The crux: it is **isotropic** and **folded into
+the single existing `ctx.scale` call**, never a second call -- flutter's X-wobble and the size ramp
+multiply on one transform, and `pool.w`/`pool.h` are **never touched**. So scale never enters
+`ctx.translate`, and a scaled burst reproduces the same-seed plain burst's *position* hash exactly
+(`1569828004`) -- a pure render overlay (invisible to `rotateHash` and `colorHash` too), while the size
+fold earns its own committed fingerprint (`148099462`). Off (`scaleTo: 1` / non-finite) leaves
+`ctx.scale(wobbleScale, 1)` byte-identical to every prior release.
+
+### Added
+- **`scaleTo: number` on `burst()` and `spray()`** -- a size-over-life target. `1` (default) = constant
+  size, `0.2` = shrink out, `2` = grow/bloom, `0` = vanish at death. A render property of any moving piece,
+  so **both** `burst()` and `spray()` honor it.
+
+### Semantics
+- **Single scalar, default 1.** `s = 1 + (scaleTo - 1) * (1 - lifeT)`, reusing the `lifeT` already computed
+  for the opacity fade and the `lifeColors` index -- zero new math on the shared path.
+- **Isotropic.** One factor on *both* axes. Per-axis scale is out of scope (it collides with flutter, which
+  owns X via the wobble); isotropic keeps the two orthogonal -- flutter wobbles X, `scaleTo` scales both,
+  they multiply on one `ctx.scale`.
+- **Negative clamps to 0, not to the default.** Coerced with `nonneg`: a *negative* -> `0` (a size has no
+  direction -- **not** a mirror flip, **not** a fallback to `1`; `scaleTo: -2` renders identically to
+  `scaleTo: 0`), non-finite / non-numeric -> `1`. `scaleTo: 0` is a legitimate value (the size analog of
+  `spinRate: 0`).
+- **Pure render overlay.** Never touches `pool.w`/`pool.h` or `ctx.translate`, so the seeded *position*
+  stream is byte-identical off or on; only the size fold moves. The **trail ribbon keeps its birth width**
+  (the ramp scales the body, not the streak). Draws **no rng**.
+- **Fail closed.** `lifeT` is in `(0,1]` so `s` is finite and `>= 0` for any finite non-negative `scaleTo`.
+  Inert under reduced motion (the static fan does no life integration and never calls `ctx.scale`).
+
+### Internal
+- One new per-particle pool column: `scaleTo` (Float32, the render-time size target); +4 B/particle.
+  `spawn()` **always** writes it, so the TypedArray zero-init is never relied on (a zero would mean "shrink
+  to nothing", a fail-closed requirement).
+- The render size fold is guarded (`if (pool.scaleTo[i] !== 1)`) and folded into the SINGLE existing
+  `ctx.scale(sx, sy)` -- paid only for armed pieces, a Float32 read + compare when off. Zero allocation --
+  torture T6 measures a size-ramped (`scaleTo` + `flutter`) live pool at ~0 B/frame.
+- New harness probe `scaleHash` / `lastScale` (a structural copy of the `rotateHash` / `lastRotate` pair,
+  kept out of the position hash). New committed constant `SCALE_HASH` (`148099462`).
+- Unit suite 182 -> 193.
+
 ## [1.16.0] - 2026-08-08
 
 Feature release: `spinRate` -- **tunable tumble speed**, the second feature on the

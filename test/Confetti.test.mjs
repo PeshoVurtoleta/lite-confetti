@@ -133,6 +133,15 @@ const ALIGN_HASH = 1909618495; // burst({ align: 1 }) rotateHash on the canonica
 // harness probe. Value probed on the canonical seed-12345 rig with spinRate:2; distinct from the OFF
 // rotateHash (and from align/0.5) and its own deterministic-replay gate.
 const SPINRATE_HASH = 1105261140; // burst({ spinRate: 2 }) rotateHash on the canonical rig
+
+// Committed SCALE fingerprint for size-over-life (v1.17.0, decision 0018). `scaleTo` changes ONLY the
+// arguments to ctx.scale (folded into flutter's existing X-wobble call), never ctx.translate, so a
+// scaled burst reproduces the same-seed plain burst's POSITION hash (COMMITTED_HASH) exactly -- a pure
+// RENDER overlay. This gate proves the size ramp itself is deterministic and non-vacuous: `scaleHash`
+// (kept out of the position hash, like rotateHash/colorHash) folds the quantized scale factors. Value
+// probed on the canonical seed-12345 rig with scaleTo:2; distinct from the OFF scaleHash (and from 0.5)
+// and its own cross-process replay gate.
+const SCALE_HASH = 148099462; // burst({ scaleTo: 2 }) scaleHash on the canonical rig
 const HALF_PI = Math.PI / 2;
 
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
@@ -2171,6 +2180,197 @@ describe('lite-confetti', () => {
             const on = staticSpin({ spinRate: 0 });
             assert.equal(on.hash, off.hash, 'spinRate should be inert on the static reduced-motion positions');
             assert.equal(on.rotateHash, off.rotateHash, 'spinRate should not touch the static fan rotation');
+        });
+    });
+
+    describe('scaleTo / size-over-life', () => {
+        // The canonical seed-12345 rig (shared with the align/spinRate suites). `run` reports the
+        // position `hash` (folds only translate) plus the render probes kept OUT of it: `scaleHash`
+        // (the v1.17.0 size fold), `rotateHash`, and `colorHash`. scaleTo is a render-time size scale
+        // FOLDED into flutter's existing ctx.scale call; it never touches pool.w/h or translate, so its
+        // headline is that the POSITION hash is byte-identical off or on -- a pure render overlay.
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = { hash: canvas.hash, scaleHash: canvas.scaleHash, rotateHash: canvas.rotateHash, colorHash: canvas.colorHash };
+            c.destroy();
+            return out;
+        };
+
+        it('is opt-in and fail-closed: off / 1 / non-finite / null keep the size fold byte-identical', () => {
+            // Headline: off, explicit 1, or any non-finite/non-numeric (nonneg -> default 1) emits the
+            // birth-size scale verbatim, so BOTH the position hash AND the scale sequence match a
+            // pre-scaleTo run.
+            const base = run({});
+            assert.equal(base.hash, COMMITTED_HASH, 'the scaleTo branch perturbed the default position stream');
+            for (const o of [
+                {},
+                { scaleTo: 1 },
+                { scaleTo: NaN },
+                { scaleTo: Infinity },
+                { scaleTo: '2' },
+                { scaleTo: null },
+                { scaleTo: undefined },
+            ]) {
+                const r = run(o);
+                assert.equal(r.hash, COMMITTED_HASH, `scaleTo ${JSON.stringify(o)} should not move positions`);
+                assert.equal(r.scaleHash, base.scaleHash, `scaleTo ${JSON.stringify(o)} should leave the size fold untouched`);
+            }
+        });
+
+        it('a NEGATIVE clamps to 0, not to the default 1 (decision 3)', () => {
+            // nonneg maps a negative to 0 (a legitimate "vanish at death"), NOT a mirror flip and NOT a
+            // fallback to 1. So scaleTo:-1 must render IDENTICALLY to scaleTo:0, and both must DIFFER
+            // from off -- while the position hash stays put.
+            const base = run({});
+            const neg = run({ scaleTo: -1 });
+            const zero = run({ scaleTo: 0 });
+            assert.equal(neg.scaleHash, zero.scaleHash, 'a negative scaleTo must clamp to 0, not mirror-flip');
+            assert.notEqual(neg.scaleHash, base.scaleHash, 'scaleTo:-1 must not fall back to the default 1');
+            assert.equal(neg.hash, COMMITTED_HASH, 'a clamped scaleTo must not move positions');
+            assert.equal(zero.hash, COMMITTED_HASH, 'scaleTo:0 must not move positions');
+        });
+
+        it('every prior committed fingerprint still reproduces with scaleTo off (no sequence drift)', () => {
+            assert.equal(run({}).hash, COMMITTED_HASH, 'default fingerprint drifted');
+            assert.equal(run({ floor: FLOOR_Y }).hash, FLOOR_HASH, 'floor fingerprint drifted');
+            assert.equal(run({ ...BOX, bounce: 0 }).hash, BOX_HASH, 'box fingerprint drifted');
+            assert.equal(run({ align: 1 }).rotateHash, ALIGN_HASH, 'align rotation fingerprint drifted');
+            assert.equal(run({ spinRate: 2 }).rotateHash, SPINRATE_HASH, 'spinRate rotation fingerprint drifted');
+        });
+
+        it('is a PURE render overlay: 2 / 0.2 / 0 / 3 keep the position hash, change only the size fold', () => {
+            const off = run({});
+            for (const st of [2, 0.2, 0, 3]) {
+                const on = run({ scaleTo: st });
+                assert.equal(on.hash, off.hash, `scaleTo:${st} perturbed the position stream (not a pure overlay)`);
+                assert.notEqual(on.scaleHash, off.scaleHash, `scaleTo:${st} should change the size sequence`);
+            }
+        });
+
+        it('is orthogonal to rotation and color, and composes with align/spinRate/flutter', () => {
+            const off = run({});
+            const on = run({ scaleTo: 2 });
+            assert.equal(on.rotateHash, off.rotateHash, 'scaleTo must not touch rotation');
+            assert.equal(on.colorHash, off.colorHash, 'scaleTo must not touch color');
+            // Even stacked with every other render overlay, the seeded POSITION stream is untouched.
+            const stacked = run({ scaleTo: 2, align: 1, spinRate: 2, flutter: 1 });
+            assert.equal(stacked.hash, off.hash, 'stacked render overlays perturbed the position stream');
+        });
+
+        it('the trail ribbon keeps its BIRTH width (decision (b)): strokeHash identical, TRAIL_HASH holds', () => {
+            const trailRun = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 12345, trail: 10 });
+                c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                pump(1, 1000); pump(29, 16);
+                const out = { strokeHash: canvas.strokeHash, strokes: canvas.strokes };
+                c.destroy();
+                return out;
+            };
+            const off = trailRun({});
+            const on = trailRun({ scaleTo: 0.2 });
+            assert.ok(on.strokes > 0, 'the trail rig must actually stroke');
+            assert.equal(on.strokeHash, off.strokeHash, 'scaleTo narrowed the ribbon -- it must keep birth width');
+            assert.equal(off.strokeHash, TRAIL_HASH, 'the standalone trail geometry fingerprint drifted');
+        });
+
+        it('matches the committed SCALE fingerprint -- distinct + deterministic', () => {
+            const on = run({ scaleTo: 2 });
+            if (SCALE_HASH === null) console.log('[scaleTo] 2 scaleHash =', on.scaleHash);
+            else assert.equal(on.scaleHash, SCALE_HASH, 'scaleTo size fold changed vs the committed baseline');
+            // Deterministic: same seed + fixed dt -> same size fold on replay (scaleTo draws no rng).
+            assert.equal(run({ scaleTo: 2 }).scaleHash, on.scaleHash, 'scaleTo not deterministic');
+            // A different target is genuinely distinct from both off (1) and 2.
+            const half = run({ scaleTo: 0.5 }).scaleHash;
+            assert.notEqual(half, run({}).scaleHash, 'scaleTo:0.5 should differ from off');
+            assert.notEqual(half, on.scaleHash, 'scaleTo:0.5 should differ from scaleTo:2');
+        });
+
+        it('tracks the life fraction (lastScale): off flat at 1, 0.2 shrinks, 2 grows, birth anchored ~1', () => {
+            // A single piece with flutter off (so wobbleScale == 1 and the recorded Y factor is the pure
+            // size ramp). Sample lastScale frame by frame: off must be exactly 1 each frame; 0.2 must
+            // start ~1 (birth anchor) and STRICTLY DECREASE below 1; 2 must start ~1 and STRICTLY
+            // INCREASE above 1. A bare hash proves determinism but not that the ramp tracks life.
+            const sampled = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 7 });
+                c.burst({ count: 1, x: 400, y: 300, spread: 0.001, speed: 10, gravity: 0, drag: 1,
+                    flutter: 0, lifeMin: 5, lifeMax: 5, ...opts });
+                const xs = [];
+                for (let f = 0; f < 8; f++) { pump(1, 100); xs.push(canvas.lastScale); }
+                c.destroy();
+                return xs;
+            };
+            for (const v of sampled({})) assert.equal(v, 1, 'scaleTo off must keep the Y size factor exactly 1');
+            const down = sampled({ scaleTo: 0.2 });
+            assert.ok(Math.abs(down[0] - 1) < 0.05, 'scaleTo:0.2 should be birth-anchored near 1');
+            for (let k = 1; k < down.length; k++) {
+                assert.ok(down[k] < down[k - 1], 'scaleTo:0.2 must strictly shrink');
+                assert.ok(down[k] < 1, 'scaleTo:0.2 must stay below 1');
+            }
+            const up = sampled({ scaleTo: 2 });
+            assert.ok(Math.abs(up[0] - 1) < 0.05, 'scaleTo:2 should be birth-anchored near 1');
+            for (let k = 1; k < up.length; k++) {
+                assert.ok(up[k] > up[k - 1], 'scaleTo:2 must strictly grow');
+                assert.ok(up[k] > 1, 'scaleTo:2 must stay above 1');
+            }
+        });
+
+        it('keeps positions finite under scaleTo extremes + gravity + wind + turbulence + a bouncing box + trails', () => {
+            for (const st of [0, 0.2, 3, 1e6]) {
+                const canvas = makeCanvas({ record: true, assertFinite: true });
+                const c = createConfetti(canvas, { seed: 3, trail: 12 });
+                assert.doesNotThrow(() => {
+                    c.burst({
+                        x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 4, lifeMax: 4,
+                        wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350, bounce: 0.6,
+                        gravity: 4000, wind: 1200, turbulence: 500, scaleTo: st, trail: 12,
+                    });
+                    pump(80, 16);
+                }, `scaleTo:${st} produced a non-finite draw`);
+                c.destroy();
+            }
+        });
+
+        it('is honored by spray() too: positions identical, size fold differs', () => {
+            const spray = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 400, rate: 15, x: 400, y: 200, spread: 1.2, shape: 'rect',
+                    lifeMin: 4, lifeMax: 4, ...opts });
+                pump(1, 1000); pump(60, 16);
+                const out = { hash: canvas.hash, scaleHash: canvas.scaleHash };
+                c.destroy();
+                return out;
+            };
+            const off = spray({});
+            const on = spray({ scaleTo: 0.3 });
+            assert.equal(on.hash, off.hash, 'scaleTo should not move spray positions (pure overlay)');
+            assert.notEqual(on.scaleHash, off.scaleHash, 'spray should honor scaleTo (size fold changed)');
+        });
+
+        it('has no effect under reduced motion (static fan is inert)', () => {
+            const staticRun = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                    pump(1, 1000); pump(29, 16);
+                    const out = { hash: canvas.hash, scaleHash: canvas.scaleHash };
+                    c.destroy();
+                    return out;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            const off = staticRun({});
+            const on = staticRun({ scaleTo: 0.1 });
+            assert.equal(on.hash, off.hash, 'scaleTo should be inert on the static reduced-motion positions');
+            assert.equal(on.scaleHash, off.scaleHash, 'scaleTo should not touch the static fan size fold');
         });
     });
 

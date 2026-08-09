@@ -116,6 +116,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `stagger` | number | — | Staggered-emission window in ms: spread the `count` births evenly over it (piece `i` wakes at `stagger·i/count`), so the burst cascades in instead of appearing at once. **Burst-only** (a spray already emits over time; it ignores `stagger`). Opt-in; off / `≤ 0` / non-finite = synchronous spawn, byte-identical. See [Staggered emission](#staggered-emission). |
 | `align` | number | `0` | Velocity-align blend `0..1`: rotate each piece **broadside** to its live velocity (its flat face meets the airflow, like a leaf), `0` = pure random spin, `1` = fully locked. Coerced to `[0, 1]`. A pure orientation overlay — the seeded position stream is byte-identical off or on. Honored by `burst()` **and** `spray()`. See [Velocity-aligned orientation](#velocity-aligned-orientation). |
 | `spinRate` | number | `1` | Tumble-speed multiplier on the seeded random spin: `1` = as seeded, `0` = rigid at the random birth tilt, `0.3` = slow drift, `2` = double, negative = reverse. Coerced with `num` (non-finite → `1`; `0` and negatives are valid). A pure render-orientation overlay — the seeded position stream is byte-identical off or on, **even with `turbulence` armed**. Honored by `burst()` **and** `spray()`. See [Tumble speed](#tumble-speed). |
+| `scaleTo` | number | `1` | Size-over-life target: lerp each piece's **rendered** size from `1.0` at birth to `scaleTo` at death (isotropic, both axes). `0.2` shrinks out, `2` grows/blooms, `0` vanishes at death; `1` = constant size. Coerced with `nonneg`: a **negative** clamps to `0` (a size has no direction — not a mirror flip, not a fallback to `1`); non-finite → `1`. A pure render-scale overlay folded into flutter's `ctx.scale` — `pool.w`/`pool.h` untouched, so the seeded position stream is byte-identical off or on; the trail keeps its birth width. Honored by `burst()` **and** `spray()`. See [Size over life](#size-over-life). |
 | `angle` | number | `-Math.PI / 2` | Center angle of emission cone in radians. -π/2 = upward. |
 | `onComplete` | Function | — | Called when all burst particles have died |
 
@@ -360,6 +361,21 @@ c.burst({ spinRate: 0.3, gravity: 200 });
 
 - **`1`** (default) is the seeded rate as-is; **`0`** is rigid — frozen at each piece's *random birth tilt* (varied, not axis-aligned); **`0.3`** is a lazy drift; **`2`** doubles the tumble; a **negative** value reverses it. Coerced with `num` (`0` and negatives are valid; non-finite → `1`), never `clamp01` — a rate multiplier is not a `0..1` blend.
 - **A pure orientation overlay, turbulence-safe.** `spinRate` is a render-time *angle scale*: it scales only the accumulated tumble about the birth orientation and **never touches the physics spin** the turbulence phase reads. So it is fully decoupled from `turbulence`, and the seeded position stream (and every committed fingerprint) is byte-identical whether off, on, or on-with-turbulence — only the rotation earns its own deterministic fingerprint. Composes with `align` (the tumble scale runs first, then `align` blends toward the velocity heading). Draws **no rng**. Honored by both `burst()` and `spray()`; inert under reduced motion.
+
+### Size over life
+
+Every render axis had been opened *except* size: for sixteen releases a piece's size was fixed at birth (`pool.w`/`pool.h` drawn once and never changed), so a piece that **shrinks away to nothing** or an ember that **blooms as it dies** was unreachable. **`scaleTo`** (added in v1.17.0) lerps each piece's *rendered* size from `1.0` at birth to `scaleTo` at death, by the **same** age fraction the `lifeColors` ramp uses.
+
+```js
+// Sparks that shrink out as they cool — scaleTo composes with the color ramp on one life fraction.
+c.burst({ scaleTo: 0.1, gravity: 300, lifeColors: ['#fff', '#f80', '#a00'] });
+// A bloom: pieces grow as they fade.
+c.burst({ scaleTo: 2.5, gravity: 200, shape: 'circle' });
+```
+
+- **`1`** (default) is constant size; **`0.2`** shrinks out, **`2`** grows/blooms, **`0`** vanishes at death. `s = 1 + (scaleTo − 1) × (1 − lifeT)`, reusing the life fraction already computed for the opacity fade and the color ramp. Coerced with `nonneg`: a **negative** clamps to `0` (a size has no direction — *not* a mirror flip, *not* a fallback to `1`; `scaleTo: -2` renders like `scaleTo: 0`), non-finite → `1`. `scaleTo: 0` is a legitimate value (the size analog of `spinRate: 0`).
+- **Isotropic, one `ctx.scale`.** The factor is applied to **both** axes and **folded into flutter's single existing `ctx.scale` call** — the X-wobble and the size ramp multiply on one transform, never a second call. `pool.w`/`pool.h` are **never touched**.
+- **A pure render overlay.** Scale never enters `ctx.translate`, so the seeded position stream (and every committed fingerprint) is byte-identical whether off or on — a scaled burst reproduces the same-seed plain burst's position hash exactly (invisible to the rotation and color fingerprints too); only the size fold earns its own deterministic fingerprint. The **trail ribbon keeps its birth width** (the ramp scales the body, not the streak). Draws **no rng**. Honored by both `burst()` and `spray()`; inert under reduced motion.
 
 ### Canvas Sizing
 
@@ -665,6 +681,13 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.17.0
+
+**Size over life.** The first feature on the *render-scale* axis — for sixteen releases a piece's size was fixed at birth; now it can **shrink out** or **bloom** as it ages.
+
+- `scaleTo: number` on `burst()` **and** `spray()`. `1` (default) = constant size, `0.2` = shrink out, `2` = grow/bloom, `0` = vanish at death. Lerped by the same life fraction the `lifeColors` ramp uses. Coerced with `nonneg` (a negative clamps to `0`, not a mirror flip and not a fallback to `1`; non-finite → `1`).
+- A **pure render overlay**: isotropic, folded into flutter's single existing `ctx.scale` call (`pool.w`/`pool.h` untouched), so the seeded position stream (and every committed fingerprint) is byte-identical whether off or on; the trail keeps its birth width; only the size fold earns its own deterministic fingerprint. Draws no rng; inert under reduced motion. See [Size over life](#size-over-life).
 
 ### v1.16.0
 

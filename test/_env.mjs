@@ -90,6 +90,8 @@ export function pointerListenerCount() { return (_win._listeners.pointermove || 
  * private pool arrays. Rotation is deliberately NOT in `hash` (so `flutter`/`align`
  * and any orientation-only feature are provable pure overlays); it feeds the separate
  * `rotateHash` probe instead, kept out of the position mix like strokeHash/colorHash.
+ * Scale is likewise kept out of `hash` and folded into its own `scaleHash`/`lastScale`
+ * pair (v1.17.0), so `scaleTo` (size-over-life) is a provable pure render overlay too.
  */
 export function makeCanvas({ record = false, assertFinite = false } = {}) {
     const c = { style: {}, parentElement: null, width: 0, height: 0, id: '' };
@@ -150,6 +152,17 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     // not merely "some different number".
     let rotateHash = 0 >>> 0;
     let lastRotate = 0;
+    // Size-over-life PROBE (v1.17.0). `scaleTo` changes ONLY the arguments to ctx.scale; it never moves
+    // ctx.translate, so it adds NOTHING to the position `hash` -- that is what makes it a provable pure
+    // RENDER overlay (a scaled burst reproduces the same-seed plain burst's position hash EXACTLY). To
+    // still prove the size ramp is deterministic and non-vacuous, `scaleHash` folds the QUANTIZED scale
+    // factors at each scale() call in record mode (kept OUT of `hash`, exactly like rotateHash), and
+    // `lastScale` keeps the most recent ISOTROPIC Y factor -- a hash-neutral witness (the lastRotate
+    // analog) so a test can assert the size ramp TRACKS the life fraction (birth ~1, shrinking toward
+    // scaleTo). Identity sentinel 1 (not 0): scale is multiplicative, and updateSize() folds one (1,1)
+    // at construction before any burst -- deterministic, baked into every committed SCALE_HASH.
+    let scaleHash = 0 >>> 0;
+    let lastScale = 1;
     // Color-over-life PROBE (v1.12.0). A `lifeColors` burst moves ONLY ctx.fillStyle; it draws no
     // translate, so it adds NOTHING to the position `hash` (colorHash is kept entirely out of the mix,
     // like strokeHash/sumX/maxY -- every committed position fingerprint is byte-identical whether or
@@ -225,7 +238,16 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
         // Commit the current subpath into the trail-only strokeHash and count it. Shapes fill()
         // and so never reach here; only the trail ribbon strokes.
         stroke() { if (record) { strokeHash = (Math.imul(strokeHash ^ pathHash, 16777619)) >>> 0; strokes++; } },
-        save() {}, restore() {}, scale() {}, setTransform() {},
+        save() {}, restore() {}, setTransform() {},
+        scale(x, y) {
+            if (record) {
+                lastScale = y;   // isotropic size factor; flutter touches X only, so Y is clean
+                // Quantize each factor (round to 1/4096) before folding, mirroring the rotate() precedent
+                // so the fingerprint is stable across runs. Kept out of `hash`, like rotateHash.
+                scaleHash = (Math.imul(scaleHash ^ (Math.round(x * 4096) | 0), 16777619)) >>> 0;
+                scaleHash = (Math.imul(scaleHash ^ (Math.round(y * 4096) | 0), 16777619)) >>> 0;
+            }
+        },
         drawImage() {},
         translate(x, y) { if (record) translates++; if (mix) mix(x, y); },
         rotate(a) {
@@ -251,6 +273,8 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     Object.defineProperty(c, 'translates', { get() { return translates; } });
     Object.defineProperty(c, 'rotateHash', { get() { return rotateHash >>> 0; } });
     Object.defineProperty(c, 'lastRotate', { get() { return lastRotate; } });
+    Object.defineProperty(c, 'scaleHash', { get() { return scaleHash >>> 0; } });
+    Object.defineProperty(c, 'lastScale', { get() { return lastScale; } });
     Object.defineProperty(c, 'colorHash', { get() { return colorHash >>> 0; } });
     return c;
 }

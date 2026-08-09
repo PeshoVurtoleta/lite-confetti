@@ -1,10 +1,25 @@
 /**
- * @zakkster/lite-confetti v1.16.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.17.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.17.0 adds: `scaleTo` -- size-over-life, the FIRST feature on the render-SCALE axis (until now the
+ * only `ctx.scale` was `flutter`'s X-wobble). For sixteen releases a piece's SIZE was fixed at birth
+ * (`pool.w`/`pool.h` drawn once in spawn() and never changed), so a piece that shrinks away to nothing
+ * or an ember that blooms as it dies was unreachable. An opt-in `scaleTo` scalar lerps each piece's
+ * RENDERED size from `1.0` at BIRTH to `scaleTo` at DEATH by the SAME age fraction the `lifeColors` ramp
+ * already indexes: `s = 1 + (scaleTo - 1) * (1 - lifeT)`. `0.2` shrinks out, `2` grows, `0` vanishes at
+ * death; default `1` = today's constant size. ISOTROPIC (one factor on BOTH axes), it FOLDS into the
+ * SINGLE existing `ctx.scale(sx, sy)` call so flutter's X-wobble and the size ramp MULTIPLY on one
+ * transform -- `pool.w`/`pool.h` are NEVER touched. A pure RENDER overlay: scale never touches
+ * ctx.translate, draws no rng, so the seeded POSITION stream is byte-identical whether off or on -- a
+ * scaled burst reproduces the same-seed plain burst's position hash EXACTLY (invisible to rotateHash and
+ * colorHash too). Coerced with `nonneg` -- a NEGATIVE clamps to `0` (a size has no direction), NOT a
+ * mirror flip and NOT a fallback to `1`; non-finite/non-numeric => 1 (off). The trail ribbon keeps its
+ * BIRTH width (the ring buffer stores positions only; the ramp scales the body, not the streak). Both
+ * burst AND spray honor it; inert under reduced motion; zero rng, zero allocation (stack locals).
  * v1.16.0 adds: `spinRate` -- tunable tumble speed, the SECOND feature on the render-ORIENTATION axis
  * (part 2 of what `align` opened). For fifteen releases a piece's tumble RATE was a fixed seeded random
  * (`spinV`, ~5 rad/s), so slow drifting petals, frozen rigid chips, and reverse tumble were unreachable.
@@ -607,6 +622,7 @@ export function createConfetti(canvas, {
         align: new Float32Array(maxParticles),   // velocity-align blend 0..1 (0 = pure random spin)
         spin0: new Float32Array(maxParticles),   // birth orientation (the pivot spinRate scales about)
         spinRate: new Float32Array(maxParticles), // render-time tumble-speed multiplier; 1 = as seeded
+        scaleTo: new Float32Array(maxParticles), // render-time size-over-life target; 1 = constant size
         turb:  new Float32Array(maxParticles),   // turbulence accel magnitude (px/sec^2); 0 = none
         gust:  new Float32Array(maxParticles),   // gust accel magnitude (px/sec^2); 0 = none
         vortX: new Float32Array(maxParticles),   // vortex/attractor center X (CSS px)
@@ -747,6 +763,10 @@ export function createConfetti(canvas, {
         pool.sway[i] = config.sway;
         pool.align[i] = config.align;   // velocity-align blend (v1.15.0); 0 = pure random spin
         pool.spinRate[i] = config.spinRate;   // render-time tumble-speed multiplier (v1.16.0); 1 = as seeded
+        // Size-over-life target (v1.17.0). ALWAYS written, never zero-init: a Float32Array default of 0
+        // would mean "shrink to nothing", so a recycled slot that skipped the write would render a
+        // vanishing piece. Fail-closed pool-reuse reset, like `landed = 0` / `trailN = 0`.
+        pool.scaleTo[i] = config.scaleTo;
         pool.turb[i] = config.turbulence;
         pool.gust[i] = config.gust;
         pool.vortX[i] = config.attractX;
@@ -1025,11 +1045,25 @@ export function createConfetti(canvas, {
                 rot += d * pool.align[i];
             }
 
+            // Size-over-life (v1.17.0). Off (scaleTo == 1) leaves ctx.scale(wobbleScale, 1) byte-identical.
+            // When armed, lerp an ISOTROPIC factor from 1 at birth to scaleTo at death by the SAME age
+            // fraction (1 - lifeT) the lifeColors ramp indexes with, and fold it into the SINGLE existing
+            // scale call so flutter's X-wobble and the size ramp multiply on one transform. pool.w/h are
+            // NEVER touched, so the seeded POSITION stream is byte-identical whether off or on. lifeT is in
+            // (0,1] (life<=0 pieces already `continue`), so age is in [0,1) and s stays finite and >=0.
+            let sx = wobbleScale;
+            let sy = 1;
+            if (pool.scaleTo[i] !== 1) {
+                const s = 1 + (pool.scaleTo[i] - 1) * (1 - lifeT);
+                sx = wobbleScale * s;
+                sy = s;
+            }
+
             // Render
             ctx.save();
             ctx.translate(pool.x[i], pool.y[i]);
             ctx.rotate(rot);
-            ctx.scale(wobbleScale, 1);
+            ctx.scale(sx, sy);
             ctx.globalAlpha = alpha;
 
             const id = pool.shape[i];
@@ -1085,7 +1119,9 @@ export function createConfetti(canvas, {
             // `align` (v1.15.0) is INERT here: the static fan has no velocity to orient to, so pieces
             // keep their random rotation (emission timing / orientation are motion-time concerns,
             // consistent with every prior motion feature under reduced motion). `spinRate` (v1.16.0) is
-            // INERT for the same reason: the static fan has no accumulated tumble to scale.
+            // INERT for the same reason: the static fan has no accumulated tumble to scale. `scaleTo`
+            // (v1.17.0) is INERT too: the static path does no life integration and never calls ctx.scale,
+            // so a piece is drawn once at its birth size.
             const rotation = rng.next() * TAU;
             // Honour a `shapes` mix in the reduced-motion render too. Single-shape (null)
             // takes no extra rng draw, so the non-mixed static render is unchanged.
@@ -1152,6 +1188,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.sway=0]      Horizontal drift 0..1 (0 straight fall)
          * @param {number} [options.align=0]     Velocity-align blend 0..1: rotate each piece BROADSIDE to its live velocity (its flat face meets the airflow, like a leaf), 0 = pure random spin, 1 = fully locked. Coerced to [0,1] (non-finite/negative => 0). A pure orientation overlay (rotation only) -- the seeded POSITION stream is byte-identical whether off or on. Zero-rng; inert under reduced motion
          * @param {number} [options.spinRate=1]  Tumble-speed multiplier on the seeded random spin: 0 = rigid at the random birth tilt, 0.3 = slow drift, 2 = double, negative = reverse. A pure RENDER scale, so the seeded POSITION stream is byte-identical off or on, even with `turbulence` armed. Zero-rng; non-finite => 1; inert under reduced motion
+         * @param {number} [options.scaleTo=1]   Size-over-life target: lerp each piece's RENDERED size from 1.0 at birth to `scaleTo` at death (isotropic, both axes). `0.2` shrinks out, `2` grows, `0` vanishes at death; `1` = constant size. A pure RENDER overlay folded into the flutter scale call -- pool.w/h untouched, so the seeded POSITION stream is byte-identical off or on. Coerced with nonneg: a NEGATIVE clamps to 0 (a size has no direction), NOT a mirror flip and NOT a fallback to 1; non-finite => 1. The trail ribbon keeps its birth width. Zero-rng; inert under reduced motion
          * @param {number} [options.turbulence=0] Per-particle rotating accel px/sec^2 (organic wander). Opt-in, zero-rng, fingerprint-safe
          * @param {number} [options.gust=0]      Global oscillating horizontal accel px/sec^2 layered on wind (~3s swells). Opt-in, zero-rng
          * @param {number} [options.attract=0]   Vortex radial spring strength (1/sec^2, scaled by distance): + pulls toward the center, - repels. Opt-in, zero-rng, fingerprint-safe
@@ -1194,6 +1231,7 @@ export function createConfetti(canvas, {
                   sway = 0,
                   align = 0,
                   spinRate = 1,
+                  scaleTo = 1,
                   turbulence = 0,
                   gust = 0,
                   attract = 0,
@@ -1295,7 +1333,7 @@ export function createConfetti(canvas, {
                 : (trail === undefined ? trailCap : Math.min(trailCap, Math.floor(nonneg(trail, trailCap))));
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), turbulence, gust, trailLen: trailDraw,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), scaleTo: nonneg(scaleTo, 1), turbulence, gust, trailLen: trailDraw,
                 attract, swirl, attractX: vortX, attractY: vortY, settle, lifeRamp,
             };
 
@@ -1355,6 +1393,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.sway=0]         Horizontal drift 0..1
          * @param {number} [options.align=0]        Velocity-align blend 0..1: rotate each piece broadside to its live velocity (0 = random spin, 1 = locked). A pure orientation overlay -- the seeded position stream is byte-identical off or on. Zero-rng
          * @param {number} [options.spinRate=1]     Tumble-speed multiplier on the seeded random spin (0 = rigid at the random birth tilt, 0.3 = slow drift, 2 = double, negative = reverse). A pure render scale -- the seeded position stream is byte-identical off or on, even with `turbulence` armed. Zero-rng; non-finite => 1
+         * @param {number} [options.scaleTo=1]      Size-over-life target: lerp each piece's rendered size from 1.0 at birth to `scaleTo` at death (isotropic). `0.2` shrinks out, `2` grows, `0` vanishes; `1` = constant size. A pure render overlay -- pool.w/h untouched, so the seeded position stream is byte-identical off or on. nonneg: a NEGATIVE clamps to 0 (not a flip, not a fallback to 1); non-finite => 1. The trail keeps its birth width. Zero-rng
          * @param {number} [options.turbulence=0]   Per-particle rotating accel px/sec^2 (organic wander). Opt-in, zero-rng
          * @param {number} [options.gust=0]         Global oscillating horizontal accel px/sec^2 layered on wind. Opt-in, zero-rng
          * @param {number} [options.attract=0]      Vortex radial spring strength (1/sec^2): + pulls toward the center, - repels. Opt-in, zero-rng
@@ -1394,6 +1433,7 @@ export function createConfetti(canvas, {
                   sway = 0,
                   align = 0,
                   spinRate = 1,
+                  scaleTo = 1,
                   turbulence = 0,
                   gust = 0,
                   attract = 0,
@@ -1484,7 +1524,7 @@ export function createConfetti(canvas, {
                 : (trail === undefined ? trailCap : Math.min(trailCap, Math.floor(nonneg(trail, trailCap))));
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), turbulence, gust, trailLen: trailDraw,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), scaleTo: nonneg(scaleTo, 1), turbulence, gust, trailLen: trailDraw,
                 attract, swirl, attractX: vortX, attractY: vortY, settle, lifeRamp,
             };
 

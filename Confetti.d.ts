@@ -117,6 +117,17 @@ export interface BurstOptions {
      * Honored by both `burst()` and `spray()`. Draws no RNG; no effect under reduced motion. (v1.16.0)
      */
     spinRate?: number;
+    /**
+     * Size-over-life target. `1` (default) is a constant size; the render lerps each piece's DRAWN size
+     * from `1.0` at birth to `scaleTo` at death by its life fraction. `0.2` shrinks out, `2` grows,
+     * `0` vanishes at death. ISOTROPIC (one factor on both axes), folded into the same `ctx.scale` as
+     * `flutter`'s X-wobble, so `pool.w`/`pool.h` are never touched and the seeded POSITION fingerprint
+     * is byte-identical whether off or on -- a pure RENDER overlay. Coerced with `nonneg`: a NEGATIVE
+     * clamps to `0` (a size has no direction -- not a mirror flip, not a fallback to `1`);
+     * non-finite/non-numeric -> `1`. The trail ribbon keeps its birth width. Honored by both `burst()`
+     * and `spray()`. Draws no RNG; no effect under reduced motion. (v1.17.0)
+     */
+    scaleTo?: number;
     /** Per-particle turbulence: a rotating acceleration (px/sec^2) that makes each particle
      *  wander organically. Default 0 (none). Opt-in, fingerprint-safe, draws no RNG; no effect
      *  under reduced motion. */

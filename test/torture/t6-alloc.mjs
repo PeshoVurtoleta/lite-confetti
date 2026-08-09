@@ -233,6 +233,24 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- the spinRate render angle scale is allocating');
     }
 
+    // (11) A size-ramped live pool (v1.17.0): with scaleTo:0.25 every rendered piece runs the NEW
+    // size-over-life fold (1 + (scaleTo - 1) * (1 - lifeT), then multiplied into the flutter X-wobble)
+    // INSIDE the measured window, AND flutter:1 arms the wobble so BOTH factors multiply on the single
+    // ctx.scale call for ~MAXP pieces/frame. Immortal long-life pieces hold the pool full so any
+    // per-frame allocation on the scaleTo path would show as retained bytes. Pure stack arithmetic
+    // (a Float32 read + compare + two multiplies), so ~0 B/frame.
+    const sc = createConfetti(makeCanvas({ record: true }), { seed: 1717, maxParticles: MAXP });
+    sc.burst({ count: MAXP, x: 400, y: 300, speed: 300, spread: 2.5, gravity: 700, wind: 400,
+        flutter: 1, scaleTo: 0.25, lifeMin: 1e6, lifeMax: 1e6 });
+    pump(1, 16);
+    check(sc.count === MAXP, () => `T6: scaleTo pool has ${sc.count} alive, expected ${MAXP}`);
+    const bpfScale = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    sc.destroy();
+    if (bpfScale > RETAIN_FLOOR_BPF) {
+        die('T6: size-ramped update() retains ' + bpfScale.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the scaleTo size fold is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -249,6 +267,7 @@ export async function run() {
         + bpfEmit.toFixed(2) + ' B/frame from a continuous ring-emitter spray, '
         + bpfStagger.toFixed(2) + ' B/frame from a staggered burst mid-emission, '
         + bpfAlign.toFixed(2) + ' B/frame from a velocity-aligned live pool, '
-        + bpfSpin.toFixed(2) + ' B/frame from a tumble-scaled (spinRate + turbulence) live pool); '
+        + bpfSpin.toFixed(2) + ' B/frame from a tumble-scaled (spinRate + turbulence) live pool, '
+        + bpfScale.toFixed(2) + ' B/frame from a size-ramped (scaleTo + flutter) live pool); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }
