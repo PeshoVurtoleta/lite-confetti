@@ -627,6 +627,11 @@
                                                                                        id="spinRateVal">default</span></div>
                 <input type="range" id="spinRate" min="0" max="3" value="1" step="0.1">
             </div>
+            <div class="control">
+                <div class="control-header"><span class="control-name">flutterRate (wobble)</span><span class="control-val"
+                                                                                       id="flutterRateVal">default</span></div>
+                <input type="range" id="flutterRate" min="0" max="3" value="1" step="0.1">
+            </div>
         </div>
 
         <div class="section">
@@ -641,6 +646,9 @@
             <div class="btn-row">
                 <button class="btn" id="shrinkBtn">🔻 Shrink out</button>
                 <button class="btn" id="bloomBtn">🌸 Bloom</button>
+            </div>
+            <div class="btn-row">
+                <button class="btn" id="frozenBtn">❄️ Frozen wobble</button>
             </div>
             <div class="btn-row">
                 <button class="btn" id="followBtn" aria-pressed="false">🧲 Follow</button>
@@ -694,12 +702,13 @@
     const $mixBtn   = document.getElementById('mixBtn');
     const $shrinkBtn = document.getElementById('shrinkBtn');
     const $bloomBtn  = document.getElementById('bloomBtn');
+    const $frozenBtn = document.getElementById('frozenBtn');
     const $followBtn = document.getElementById('followBtn');
     const $clearBtn = document.getElementById('clearBtn');
     const $codeBtn  = document.getElementById('codeBtn');
     const $seedBtn  = document.getElementById('seedBtn');
 
-    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'box', 'spark', 'emit', 'emitSize', 'stagger', 'align', 'spinRate'];
+    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'box', 'spark', 'emit', 'emitSize', 'stagger', 'align', 'spinRate', 'flutterRate'];
     const EMIT_SHAPES = ['off', 'line', 'ring', 'box']; // emit slider 0..3 -> shape name (v1.13.0)
     // v1.12.0 color-over-life: a fixed 3-stop ember ramp (near-white -> gold -> deep orange) the demo
     // injects when the `spark` toggle is on, so pieces cool as they age. Frozen + shared: the engine
@@ -843,6 +852,11 @@
         // Read at action rate, never per frame. A render-only overlay; positions unchanged even with turbulence.
         const sr = +$in.spinRate.value;
         if (sr !== 1) cfg.spinRate = sr;
+        // v1.18.0 flutterRate: wobble-speed multiplier on the seeded flutter (0 = frozen, 2 = fast shimmer,
+        // default 1). Read at action rate, never per frame. Inert when flutter is 0 (a zero-depth wobble has
+        // no speed); a render-only overlay -- positions unchanged even with turbulence.
+        const flr = +$in.flutterRate.value;
+        if (flr !== 1) cfg.flutterRate = flr;
         return cfg;
     }
 
@@ -870,6 +884,7 @@
                 : id === 'stagger' ? (+raw === 0 ? 'off' : raw + 'ms')   // 0 = synchronous spawn
                 : id === 'align' ? (+raw === 0 ? 'off' : (+raw).toFixed(2))  // 0 = random spin
                 : id === 'spinRate' ? (+raw === 1 ? 'default' : (+raw === 0 ? 'rigid' : (+raw).toFixed(1)))  // 1 = as seeded, 0 = rigid
+                : id === 'flutterRate' ? (+raw === 1 ? 'default' : (+raw === 0 ? 'frozen' : (+raw).toFixed(1)))  // 1 = as seeded, 0 = frozen wobble
                 : (id === 'turbulence' || id === 'gust') ? (+raw === 0 ? 'off' : raw)  // 0 = no force
                 : id === 'trail' ? (+raw === 0 ? 'off' : raw)        // 0 = no ribbon
                 : id === 'settle' ? (+raw === 0 ? 'off' : raw)       // 0 = no settle (needs a floor)
@@ -984,6 +999,12 @@
     });
     $bloomBtn.addEventListener('click', () => {
         c.burst({ scaleTo: 2.5, gravity: 200, shape: 'circle', lifeColors: EMBER_RAMP });
+    });
+
+    // Wobble speed (v1.18.0). Frozen wobble: flutterRate 0 locks each piece at its OWN random birth tilt
+    // (a varied constant wobble per piece, not axis-aligned) -- flutter must be on for a rate to matter.
+    $frozenBtn.addEventListener('click', () => {
+        c.burst({ flutterRate: 0, flutter: 1, gravity: 200, count: 120 });
     });
 
     // Follow-spray: a continuous stream that chases the pointer (v1.2.0 followPointer).

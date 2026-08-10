@@ -142,6 +142,16 @@ const SPINRATE_HASH = 1105261140; // burst({ spinRate: 2 }) rotateHash on the ca
 // probed on the canonical seed-12345 rig with scaleTo:2; distinct from the OFF scaleHash (and from 0.5)
 // and its own cross-process replay gate.
 const SCALE_HASH = 148099462; // burst({ scaleTo: 2 }) scaleHash on the canonical rig
+
+// Committed SCALE fingerprint for tumble-wobble speed (v1.18.0, decision 0019). `flutterRate` is the
+// SPEED knob to flutter's DEPTH: the draw block scales only the ACCUMULATED wobble phase (tilt - tilt0)
+// about a stored random birth pivot, never touching `pool.tilt[i]` -- the wobble phase the turbulence
+// curl read + sway consume. So the POSITION hash stays COMMITTED_HASH whether flutterRate is off, on, or
+// on-with-turbulence (the headline), and only the SCALE sequence (wobbleScale feeds ctx.scale's X arg)
+// moves. It reuses the v1.17.0 `scaleHash` probe -- no new harness channel. Value probed on the canonical
+// seed-12345 rig (flutter:1 so the wobble is armed) with flutterRate:2; distinct from the OFF scaleHash
+// (and from 0 / 0.5) and its own cross-process replay gate.
+const FLUTRATE_HASH = 4094960833; // burst({ flutter: 1, flutterRate: 2 }) scaleHash on the canonical rig
 const HALF_PI = Math.PI / 2;
 
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
@@ -2371,6 +2381,182 @@ describe('lite-confetti', () => {
             const on = staticRun({ scaleTo: 0.1 });
             assert.equal(on.hash, off.hash, 'scaleTo should be inert on the static reduced-motion positions');
             assert.equal(on.scaleHash, off.scaleHash, 'scaleTo should not touch the static fan size fold');
+        });
+    });
+
+    describe('flutterRate / tumble-wobble speed', () => {
+        // The canonical seed-12345 rig (shared with the align/spinRate/scaleTo suites). `run` reports the
+        // position `hash` (folds only translate) plus the render probes kept OUT of it: `scaleHash` (the
+        // wobbleScale that flutterRate scales feeds ctx.scale's X arg -- reused from v1.17.0, no new
+        // channel), `rotateHash`, and `colorHash`. flutterRate is a render-time PHASE scale about a birth
+        // pivot; it never touches pool.tilt or translate, so the headline is that the POSITION hash is
+        // byte-identical off or on -- a pure render overlay, DECOUPLED from turbulence and sway.
+        // NOTE: flutterRate is INERT when flutter is 0 (a zero-depth wobble has no speed), so the rig
+        // leaves the default flutter:1, arming the wobble so flutterRate is non-vacuous.
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = { hash: canvas.hash, scaleHash: canvas.scaleHash, rotateHash: canvas.rotateHash, colorHash: canvas.colorHash };
+            c.destroy();
+            return out;
+        };
+
+        it('is opt-in and fail-closed: off / 1 / non-finite / string / null keep positions AND the wobble byte-identical', () => {
+            // Headline: off, explicit 1, or any non-finite/non-numeric (num -> default 1) feeds the raw
+            // tilt verbatim, so BOTH the position hash AND the scale (wobble) sequence match a
+            // pre-flutterRate run. Pins num(flutterRate, 1).
+            const base = run({});
+            assert.equal(base.hash, COMMITTED_HASH, 'the flutterRate branch perturbed the default position stream');
+            for (const fr of [undefined, 1, NaN, Infinity, '2', null]) {
+                const r = run({ flutterRate: fr });
+                assert.equal(r.hash, COMMITTED_HASH, `flutterRate ${String(fr)} should not move positions`);
+                assert.equal(r.scaleHash, base.scaleHash, `flutterRate ${String(fr)} should leave the wobble untouched`);
+            }
+        });
+
+        it('is DECOUPLED from turbulence: positions byte-identical even with turbulence armed (the crux)', () => {
+            // The turbulence curl phase READS pool.tilt every frame; flutterRate scales only a render-local
+            // phase, never mutating pool.tilt, so a flutter-rated burst -- even with turbulence armed --
+            // reproduces the same-seed plain burst's position hash EXACTLY.
+            assert.equal(run({ flutterRate: 2 }).hash, COMMITTED_HASH, 'flutterRate:2 moved positions off-turbulence');
+            assert.equal(run({ flutterRate: 2, turbulence: 400 }).hash, run({ turbulence: 400 }).hash,
+                'flutterRate perturbed the turbulence position stream (not decoupled)');
+        });
+
+        it('every prior committed fingerprint still reproduces with flutterRate off (no sequence drift)', () => {
+            assert.equal(run({}).hash, COMMITTED_HASH, 'default fingerprint drifted');
+            assert.equal(run({ floor: FLOOR_Y }).hash, FLOOR_HASH, 'floor fingerprint drifted');
+            assert.equal(run({ ...BOX, bounce: 0 }).hash, BOX_HASH, 'box fingerprint drifted');
+            assert.equal(run({ align: 1 }).rotateHash, ALIGN_HASH, 'align rotation fingerprint drifted');
+            assert.equal(run({ spinRate: 2 }).rotateHash, SPINRATE_HASH, 'spinRate rotation fingerprint drifted');
+            assert.equal(run({ scaleTo: 2 }).scaleHash, SCALE_HASH, 'scaleTo size fingerprint drifted');
+            assert.equal(run({ lifeColors: EMBER }).colorHash, COLOR_HASH, 'color fingerprint drifted');
+            assert.equal(run({ trail: undefined, flutterRate: 0 }).hash, COMMITTED_HASH, 'flutterRate:0 moved positions');
+        });
+
+        it('is a PURE render overlay: 0 / 0.3 / 2 / -1 keep the position hash, change only the wobble', () => {
+            const off = run({});
+            for (const fr of [0, 0.3, 2, -1]) {
+                const on = run({ flutterRate: fr });
+                assert.equal(on.hash, off.hash, `flutterRate:${fr} perturbed the position stream (not a pure overlay)`);
+                assert.notEqual(on.scaleHash, off.scaleHash, `flutterRate:${fr} should change the wobble sequence`);
+            }
+        });
+
+        it('is orthogonal to rotation and color, and composes with the whole render stack + turbulence', () => {
+            const off = run({});
+            const on = run({ flutterRate: 2 });
+            assert.equal(on.rotateHash, off.rotateHash, 'flutterRate must not touch rotation');
+            assert.equal(on.colorHash, off.colorHash, 'flutterRate must not touch color');
+            // Even stacked with every other render overlay AND turbulence, the seeded POSITION stream is off-identical.
+            assert.equal(run({ flutterRate: 2, scaleTo: 0.5, spinRate: 2, align: 1, turbulence: 300 }).hash,
+                run({ turbulence: 300 }).hash, 'stacked render overlays perturbed the position stream');
+        });
+
+        it('matches the committed FLUTRATE fingerprint -- distinct + deterministic', () => {
+            const on = run({ flutter: 1, flutterRate: 2 });
+            if (FLUTRATE_HASH === null) console.log('[flutterRate] 2 scaleHash =', on.scaleHash);
+            else assert.equal(on.scaleHash, FLUTRATE_HASH, 'flutterRate wobble changed vs the committed baseline');
+            // Deterministic: same seed + fixed dt -> same wobble on replay (flutterRate draws no rng).
+            assert.equal(run({ flutter: 1, flutterRate: 2 }).scaleHash, on.scaleHash, 'flutterRate not deterministic');
+            // off / 0 / 0.5 / 2 are four mutually DISTINCT wobble sequences.
+            const off = run({}).scaleHash;
+            const zero = run({ flutterRate: 0 }).scaleHash;
+            const half = run({ flutterRate: 0.5 }).scaleHash;
+            assert.notEqual(zero, off, 'flutterRate:0 should differ from off');
+            assert.notEqual(half, off, 'flutterRate:0.5 should differ from off');
+            assert.notEqual(zero, half, 'flutterRate:0 should differ from 0.5');
+            assert.notEqual(on.scaleHash, zero, 'flutterRate:2 should differ from 0');
+            assert.notEqual(on.scaleHash, half, 'flutterRate:2 should differ from 0.5');
+        });
+
+        it('scales the RATE (lastScaleX): off varies, 0 freezes the wobble, 2 advances faster', () => {
+            // A single piece with flutter 1 (so wobbleScale carries the wobble on X) and scaleTo 1 (so Y is
+            // clean). Sample lastScaleX frame by frame: off VARIES (the seeded wobble); flutterRate:0 is
+            // CONSTANT (frozen at the birth-tilt wobble); flutterRate:2 varies AND advances faster (a larger
+            // total swing over the same frames). Proves it scales the RATE, not some other number.
+            const sampled = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 7 });
+                c.burst({ count: 1, x: 400, y: 300, spread: 0.001, speed: 10, gravity: 0, drag: 1,
+                    flutter: 1, scaleTo: 1, lifeMin: 5, lifeMax: 5, ...opts });
+                const xs = [];
+                for (let f = 0; f < 12; f++) { pump(1, 100); xs.push(canvas.lastScaleX); }
+                c.destroy();
+                return xs;
+            };
+            // Total variation (accumulated absolute frame-to-frame change): a faster wobble traverses more
+            // up-and-down over the same frames, so its total path is larger even when min/max saturate.
+            const variation = (xs) => { let s = 0; for (let k = 1; k < xs.length; k++) s += Math.abs(xs[k] - xs[k - 1]); return s; };
+            const off = sampled({});
+            assert.ok(variation(off) > 1e-6, 'off must vary (the seeded wobble)');
+            const frozen = sampled({ flutterRate: 0 });
+            for (let k = 1; k < frozen.length; k++) {
+                assert.ok(Math.abs(frozen[k] - frozen[0]) < 1e-6, 'flutterRate:0 must freeze the wobble (constant across frames)');
+            }
+            const fast = sampled({ flutterRate: 2 });
+            assert.ok(variation(fast) > variation(off) + 1e-6, 'flutterRate:2 must advance the wobble faster than off');
+        });
+
+        it('is inert when flutter is 0 (a zero-depth wobble has no speed): decision (b)', () => {
+            assert.equal(run({ flutter: 0, flutterRate: 5 }).scaleHash, run({ flutter: 0 }).scaleHash,
+                'flutterRate had an effect at flutter:0 (a zero-depth wobble should have no speed)');
+        });
+
+        it('keeps positions finite under flutterRate extremes + gravity + wind + turbulence + a bouncing box + trails', () => {
+            for (const fr of [0, 0.3, 3, -4, 1e6]) {
+                const canvas = makeCanvas({ record: true, assertFinite: true });
+                const c = createConfetti(canvas, { seed: 3, trail: 12 });
+                assert.doesNotThrow(() => {
+                    c.burst({
+                        x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 4, lifeMax: 4,
+                        wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350, bounce: 0.6,
+                        gravity: 4000, wind: 1200, turbulence: 500, flutter: 1, flutterRate: fr, trail: 12,
+                    });
+                    pump(80, 16);
+                }, `flutterRate:${fr} produced a non-finite draw`);
+                c.destroy();
+            }
+        });
+
+        it('is honored by spray() too: positions identical, wobble differs', () => {
+            const spray = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 400, rate: 15, x: 400, y: 200, spread: 1.2, shape: 'rect',
+                    flutter: 1, lifeMin: 4, lifeMax: 4, ...opts });
+                pump(1, 1000); pump(60, 16);
+                const out = { hash: canvas.hash, scaleHash: canvas.scaleHash };
+                c.destroy();
+                return out;
+            };
+            const off = spray({});
+            const on = spray({ flutterRate: 0.3 });
+            assert.equal(on.hash, off.hash, 'flutterRate should not move spray positions (pure overlay)');
+            assert.notEqual(on.scaleHash, off.scaleHash, 'spray should honor flutterRate (wobble changed)');
+        });
+
+        it('has no effect under reduced motion (static fan is inert)', () => {
+            const staticRun = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                    pump(1, 1000); pump(29, 16);
+                    const out = { hash: canvas.hash, scaleHash: canvas.scaleHash };
+                    c.destroy();
+                    return out;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            const off = staticRun({});
+            const on = staticRun({ flutterRate: 0.1 });
+            assert.equal(on.hash, off.hash, 'flutterRate should be inert on the static reduced-motion positions');
+            assert.equal(on.scaleHash, off.scaleHash, 'flutterRate should not touch the static fan wobble');
         });
     });
 

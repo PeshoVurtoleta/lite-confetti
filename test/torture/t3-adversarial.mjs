@@ -182,6 +182,37 @@ export function run() {
         c.destroy();
     }
 
+    // A9 -- pool-recycle retention for flutterRate (v1.18.0). flutterRate is ALWAYS written at spawn (never
+    // zero-init), so a recycled slot cannot inherit a prior burst's rate. A single-slot pool
+    // (maxParticles:1) FORCES slot 0 reuse: fire 5 "frozen wobble" (flutterRate:0) pieces, expiring each so
+    // the pool drains to 0 every cycle, then a PLAIN burst (default flutterRate 1) into the same recycled
+    // slot. With flutterRate reset to 1 the render feeds the RAW advancing tilt (the guard is false), so the
+    // recorded X wobble factor VARIES again frame to frame; a leaked flutterRate:0 would instead freeze it.
+    // lastScaleX (flutter 1, so the X factor is the pure wobble) is the witness, and the plain burst must
+    // reproduce the canonical single-slot position stream.
+    {
+        const canvas = makeCanvas({ record: true });
+        const c = createConfetti(canvas, { seed: 7, maxParticles: 1 });
+        const err = capture(() => {
+            for (let cycle = 0; cycle < 5; cycle++) {
+                c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 1,
+                    flutterRate: 0, lifeMin: 0.3, lifeMax: 0.3 });
+                for (let f = 0; f < 20; f++) pump(1, 50);
+                check(c.count === 0, () => `T3 A9: cycle ${cycle} single-slot pool did not drain the flutterRate:0 piece (count ${c.count})`);
+            }
+            // Recycle slot 0 with a default-rate piece; its X wobble factor must VARY across frames.
+            c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 1,
+                lifeMin: 5, lifeMax: 5 });
+            let lo = Infinity, hi = -Infinity;
+            for (let f = 0; f < 8; f++) { pump(1, 100); const v = canvas.lastScaleX; if (v < lo) lo = v; if (v > hi) hi = v; }
+            check(c.count === 1, () => `T3 A9: recycled plain burst did not spawn (count ${c.count})`);
+            check(hi - lo > 1e-6, () =>
+                `T3 A9: a recycled slot leaked a stale flutterRate:0 -- the X wobble factor stayed frozen (swing ${hi - lo})`);
+        });
+        check(err === null, () => `T3 A9: threw ${err && err.message}`);
+        c.destroy();
+    }
+
     check(pointerListenerCount() === baseListeners,
         () => `T3: tier leaked ${pointerListenerCount() - baseListeners} pointer listener(s) overall`);
 }

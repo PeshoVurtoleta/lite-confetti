@@ -14,7 +14,8 @@ point force, a full bounding box (floor, walls, ceiling) with bounce, settle-and
 zero-GC motion trails, color-over-life ramps, spawn emitter shapes (line / ring / box),
 staggered emission (a burst cascades in over a ms window), velocity-aligned orientation
 (pieces bank broadside to their flight, like leaves), tunable tumble speed (slow drift to
-reverse spin), and reduced-motion support.
+reverse spin), size-over-life ramps (shrink-out / bloom), tunable wobble speed (lazy flutter
+to fast shimmer), and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -117,6 +118,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `align` | number | `0` | Velocity-align blend `0..1`: rotate each piece **broadside** to its live velocity (its flat face meets the airflow, like a leaf), `0` = pure random spin, `1` = fully locked. Coerced to `[0, 1]`. A pure orientation overlay — the seeded position stream is byte-identical off or on. Honored by `burst()` **and** `spray()`. See [Velocity-aligned orientation](#velocity-aligned-orientation). |
 | `spinRate` | number | `1` | Tumble-speed multiplier on the seeded random spin: `1` = as seeded, `0` = rigid at the random birth tilt, `0.3` = slow drift, `2` = double, negative = reverse. Coerced with `num` (non-finite → `1`; `0` and negatives are valid). A pure render-orientation overlay — the seeded position stream is byte-identical off or on, **even with `turbulence` armed**. Honored by `burst()` **and** `spray()`. See [Tumble speed](#tumble-speed). |
 | `scaleTo` | number | `1` | Size-over-life target: lerp each piece's **rendered** size from `1.0` at birth to `scaleTo` at death (isotropic, both axes). `0.2` shrinks out, `2` grows/blooms, `0` vanishes at death; `1` = constant size. Coerced with `nonneg`: a **negative** clamps to `0` (a size has no direction — not a mirror flip, not a fallback to `1`); non-finite → `1`. A pure render-scale overlay folded into flutter's `ctx.scale` — `pool.w`/`pool.h` untouched, so the seeded position stream is byte-identical off or on; the trail keeps its birth width. Honored by `burst()` **and** `spray()`. See [Size over life](#size-over-life). |
+| `flutterRate` | number | `1` | Tumble-wobble **speed** multiplier on the seeded flutter (the speed knob to `flutter`'s depth): `1` = as seeded, `0` = frozen at the random birth tilt, `0.3` = slow lazy flutter, `2` = fast shimmer, negative = reversed. Coerced with `num` (`0` and negatives valid; non-finite → `1`). **Inert when `flutter` is 0** (a zero-depth wobble has no speed). A pure render-phase overlay about a birth pivot that never touches `pool.tilt` — the seeded position stream is byte-identical off, on, or on-with-turbulence. Honored by `burst()` **and** `spray()`. See [Wobble speed](#wobble-speed). |
 | `angle` | number | `-Math.PI / 2` | Center angle of emission cone in radians. -π/2 = upward. |
 | `onComplete` | Function | — | Called when all burst particles have died |
 
@@ -376,6 +378,21 @@ c.burst({ scaleTo: 2.5, gravity: 200, shape: 'circle' });
 - **`1`** (default) is constant size; **`0.2`** shrinks out, **`2`** grows/blooms, **`0`** vanishes at death. `s = 1 + (scaleTo − 1) × (1 − lifeT)`, reusing the life fraction already computed for the opacity fade and the color ramp. Coerced with `nonneg`: a **negative** clamps to `0` (a size has no direction — *not* a mirror flip, *not* a fallback to `1`; `scaleTo: -2` renders like `scaleTo: 0`), non-finite → `1`. `scaleTo: 0` is a legitimate value (the size analog of `spinRate: 0`).
 - **Isotropic, one `ctx.scale`.** The factor is applied to **both** axes and **folded into flutter's single existing `ctx.scale` call** — the X-wobble and the size ramp multiply on one transform, never a second call. `pool.w`/`pool.h` are **never touched**.
 - **A pure render overlay.** Scale never enters `ctx.translate`, so the seeded position stream (and every committed fingerprint) is byte-identical whether off or on — a scaled burst reproduces the same-seed plain burst's position hash exactly (invisible to the rotation and color fingerprints too); only the size fold earns its own deterministic fingerprint. The **trail ribbon keeps its birth width** (the ramp scales the body, not the streak). Draws **no rng**. Honored by both `burst()` and `spray()`; inert under reduced motion.
+
+### Wobble speed
+
+`spinRate` tuned how fast a piece *tumbles*; **`flutterRate`** (added in v1.18.0) tunes how fast it *wobbles* — the speed knob to what `flutter` opened as depth. `flutter` sets the depth of the 3D-ish X-scale wobble (`wobbleScale = 1 − flutter × 0.5 × (1 − |cos(tilt)|)`), driven by the per-particle tilt phase the integrator advances every frame; but its *speed* (`tiltV`) was a fixed seeded random, so a slow lazy flutter, a wobble frozen at a chosen tilt, or a fast shimmer were all unreachable. `flutterRate` is a plain multiplier on the accumulated wobble phase about a stored birth pivot.
+
+```js
+// A wobble frozen at each piece's own birth tilt — flutter must be on for a rate to matter.
+c.burst({ flutterRate: 0, flutter: 1, gravity: 200 });
+// A fast shimmer: the wobble advances twice as quickly.
+c.burst({ flutterRate: 2, flutter: 1 });
+```
+
+- **`1`** (default) is the seeded rate as-is; **`0`** freezes the wobble at each piece's *own random birth tilt* (a varied constant per piece, not collapsed to one value); **`0.3`** is a slow lazy flutter; **`2`** is a fast shimmer; a **negative** value reverses the phase. Coerced with `num` (`0` and negatives are valid; non-finite → `1`), never `clamp01` — a rate multiplier is not a `0..1` blend.
+- **Inert when `flutter` is 0.** `flutter` (depth) multiplies the whole `(1 − |cos|)` term; at `flutter: 0` the wobble is `1` regardless of the phase, so there is no speed to scale. So a `flutterRate` demo always sets `flutter: 1`.
+- **A pure render overlay, turbulence-safe.** `flutterRate` is a render-time *phase scale* about a birth pivot `tilt0`: it scales only the accumulated wobble phase and **never touches `pool.tilt`** — the phase the `turbulence` curl and `sway` read. So it is fully decoupled from both, and the seeded position stream (and every committed fingerprint) is byte-identical whether off, on, or on-with-turbulence — only the wobble earns its own deterministic fingerprint (reusing the `scaleHash` probe, no new channel). Draws **no rng**. Honored by both `burst()` and `spray()`; inert under reduced motion.
 
 ### Canvas Sizing
 
@@ -678,9 +695,109 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 
 ---
 
+## Zero-GC design notes
+
+<details>
+<summary>What the hot path allocates (nothing), and how it stays that way.</summary>
+
+One `createConfetti` allocates every buffer it will ever touch **once, at construction**: the particle pool is a flat **structure-of-arrays** (one typed array per attribute, indexed by a power-of-two-free ring `head`), plus three plain reference arrays for the values a `TypedArray` can't hold. The per-frame `update()` afterward does nothing but integer/float arithmetic on those pre-allocated arrays and `ctx` draw calls — it never allocates, so a running burst never feeds the collector.
+
+The pool is `maxParticles` wide. Per particle, the **always-on** columns cost a fixed number of bytes; each `Float32Array` column is 4 B/particle, each `Uint8Array` column 1 B:
+
+| Column | Type | B/particle | Running total |
+|---|---|---:|---:|
+| `x` | Float32 | 4 | 4 |
+| `y` | Float32 | 4 | 8 |
+| `vx` | Float32 | 4 | 12 |
+| `vy` | Float32 | 4 | 16 |
+| `spin` | Float32 | 4 | 20 |
+| `spinV` | Float32 | 4 | 24 |
+| `tilt` | Float32 | 4 | 28 |
+| `tiltV` | Float32 | 4 | 32 |
+| `w` | Float32 | 4 | 36 |
+| `h` | Float32 | 4 | 40 |
+| `life` | Float32 | 4 | 44 |
+| `maxL` | Float32 | 4 | 48 |
+| `grav` | Float32 | 4 | 52 |
+| `wind` | Float32 | 4 | 56 |
+| `floor` | Float32 | 4 | 60 |
+| `bounce` | Float32 | 4 | 64 |
+| `wallL` | Float32 | 4 | 68 |
+| `wallR` | Float32 | 4 | 72 |
+| `ceil` | Float32 | 4 | 76 |
+| `drag` | Float32 | 4 | 80 |
+| `flut` | Float32 | 4 | 84 |
+| `sway` | Float32 | 4 | 88 |
+| `align` | Float32 | 4 | 92 |
+| `spin0` | Float32 | 4 | 96 |
+| `spinRate` | Float32 | 4 | 100 |
+| `scaleTo` | Float32 | 4 | 104 |
+| `tilt0` | Float32 | 4 | 108 |
+| `flutterRate` | Float32 | 4 | 112 |
+| `turb` | Float32 | 4 | 116 |
+| `gust` | Float32 | 4 | 120 |
+| `vortX` | Float32 | 4 | 124 |
+| `vortY` | Float32 | 4 | 128 |
+| `attract` | Float32 | 4 | 132 |
+| `swirl` | Float32 | 4 | 136 |
+| `settle` | Float32 | 4 | 140 |
+| `delay` | Float32 | 4 | 144 |
+| `landed` | Uint8 | 1 | 145 |
+| `shape` | Uint8 | 1 | 146 |
+| **always-on total** | **36×F32 + 2×U8** | **146** | **146** |
+
+The render-orientation / render-scale family added over v1.15.0–v1.18.0 is six of those columns — `align` + `spin0` + `spinRate` + `scaleTo` + `tilt0` + `flutterRate` = 4 + 4 + 4 + 4 + 4 + 4 = **24 B/particle** — each a birth pivot or a render-time multiplier that never enters `ctx.translate`, so they cost bytes but move no fingerprint.
+
+Two more classes sit **outside** the always-on 146 B:
+
+| Buffer | Type | B/particle | When |
+|---|---|---:|---|
+| `trailX` | Float32 | `capacity`×4 | opt-in — **0** when `trail` is off |
+| `trailY` | Float32 | `capacity`×4 | opt-in — **0** when `trail` is off |
+| `trailN` | Uint8 | 1 | opt-in — **0** when `trail` is off |
+| `trailLen` | Uint8 | 1 | opt-in — **0** when `trail` is off |
+| `colors` | Array ref | 1 ref | per-particle palette pick (not a `TypedArray`) |
+| `emojis` | Array ref | 1 ref | per-particle emoji glyph (not a `TypedArray`) |
+| `colorRamp` | Array ref | 1 ref | per-particle baked `lifeColors` LUT, or null |
+
+The trail ring buffers are allocated **only** when the instance is built with a `trail` capacity (`maxParticles × capacity` floats each, plus two `Uint8` bookkeeping columns); a default instance pays **zero** extra bytes for them. The three reference arrays hold values a typed array can't (a CSS color string, an emoji, a baked ramp), so they're plain `Array`s of length `maxParticles` — one slot per particle, always re-assigned at spawn so a recycled slot can never inherit a prior burst's value.
+
+The gated quality numbers the torture harness commits, so a regression fails CI as loudly as a leak:
+
+- **Alloc gate.** `update()` over a **full `maxParticles` pool** — including a custom vector shape, an image sprite, the living-air forces, and a trailed pool — retains **~0 B/frame**, measured against a retained-bytes floor of **8.0 B/frame** (`RETAIN_FLOOR_BPF`). A per-frame-allocating control provably exceeds it.
+- **Determinism.** Every feature-off path preserves the committed default determinism fingerprint **`1569828004`** byte-for-byte (each opt-in feature — wind, floor, box, living air, trails, vortex, settle, life colors, emit, stagger, align, spinRate, scaleTo, flutterRate — carries its own committed fingerprint when on, and leaves the default untouched when off).
+- **GC budget.** The full-pool loop runs under `@zakkster/lite-gc-profiler` with `maxMajor: 0` and 0 retained bytes under `@zakkster/lite-leak`, all under `--expose-gc`.
+
+</details>
+
+---
+
+## Testing
+
+**204 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
+
+```bash
+npm test          # 204 node:test cases (contract + boundary + fingerprint)
+npm run torture   # @zakkster/lite-leak + lite-gc-profiler under --expose-gc
+npm run verify    # test + torture, the publish gate
+```
+
+The unit suite (`test/Confetti.test.mjs`) covers the full options surface, fail-closed input sanitisation, per-feature determinism fingerprints, shape dispatch (built-in + `registerShape` vector/sprite + `shapes` mixing), the bounding box, living-air and vortex forces, settle/pile lifecycle, color-over-life, emitter shapes, staggered emission, and the render-orientation / render-scale overlays (`align`, `spinRate`, `scaleTo`, `flutterRate`).
+
+The torture harness (`node --expose-gc test/torture.mjs`) runs nine tiers strictly sequentially — **T0** metamorphic laws, **T1** degenerate inputs, **T3** adversarial op orders, **T4** handle / stub / buffer abuse, **T5** differential determinism, **T6** the zero-alloc gate (hard), **T7** soak + occupancy conservation, **T8** cross-package poison + shared-ticker retention, **T9** controls — with T2 (aliasing) intentionally omitted, as confetti shares no caller-owned buffers. The gate pairs `@zakkster/lite-leak` (retention returns to `size 0`) with `@zakkster/lite-gc-profiler` (`maxMajor: 0`). **T9** is the negative-control tier: every gate is shown a workload that *must* trip it, so a clean read is never a vacuous pass. Without `--expose-gc` the memory tiers degrade to inconclusive and the gate exits 0. No gate output is a FAIL.
+
+---
+
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.18.0
+
+**Wobble speed.** The third tumble-axis knob and the flutter analog of `spinRate` — `flutter` opened the *depth* of the wobble; this tunes its *speed*. For seventeen releases the wobble rate was a fixed seeded random, so a slow lazy flutter, a wobble frozen at birth, or a fast shimmer were all unreachable.
+
+- `flutterRate: number` on `burst()` **and** `spray()`. `1` (default) = as seeded, `0` = frozen at the random birth tilt, `0.3` = slow lazy flutter, `2` = fast shimmer, negative = reversed. Coerced with `num` (`0` and negatives valid; non-finite → `1`). Inert when `flutter` is 0.
+- A **pure render overlay**, turbulence-safe: a render-time phase scale about a birth pivot `tilt0` that never touches `pool.tilt` (the phase the turbulence curl and sway read), so the seeded position stream (and every committed fingerprint) is byte-identical whether off, on, or on-with-turbulence; only the wobble earns its own deterministic fingerprint (reusing the `scaleHash` probe, no new channel). Draws no rng; inert under reduced motion. See [Wobble speed](#wobble-speed).
 
 ### v1.17.0
 

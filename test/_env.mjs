@@ -91,7 +91,8 @@ export function pointerListenerCount() { return (_win._listeners.pointermove || 
  * and any orientation-only feature are provable pure overlays); it feeds the separate
  * `rotateHash` probe instead, kept out of the position mix like strokeHash/colorHash.
  * Scale is likewise kept out of `hash` and folded into its own `scaleHash`/`lastScale`
- * pair (v1.17.0), so `scaleTo` (size-over-life) is a provable pure render overlay too.
+ * pair (v1.17.0), so `scaleTo` (size-over-life) is a provable pure render overlay too;
+ * `lastScaleX` witnesses the X wobble factor (where flutter/flutterRate live) alongside it.
  */
 export function makeCanvas({ record = false, assertFinite = false } = {}) {
     const c = { style: {}, parentElement: null, width: 0, height: 0, id: '' };
@@ -161,8 +162,11 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     // analog) so a test can assert the size ramp TRACKS the life fraction (birth ~1, shrinking toward
     // scaleTo). Identity sentinel 1 (not 0): scale is multiplicative, and updateSize() folds one (1,1)
     // at construction before any burst -- deterministic, baked into every committed SCALE_HASH.
+    // `lastScaleX` is the X-factor analog (v1.18.0): flutter/flutterRate live on X (the wobble), while Y
+    // is the isotropic scaleTo factor, so a flutterRate test needs the X witness to see the wobble move.
     let scaleHash = 0 >>> 0;
     let lastScale = 1;
+    let lastScaleX = 1;
     // Color-over-life PROBE (v1.12.0). A `lifeColors` burst moves ONLY ctx.fillStyle; it draws no
     // translate, so it adds NOTHING to the position `hash` (colorHash is kept entirely out of the mix,
     // like strokeHash/sumX/maxY -- every committed position fingerprint is byte-identical whether or
@@ -242,6 +246,7 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
         scale(x, y) {
             if (record) {
                 lastScale = y;   // isotropic size factor; flutter touches X only, so Y is clean
+                lastScaleX = x;   // X wobble factor (flutter/flutterRate live on X; Y is the isotropic scaleTo factor)
                 // Quantize each factor (round to 1/4096) before folding, mirroring the rotate() precedent
                 // so the fingerprint is stable across runs. Kept out of `hash`, like rotateHash.
                 scaleHash = (Math.imul(scaleHash ^ (Math.round(x * 4096) | 0), 16777619)) >>> 0;
@@ -275,6 +280,7 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     Object.defineProperty(c, 'lastRotate', { get() { return lastRotate; } });
     Object.defineProperty(c, 'scaleHash', { get() { return scaleHash >>> 0; } });
     Object.defineProperty(c, 'lastScale', { get() { return lastScale; } });
+    Object.defineProperty(c, 'lastScaleX', { get() { return lastScaleX; } });
     Object.defineProperty(c, 'colorHash', { get() { return colorHash >>> 0; } });
     return c;
 }

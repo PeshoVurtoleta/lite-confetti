@@ -3,6 +3,58 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.18.0] - 2026-08-10
+
+Feature release: `flutterRate` -- **tumble-wobble speed**, the third tumble-axis knob and the flutter analog
+of `spinRate`. `flutter` (v1.3.0) sets the *depth* of the 3D-ish X-scale wobble
+(`wobbleScale = 1 - flut*0.5*(1-|cos(tilt)|)`), driven by the per-particle `tilt` phase the integrator
+advances every frame. The wobble's *speed* has never had a public knob (`tiltV` is a fixed seeded random),
+so a slow lazy flutter, a wobble frozen at a chosen tilt, or a fast shimmer were all unreachable. An opt-in
+`flutterRate` **multiplies the accumulated wobble phase** about a stored birth pivot `tilt0`: `0` = frozen
+wobble at each piece's *own* varied birth tilt, `0.3` = a slow lazy flutter, `1` = as seeded (default),
+`2` = a fast shimmer, negative = reversed phase: `c.burst({ flutterRate: 0, flutter: 1 })`. The crux,
+exactly like `spinRate`: it is a **render-time phase scale**, never a spawn-time `tiltV` scale. `pool.tilt`
+-- the wobble phase the integrator advances *and* that the `turbulence` curl phase and `sway` read -- is
+**never touched**; the draw block scales only the accumulated delta `(tilt - tilt0)` into a stack local that
+feeds *only* the `wobbleScale` formula. So `flutterRate` is fully **decoupled** from turbulence and sway,
+and the seeded *position* stream is byte-identical off, on, and on-with-turbulence -- reproducing the
+same-seed plain burst's position hash exactly (`1569828004`), while the wobble sequence earns its own
+committed fingerprint (`4094960833`). Off (`flutterRate: 1` / non-finite) feeds the raw `tilt` verbatim,
+byte-identical to every prior release. It is **inert when `flutter` is `0`** (a zero-depth wobble has no
+speed to scale). It reuses the v1.17.0 `scaleHash` probe -- **no new committed-hash channel**.
+
+### Added
+- **`flutterRate: number` on `burst()` and `spray()`** -- a tumble-wobble speed multiplier. `1` (default) =
+  as seeded, `0` = frozen at the random birth tilt, `0.3` = slow lazy flutter, `2` = fast shimmer, negative
+  = reversed. A render property of any moving piece, so **both** `burst()` and `spray()` honor it.
+
+### Semantics
+- **Rate-only about the birth pivot.** Only the accumulated delta `(tilt - tilt0)` is scaled, so
+  `flutterRate: 0` freezes each piece at its OWN varied birth wobble (a different constant per piece), NOT
+  collapsing every piece to `cos(0)=1`. A whole-phase multiply is rejected for the same reason `spinRate`
+  rejected it.
+- **Coerced with `num`, default 1.** Any finite value passes (`0` frozen, negative reversed, `2` fast);
+  non-finite / non-numeric / undefined -> `1` (off). Not `clamp01` -- it is a rate multiplier, not a 0..1
+  blend.
+- **Inert when `flutter` is 0.** `flutter` (depth) multiplies the whole `(1 - |cos|)` term; at `flutter: 0`,
+  `wobbleScale = 1` regardless of the phase, so `flutterRate` has nothing to scale (a zero-depth wobble has
+  no speed). Correct by construction.
+- **Pure render overlay, decoupled from turbulence and sway.** Never mutates `pool.tilt` or `ctx.translate`,
+  so the seeded *position* stream is byte-identical off, on, and on-with-turbulence; only the wobble
+  (scaleHash) moves. Draws **no rng**. Inert under reduced motion.
+
+### Internal
+- Two new per-particle pool columns: `tilt0` (Float32, the birth wobble pivot) and `flutterRate` (Float32,
+  the render-time speed multiplier); +8 B/particle. `spawn()` **always** writes both -- `tilt0 = tilt` at the
+  seed, `flutterRate = config.flutterRate` unconditionally -- so the TypedArray zero-init is never relied on
+  (a `flutterRate` zero would mean "frozen wobble", a fail-closed requirement).
+- The render wobble scale is guarded (`if (pool.flutterRate[i] !== 1)`) and folds into the existing
+  `wobbleScale` formula -- paid only for armed pieces, a Float32 read + compare when off. Zero allocation --
+  torture T6 measures a flutter-rated (`flutterRate` + `turbulence`) live pool at ~0 B/frame.
+- Reuses the v1.17.0 harness probe `scaleHash` (wobbleScale feeds `ctx.scale`'s X arg); adds only a
+  `lastScaleX` X-factor witness beside `lastScale`. New committed constant `FLUTRATE_HASH` (`4094960833`).
+- Unit suite 193 -> 204.
+
 ## [1.17.0] - 2026-08-09
 
 Feature release: `scaleTo` -- **size-over-life**, the first feature on the **render-scale** axis. For

@@ -166,6 +166,21 @@ export function run() {
         ['scaleTo:neg', { count: 60, scaleTo: -5, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['scaleTo:tiny', { count: 60, scaleTo: 1e-9, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['scaleTo:huge', { count: 60, scaleTo: 1e6, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        // flutterRate poison (v1.18.0): garbage multipliers coerce via num (non-finite/non-numeric/{}/null
+        // -> 1). The render fold is tilt0 + (tilt - tilt0) * flutterRate feeding cos() -- a bounded seeded
+        // phase times a finite multiplier -- so 0 / -5 / 1e-9 / 1e6 are all VALID and can never yield a
+        // non-finite draw. Armed with flutter:1 (else the wobble is a no-op) + turbulence + wind + a
+        // bouncing box, so the render wobble fold runs beside the untouched-tilt curl read every frame.
+        ['flutterRate:NaN', { count: 60, flutter: 1, flutterRate: NaN, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['flutterRate:Infinity', { count: 60, flutter: 1, flutterRate: Infinity, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['flutterRate:-Infinity', { count: 60, flutter: 1, flutterRate: -Infinity, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['flutterRate:nonnumeric', { count: 60, flutter: 1, flutterRate: '2', turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['flutterRate:null', { count: 60, flutter: 1, flutterRate: null, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['flutterRate:object', { count: 60, flutter: 1, flutterRate: {}, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['flutterRate:0', { count: 60, flutter: 1, flutterRate: 0, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['flutterRate:neg', { count: 60, flutter: 1, flutterRate: -5, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['flutterRate:tiny', { count: 60, flutter: 1, flutterRate: 1e-9, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['flutterRate:huge', { count: 60, flutter: 1, flutterRate: 1e6, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],

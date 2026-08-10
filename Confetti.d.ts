@@ -128,6 +128,20 @@ export interface BurstOptions {
      * and `spray()`. Draws no RNG; no effect under reduced motion. (v1.17.0)
      */
     scaleTo?: number;
+    /**
+     * Tumble-wobble SPEED multiplier on the seeded flutter -- the SPEED knob to `flutter`'s DEPTH
+     * (v1.18.0). `1` (default) is the seeded wobble rate as-is; `0` FREEZES the wobble at each piece's
+     * OWN random birth tilt (a varied constant wobble, not collapsed to one value); `0.3` is a slow lazy
+     * flutter; `2` is a fast shimmer; a negative value REVERSES the phase. A render-time PHASE SCALE about
+     * a stored birth pivot: it scales only the accumulated wobble phase and never touches `pool.tilt` --
+     * the phase the integrator advances and that `turbulence` and `sway` read -- so it is fully decoupled
+     * from them and the seeded POSITION fingerprint is byte-identical whether off, on, or on-with-turbulence
+     * (a pure render overlay reusing flutter's `ctx.scale`). Inert when `flutter` is `0` (a zero-depth
+     * wobble has no speed to scale). Coerced with `num` -- any FINITE value passes (0 and negatives are
+     * valid); non-finite/non-numeric -> `1`. Honored by both `burst()` and `spray()`. Draws no RNG; no
+     * effect under reduced motion.
+     */
+    flutterRate?: number;
     /** Per-particle turbulence: a rotating acceleration (px/sec^2) that makes each particle
      *  wander organically. Default 0 (none). Opt-in, fingerprint-safe, draws no RNG; no effect
      *  under reduced motion. */

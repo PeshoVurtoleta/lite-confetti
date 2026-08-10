@@ -251,6 +251,25 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- the scaleTo size fold is allocating');
     }
 
+    // (12) A flutter-rated live pool (v1.18.0): with flutter:1 + flutterRate:0.35 every rendered piece
+    // runs the NEW wobble-phase scale (tilt0 + (tilt - tilt0) * flutterRate, folded into the wobbleScale)
+    // INSIDE the measured window, AND turbulence is armed so the [:862] curl read of the untouched
+    // pool.tilt runs beside it every frame -- proving the decoupled render fold allocates nothing while
+    // turbulence advances the real tilt. Immortal long-life pieces hold the pool full so any per-frame
+    // allocation on the flutterRate path would show as retained bytes. Pure stack arithmetic (a Float32
+    // read + compare + subtract + multiply), so ~0 B/frame over ~MAXP pieces.
+    const fr = createConfetti(makeCanvas({ record: true }), { seed: 1801, maxParticles: MAXP });
+    fr.burst({ count: MAXP, x: 400, y: 300, speed: 300, spread: 2.5, gravity: 700, wind: 400,
+        flutter: 1, flutterRate: 0.35, turbulence: 300, lifeMin: 1e6, lifeMax: 1e6 });
+    pump(1, 16);
+    check(fr.count === MAXP, () => `T6: flutterRate pool has ${fr.count} alive, expected ${MAXP}`);
+    const bpfFlut = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    fr.destroy();
+    if (bpfFlut > RETAIN_FLOOR_BPF) {
+        die('T6: flutter-rated update() retains ' + bpfFlut.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the flutterRate wobble-phase scale is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -268,6 +287,7 @@ export async function run() {
         + bpfStagger.toFixed(2) + ' B/frame from a staggered burst mid-emission, '
         + bpfAlign.toFixed(2) + ' B/frame from a velocity-aligned live pool, '
         + bpfSpin.toFixed(2) + ' B/frame from a tumble-scaled (spinRate + turbulence) live pool, '
-        + bpfScale.toFixed(2) + ' B/frame from a size-ramped (scaleTo + flutter) live pool); '
+        + bpfScale.toFixed(2) + ' B/frame from a size-ramped (scaleTo + flutter) live pool, '
+        + bpfFlut.toFixed(2) + ' B/frame from a flutter-rated (flutterRate + turbulence) live pool); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

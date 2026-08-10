@@ -79,6 +79,7 @@ function genOp(prng, allowReseed) {
                 align: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100,       // velocity-align blend 0..1, half off; render-only, zero-rng
                 spinRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // tumble-speed multiplier, half at 1 (off); else [-2,3], render-only, zero-rng
                 scaleTo: (prng() % 2 === 0) ? 1 : (prng() % 301) / 100, // size-over-life target, half at 1 (off); else [0,3], render-only, zero-rng
+                flutterRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // wobble-speed multiplier, half at 1 (off); else [-2,3], render-only, zero-rng (flutter defaults to 1, so it is non-vacuous)
                 lifeMin: 0.5 + (prng() % 200) / 100,
                 lifeMax: 2.5 + (prng() % 200) / 100,
             },
@@ -108,6 +109,7 @@ function genOp(prng, allowReseed) {
                 align: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100, // velocity-align blend, half off; spray honors it, zero-rng
                 spinRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // tumble-speed multiplier, half at 1 (off); else [-2,3], spray honors it, zero-rng
                 scaleTo: (prng() % 2 === 0) ? 1 : (prng() % 301) / 100, // size-over-life target, half at 1 (off); else [0,3], spray honors it, zero-rng
+                flutterRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // wobble-speed multiplier, half at 1 (off); else [-2,3], spray honors it, zero-rng
             },
         };
     }
@@ -135,9 +137,10 @@ export function run() {
         // A trail capacity is given to BOTH so the ring buffer + global head + per-burst trail
         // lengths are exercised under fuzz; the trail GEOMETRY (strokeHash), the render rotation
         // (rotateHash -- driven by both `align` and the v1.16.0 `spinRate` tumble scale) AND the render
-        // size fold (scaleHash -- the v1.17.0 `scaleTo` size-over-life ramp) are checked alongside the
-        // position hash, proving every render overlay is as deterministic as the physics. Both spinRate
-        // and scaleTo armed must NOT move the position hash (render-time scales, never pool.spin/w/h),
+        // size fold (scaleHash -- the v1.17.0 `scaleTo` size-over-life ramp AND the v1.18.0 `flutterRate`
+        // wobble-speed scale, which rides the SAME scaleHash channel) are checked alongside the position
+        // hash, proving every render overlay is as deterministic as the physics. spinRate, scaleTo AND
+        // flutterRate armed must NOT move the position hash (render-time scales, never pool.spin/tilt/w/h),
         // so ca.hash === cb.hash still holds with the fuzzed multipliers live.
         const A = createConfetti(ca, { seed, maxParticles: CAP, trail: 24 });
         const B = createConfetti(cb, { seed, maxParticles: CAP, trail: 24 });
