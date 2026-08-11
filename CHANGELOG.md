@@ -3,6 +3,63 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.19.0] - 2026-08-10
+
+Feature release: `fadeIn` -- **birth-opacity ramp**, the FIRST public knob on the **render-opacity** axis.
+For eighteen releases a piece's *opacity* had exactly one hardcoded behaviour: a death fade-*out* over the
+last 30% of life (`alpha = lifeT < 0.3 ? lifeT/0.3 : 1`). Every other render channel already had a public
+knob -- rotation (`align`, `spinRate`), scale (`scaleTo`, `flutterRate`), color (`lifeColors`) -- but
+opacity had none, so a piece that **materializes in** (fades up from transparent at birth) was unreachable.
+An opt-in `fadeIn` scalar **ramps alpha `0 -> 1` over the first `fadeIn` fraction of each piece's life** by
+the same age fraction (`1 - life/maxL`) the death-fade and `lifeColors` already use: `0.4` eases in over the
+first 40% of life, `1` ramps across the whole life; default `0` = today's instant-on look:
+`c.burst({ fadeIn: 0.5, gravity: 300 })`. It is the **mirror of the death fade-out**, on the *same* `alpha`
+scalar, and **multiplies** it: for a normal life the two act in disjoint windows (in near birth, out near
+death); for a very short life they overlap and correctly multiply. The death fade-out is **unchanged**. The
+crux: it is the **cleanest overlay in the suite** -- a pure render overlay on `ctx.globalAlpha` that never
+touches `ctx.translate` / `pool.x` / `pool.y` / `pool.vx` / `pool.vy`, draws no rng, and reads only the life
+fraction, so the seeded *position* stream is byte-identical off or on -- reproducing the same-seed plain
+burst's position hash exactly (`1569828004`), and its rotate/scale/stroke/color streams too, while the alpha
+sequence earns its own committed fingerprint (`3712788104`). Unlike the physics-reader features
+(`spinRate`/`flutterRate` needed a birth pivot to decouple from turbulence), `fadeIn` needs **no birth
+pivot and no decoupling machinery** -- nothing downstream reads alpha. The trail ribbon shares the body
+`alpha` (folded *before* the trail block), so the streak **materializes in with the body for free**.
+
+### Added
+- **`fadeIn: number` on `burst()` and `spray()`** -- a birth-opacity ramp. `0` (default) = instant-on,
+  `0.4` = ease in over the first 40% of life, `1` = ramp across the whole life. A render property of any
+  moving piece, so **both** `burst()` and `spray()` honor it.
+
+### Semantics
+- **Single-endpoint monotone ramp, house style.** One scalar (like `scaleTo`/`flutterRate`/`align`), ramping
+  `alpha *= age / fadeIn` while `age < fadeIn`, where `age = 1 - life/maxL`. Zero new state on the shared
+  path beyond one pool column.
+- **Multiplies the existing alpha, does not replace it.** Birth fade-in and the hardcoded death fade-out both
+  act on the same `alpha` and multiply: `alpha = deathFade * fadeInFactor`. The death fade-out is unchanged.
+- **Coerced with `clamp01`, default 0.** Non-finite / non-numeric / undefined -> `0` (off); a value `> 1`
+  clamps to `1` (ramp spans the whole life); a negative clamps to `0` (off). The render branch is gated
+  `if (pool.fadeIn[i] > 0)`, so off does no divide and is byte-identical, and `> 0` guarantees the divide
+  never hits 0.
+- **The trail fades in with the body.** The ribbon already tracks the body `alpha` (the death fade dims it
+  via `ctx.globalAlpha = alpha * TRAIL_ALPHA`); folding `fadeIn` into `alpha` before the trail block makes
+  the streak materialize in with the body for free -- no new column. `strokeHash` folds path *geometry*, not
+  globalAlpha, so `TRAIL_HASH` (`72519212`) still reproduces byte-identical with `fadeIn` armed.
+- **Pure render overlay.** Never mutates `pool.x/y/vx/vy` or `ctx.translate`, so the seeded *position* stream
+  is byte-identical off or on; only the alpha (alphaHash) moves. Draws **no rng**. Inert under reduced motion
+  (the constant static `0.85` is untouched).
+
+### Internal
+- One new per-particle pool column: `fadeIn` (Float32, the render-time birth-opacity ramp); +4 B/particle.
+  `spawn()` **always** writes it (`fadeIn = config.fadeIn` unconditional); here the TypedArray zero-init
+  happens to coincide with "off" (safe), but the write is unconditional per house style + fail-closed.
+- The render fade-in is guarded (`if (pool.fadeIn[i] > 0)`) and folds into the existing `alpha` scalar before
+  the trail block -- paid only for armed pieces, a Float32 read + compare when off. Zero allocation --
+  torture T6 measures a fade-in (`fadeIn` + `flutter`) live pool at ~0 B/frame.
+- New harness probe: `globalAlpha` (a plain field, converted to a get/set accessor) folds the quantized value
+  into an out-of-hash `alphaHash`/`lastAlpha` pair (the opacity analog of `scaleHash`). No committed
+  position/rotate/scale/stroke/color hash moves. New committed constant `ALPHA_HASH` (`3712788104`).
+- Unit suite 204 -> 215.
+
 ## [1.18.0] - 2026-08-10
 
 Feature release: `flutterRate` -- **tumble-wobble speed**, the third tumble-axis knob and the flutter analog

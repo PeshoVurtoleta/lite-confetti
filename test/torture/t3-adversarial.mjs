@@ -213,6 +213,36 @@ export function run() {
         c.destroy();
     }
 
+    // A10 -- pool-recycle retention for fadeIn (v1.19.0). fadeIn is ALWAYS written at spawn (never zero-init,
+    // though here the Float32 zero happens to coincide with "off"), so a recycled slot cannot inherit a prior
+    // burst's ramp. A single-slot pool (maxParticles:1) FORCES slot 0 reuse: fire 5 "materialize in" (fadeIn:1)
+    // pieces, expiring each so the pool drains to 0 every cycle, then a PLAIN burst (default fadeIn 0) into the
+    // same recycled slot. With fadeIn reset to 0 the render leaves globalAlpha at EXACTLY 1 on the first drawn
+    // frame (birth is instant-on; the death fade only starts in the last 30% of life -- the `> 0` guard is
+    // false, an exact identity robust to dt); a leaked fadeIn:1 would instead ramp the first frame far below 1.
+    // lastAlpha (single piece, no trail, so the recorded value is the pure body alpha) is the witness.
+    {
+        const canvas = makeCanvas({ record: true });
+        const c = createConfetti(canvas, { seed: 7, maxParticles: 1 });
+        const err = capture(() => {
+            for (let cycle = 0; cycle < 5; cycle++) {
+                c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1,
+                    fadeIn: 1, lifeMin: 0.3, lifeMax: 0.3 });
+                for (let f = 0; f < 20; f++) pump(1, 50);
+                check(c.count === 0, () => `T3 A10: cycle ${cycle} single-slot pool did not drain the fadeIn:1 piece (count ${c.count})`);
+            }
+            // Recycle slot 0 with an instant-on piece; its first-frame body alpha must be EXACTLY 1.
+            c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1,
+                lifeMin: 5, lifeMax: 5 });
+            pump(1, 16);
+            check(c.count === 1, () => `T3 A10: recycled plain burst did not spawn (count ${c.count})`);
+            check(canvas.lastAlpha === 1, () =>
+                `T3 A10: a recycled slot leaked a stale fadeIn -- first-frame body alpha ${canvas.lastAlpha} != 1`);
+        });
+        check(err === null, () => `T3 A10: threw ${err && err.message}`);
+        c.destroy();
+    }
+
     check(pointerListenerCount() === baseListeners,
         () => `T3: tier leaked ${pointerListenerCount() - baseListeners} pointer listener(s) overall`);
 }

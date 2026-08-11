@@ -152,6 +152,14 @@ const SCALE_HASH = 148099462; // burst({ scaleTo: 2 }) scaleHash on the canonica
 // seed-12345 rig (flutter:1 so the wobble is armed) with flutterRate:2; distinct from the OFF scaleHash
 // (and from 0 / 0.5) and its own cross-process replay gate.
 const FLUTRATE_HASH = 4094960833; // burst({ flutter: 1, flutterRate: 2 }) scaleHash on the canonical rig
+// Committed ALPHA fingerprint for the birth-opacity ramp (v1.19.0, decision 0020). `fadeIn` fades a piece
+// up from transparent over the FIRST `fadeIn` fraction of life, MULTIPLYING the existing (death-fade)
+// alpha. It changes ONLY ctx.globalAlpha -- never translate / x / y / rng -- so the POSITION hash stays
+// COMMITTED_HASH whether off or on (and rotate/scale/stroke/color too); only the ALPHA sequence moves. It
+// uses the NEW v1.19.0 `alphaHash` probe (globalAlpha folded on SET, out of `hash`). Value probed on the
+// canonical seed-12345 rig with fadeIn:0.4; distinct from the OFF alphaHash (and from 0.2) and its own
+// cross-process replay gate.
+const ALPHA_HASH = 3712788104; // burst({ fadeIn: 0.4 }) alphaHash on the canonical rig
 const HALF_PI = Math.PI / 2;
 
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
@@ -2557,6 +2565,227 @@ describe('lite-confetti', () => {
             const on = staticRun({ flutterRate: 0.1 });
             assert.equal(on.hash, off.hash, 'flutterRate should be inert on the static reduced-motion positions');
             assert.equal(on.scaleHash, off.scaleHash, 'flutterRate should not touch the static fan wobble');
+        });
+    });
+
+    describe('fadeIn / birth-opacity ramp', () => {
+        // The canonical seed-12345 rig (shared with align/spinRate/scaleTo/flutterRate). `run` reports the
+        // position `hash` (folds only translate) plus every render probe kept OUT of it: the NEW `alphaHash`
+        // (globalAlpha folded on SET), `rotateHash`, `scaleHash`, `strokeHash`, `colorHash`, and `lastAlpha`
+        // (the last globalAlpha SET before a shape draw = the body alpha). fadeIn changes ONLY globalAlpha,
+        // so the headline is that position/rotate/scale/stroke/color are all byte-identical off or on -- the
+        // cleanest pure render overlay in the suite; only alphaHash moves.
+        const run = (fadeIn) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            const opts = { count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8 };
+            if (fadeIn !== undefined) opts.fadeIn = fadeIn;
+            c.burst(opts);
+            pump(1, 1000); pump(29, 16);
+            const out = {
+                hash: canvas.hash, alphaHash: canvas.alphaHash, rotateHash: canvas.rotateHash,
+                scaleHash: canvas.scaleHash, strokeHash: canvas.strokeHash, colorHash: canvas.colorHash,
+                lastAlpha: canvas.lastAlpha,
+            };
+            c.destroy();
+            return out;
+        };
+
+        it('is opt-in and fail-closed: {} / 0 / NaN / Infinity / string / null / undefined keep positions AND alpha', () => {
+            // clamp01(fadeIn, 0): missing/non-finite/non-numeric/undefined -> 0 (off), so BOTH the position
+            // hash AND the alpha sequence match a pre-fadeIn run. Pins clamp01(fadeIn, 0).
+            const base = run(undefined);
+            assert.equal(base.hash, COMMITTED_HASH, 'the fadeIn branch perturbed the default position stream');
+            for (const fi of [undefined, 0, NaN, Infinity, '0.4', null]) {
+                const r = run(fi);
+                assert.equal(r.hash, COMMITTED_HASH, `fadeIn ${String(fi)} should not move positions`);
+                assert.equal(r.alphaHash, base.alphaHash, `fadeIn ${String(fi)} should leave the alpha untouched`);
+            }
+        });
+
+        it('clamps to [0,1]: >1 clamps to 1, a negative -> 0 (off); positions never move', () => {
+            const base = run(undefined);
+            assert.equal(run(1e9).alphaHash, run(1).alphaHash, 'fadeIn > 1 should clamp to 1');
+            assert.equal(run(-1).alphaHash, run(0).alphaHash, 'a negative fadeIn should clamp to 0 (off)');
+            assert.equal(run(-1).alphaHash, base.alphaHash, 'a negative fadeIn should reproduce the off alpha');
+            for (const fi of [1e9, 1, -1, 0]) {
+                assert.equal(run(fi).hash, COMMITTED_HASH, `fadeIn ${fi} moved positions`);
+            }
+        });
+
+        it('every prior committed fingerprint still reproduces with fadeIn off (no sequence drift)', () => {
+            assert.equal(run(undefined).hash, COMMITTED_HASH, 'default fingerprint drifted');
+            assert.equal(run(0).hash, COMMITTED_HASH, 'fadeIn:0 moved positions');
+            // The prior physics/render gates on the same seed-12345 rig, via the shared per-suite helpers.
+            const g = (ctorOpts, burstOpts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 12345, ...ctorOpts });
+                c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...burstOpts });
+                pump(1, 1000); pump(29, 16);
+                const out = { hash: canvas.hash, rotateHash: canvas.rotateHash, scaleHash: canvas.scaleHash,
+                    strokeHash: canvas.strokeHash, colorHash: canvas.colorHash };
+                c.destroy();
+                return out;
+            };
+            assert.equal(g(undefined, { floor: FLOOR_Y }).hash, FLOOR_HASH, 'floor fingerprint drifted');
+            assert.equal(g(undefined, { ...BOX, bounce: 0 }).hash, BOX_HASH, 'box fingerprint drifted');
+            assert.equal(g({ trail: 10 }, undefined).strokeHash, TRAIL_HASH, 'trail fingerprint drifted');
+            assert.equal(g(undefined, { lifeColors: EMBER }).colorHash, COLOR_HASH, 'color fingerprint drifted');
+            assert.equal(g(undefined, { align: 1 }).rotateHash, ALIGN_HASH, 'align rotation fingerprint drifted');
+            assert.equal(g(undefined, { spinRate: 2 }).rotateHash, SPINRATE_HASH, 'spinRate rotation fingerprint drifted');
+            assert.equal(g(undefined, { scaleTo: 2 }).scaleHash, SCALE_HASH, 'scaleTo size fingerprint drifted');
+            assert.equal(g(undefined, { flutter: 1, flutterRate: 2 }).scaleHash, FLUTRATE_HASH, 'flutterRate wobble fingerprint drifted');
+        });
+
+        it('is a PURE render overlay: 0.2 / 0.4 / 0.8 / 1 keep the position hash, change only the alpha', () => {
+            const off = run(undefined);
+            for (const fi of [0.2, 0.4, 0.8, 1]) {
+                const on = run(fi);
+                assert.equal(on.hash, off.hash, `fadeIn:${fi} perturbed the position stream (not a pure overlay)`);
+                assert.notEqual(on.alphaHash, off.alphaHash, `fadeIn:${fi} should change the alpha sequence`);
+            }
+        });
+
+        it('is orthogonal to rotate/scale/stroke/color, and composes with the whole render stack', () => {
+            const off = run(undefined);
+            const on = run(0.4);
+            assert.equal(on.rotateHash, off.rotateHash, 'fadeIn must not touch rotation');
+            assert.equal(on.scaleHash, off.scaleHash, 'fadeIn must not touch scale');
+            assert.equal(on.strokeHash, off.strokeHash, 'fadeIn must not touch trail geometry');
+            assert.equal(on.colorHash, off.colorHash, 'fadeIn must not touch color');
+            // Stacked with every other render overlay, the seeded POSITION stream is still off-identical.
+            const stacked = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 12345 });
+                c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                pump(1, 1000); pump(29, 16);
+                const h = canvas.hash;
+                c.destroy();
+                return h;
+            };
+            assert.equal(stacked({ fadeIn: 0.4, align: 1, spinRate: 2, scaleTo: 0.5, flutter: 1, flutterRate: 2 }),
+                stacked({}), 'stacked render overlays perturbed the position stream');
+        });
+
+        it('the trail ribbon keeps its GEOMETRY: strokeHash identical off vs fadeIn, strokes fire (crux b)', () => {
+            const trailRun = (fadeIn) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 12345, trail: 10 });
+                const opts = { count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, trail: 10 };
+                if (fadeIn !== undefined) opts.fadeIn = fadeIn;
+                c.burst(opts);
+                pump(1, 1000); pump(29, 16);
+                const out = { strokeHash: canvas.strokeHash, strokes: canvas.strokes };
+                c.destroy();
+                return out;
+            };
+            const off = trailRun(undefined);
+            const on = trailRun(0.4);
+            assert.ok(off.strokes > 0, 'the trail rig must actually stroke');
+            assert.equal(on.strokeHash, off.strokeHash, 'fadeIn moved the trail geometry (strokeHash must fold path points only)');
+            // And the standalone committed TRAIL_HASH still reproduces on the 8-sample rig.
+            assert.equal(run(undefined).strokeHash, run(0).strokeHash, 'fadeIn:0 moved a stroke stream');
+        });
+
+        it('matches the committed ALPHA fingerprint -- distinct + deterministic (0.2 != 0.4 != off)', () => {
+            const on = run(0.4);
+            if (ALPHA_HASH === null) console.log('[fadeIn] 0.4 alphaHash =', on.alphaHash);
+            else assert.equal(on.alphaHash, ALPHA_HASH, 'fadeIn alpha changed vs the committed baseline');
+            // Deterministic: same seed + fixed dt -> same alpha on replay (fadeIn draws no rng).
+            assert.equal(run(0.4).alphaHash, on.alphaHash, 'fadeIn not deterministic');
+            const off = run(undefined).alphaHash;
+            const two = run(0.2).alphaHash;
+            assert.notEqual(on.alphaHash, off, 'fadeIn:0.4 should differ from off');
+            assert.notEqual(two, off, 'fadeIn:0.2 should differ from off');
+            assert.notEqual(on.alphaHash, two, 'fadeIn:0.4 should differ from 0.2');
+        });
+
+        it('is NON-VACUOUS (lastAlpha): a single piece materializes in -- first frame < 1 and rising to ~1', () => {
+            // A single piece, no trail (so lastAlpha is purely the body alpha), life 0.5s stepped in 16ms
+            // frames (the ticker caps a large dt, so small frames age the piece at a readable rate). off ->
+            // birth is instant-on (alpha 1; the death fade only starts in the last 30% of life, past this
+            // window). fadeIn:0.4 -> the first frame is STRICTLY < 1 (fading up), STRICTLY increasing across
+            // the fade-in window (first 40% = 0.2s = ~12 frames), reaching ~1 by age 0.4. A proof a bare
+            // position hash cannot give -- positions are identical off/on.
+            const sampled = (fadeIn) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 7 });
+                const opts = { count: 1, x: 400, y: 300, spread: 0.001, speed: 10, gravity: 0, drag: 1,
+                    lifeMin: 0.5, lifeMax: 0.5 };
+                if (fadeIn !== undefined) opts.fadeIn = fadeIn;
+                c.burst(opts);
+                const as = [];
+                for (let f = 0; f < 16; f++) { pump(1, 16); as.push(canvas.lastAlpha); }
+                c.destroy();
+                return as;
+            };
+            const off = sampled(undefined);
+            assert.equal(off[0], 1, 'off: the first frame should be fully opaque (instant-on)');
+            const on = sampled(0.4);
+            assert.ok(on[0] < 1, 'fadeIn:0.4: the first frame should be strictly transparent (materializing in)');
+            assert.ok(on[0] > 0, 'fadeIn:0.4: the first frame should not be fully transparent (an age has elapsed)');
+            // Strictly increasing across the fade-in window (the early frames, age < 0.4).
+            assert.ok(on[1] > on[0] && on[2] > on[1], 'fadeIn:0.4 alpha must rise across the fade-in window');
+            // Reaches ~1 once past the fade-in window (age >= 0.4 -> the death fade has not yet started).
+            assert.ok(on[on.length - 1] > 0.95, 'fadeIn:0.4 alpha must reach ~1 after the fade-in window');
+        });
+
+        it('keeps positions finite under fadeIn extremes + gravity + wind + turbulence + a bouncing box + trails', () => {
+            for (const fi of [0.05, 0.4, 1]) {
+                const canvas = makeCanvas({ record: true, assertFinite: true });
+                const c = createConfetti(canvas, { seed: 3, trail: 12 });
+                assert.doesNotThrow(() => {
+                    c.burst({
+                        x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 4, lifeMax: 4,
+                        wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350, bounce: 0.6,
+                        gravity: 4000, wind: 1200, turbulence: 500, fadeIn: fi, trail: 12,
+                    });
+                    pump(80, 16);
+                }, `fadeIn:${fi} produced a non-finite draw`);
+                c.destroy();
+            }
+        });
+
+        it('is honored by spray() too: positions identical, alpha differs', () => {
+            const spray = (fadeIn) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                const opts = { duration: 400, rate: 15, x: 400, y: 200, spread: 1.2, shape: 'rect',
+                    lifeMin: 4, lifeMax: 4 };
+                if (fadeIn !== undefined) opts.fadeIn = fadeIn;
+                c.spray(opts);
+                pump(1, 1000); pump(60, 16);
+                const out = { hash: canvas.hash, alphaHash: canvas.alphaHash };
+                c.destroy();
+                return out;
+            };
+            const off = spray(undefined);
+            const on = spray(0.4);
+            assert.equal(on.hash, off.hash, 'fadeIn should not move spray positions (pure overlay)');
+            assert.notEqual(on.alphaHash, off.alphaHash, 'spray should honor fadeIn (alpha changed)');
+        });
+
+        it('has no effect under reduced motion (static fan holds its constant 0.85)', () => {
+            const staticRun = (fadeIn) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    const opts = { count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8 };
+                    if (fadeIn !== undefined) opts.fadeIn = fadeIn;
+                    c.burst(opts);
+                    pump(1, 1000); pump(29, 16);
+                    const out = { hash: canvas.hash, alphaHash: canvas.alphaHash };
+                    c.destroy();
+                    return out;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            const off = staticRun(undefined);
+            const on = staticRun(0.4);
+            assert.equal(on.hash, off.hash, 'fadeIn should be inert on the static reduced-motion positions');
+            assert.equal(on.alphaHash, off.alphaHash, 'fadeIn should not touch the static fan alpha (constant 0.85)');
         });
     });
 

@@ -270,6 +270,24 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- the flutterRate wobble-phase scale is allocating');
     }
 
+    // (13) A fade-in live pool (v1.19.0): with fadeIn:0.5 every rendered piece runs the NEW birth-opacity
+    // ramp branch (age = 1 - lifeT; if age < fadeIn: alpha *= age / fadeIn) INSIDE the measured window AND
+    // sets ctx.globalAlpha every frame (the branch is armed for the whole immortal pool since 1e6 life keeps
+    // age near 0 << 0.5 forever). flutter:1 also arms the wobble so the render path is fully loaded. Pure
+    // stack arithmetic (a Float32 read + a compare + a subtract + a divide + a multiply), so ~0 B/frame over
+    // ~MAXP pieces -- any per-frame allocation on the fadeIn path would show as retained bytes.
+    const fi = createConfetti(makeCanvas({ record: true }), { seed: 1901, maxParticles: MAXP });
+    fi.burst({ count: MAXP, x: 400, y: 300, speed: 300, spread: 2.5, gravity: 700, wind: 400,
+        flutter: 1, fadeIn: 0.5, lifeMin: 1e6, lifeMax: 1e6 });
+    pump(1, 16);
+    check(fi.count === MAXP, () => `T6: fadeIn pool has ${fi.count} alive, expected ${MAXP}`);
+    const bpfFade = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    fi.destroy();
+    if (bpfFade > RETAIN_FLOOR_BPF) {
+        die('T6: fade-in update() retains ' + bpfFade.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the fadeIn birth-opacity ramp is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -288,6 +306,7 @@ export async function run() {
         + bpfAlign.toFixed(2) + ' B/frame from a velocity-aligned live pool, '
         + bpfSpin.toFixed(2) + ' B/frame from a tumble-scaled (spinRate + turbulence) live pool, '
         + bpfScale.toFixed(2) + ' B/frame from a size-ramped (scaleTo + flutter) live pool, '
-        + bpfFlut.toFixed(2) + ' B/frame from a flutter-rated (flutterRate + turbulence) live pool); '
+        + bpfFlut.toFixed(2) + ' B/frame from a flutter-rated (flutterRate + turbulence) live pool, '
+        + bpfFade.toFixed(2) + ' B/frame from a fade-in (fadeIn + flutter) live pool); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

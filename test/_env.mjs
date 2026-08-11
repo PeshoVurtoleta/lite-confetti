@@ -93,6 +93,9 @@ export function pointerListenerCount() { return (_win._listeners.pointermove || 
  * Scale is likewise kept out of `hash` and folded into its own `scaleHash`/`lastScale`
  * pair (v1.17.0), so `scaleTo` (size-over-life) is a provable pure render overlay too;
  * `lastScaleX` witnesses the X wobble factor (where flutter/flutterRate live) alongside it.
+ * globalAlpha is folded into its own `alphaHash`/`lastAlpha` pair (v1.19.0), so `fadeIn`
+ * (birth-opacity) is a provable pure render overlay -- position/rotate/scale/stroke/color
+ * streams are all byte-identical off or on, only alphaHash moves.
  */
 export function makeCanvas({ record = false, assertFinite = false } = {}) {
     const c = { style: {}, parentElement: null, width: 0, height: 0, id: '' };
@@ -167,6 +170,19 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     let scaleHash = 0 >>> 0;
     let lastScale = 1;
     let lastScaleX = 1;
+    // Birth-opacity PROBE (v1.19.0). `fadeIn` changes ONLY ctx.globalAlpha; it never moves ctx.translate,
+    // so it adds NOTHING to the position `hash` -- that is what makes it a provable pure RENDER overlay (a
+    // fading-in burst reproduces the same-seed plain burst's position hash EXACTLY, and its rotate/scale/
+    // stroke/color streams too). globalAlpha is a plain assignable FIELD (not a method like scale/rotate),
+    // so it is converted to a get/set accessor below with a backing `_alpha`: on SET in record mode it folds
+    // the QUANTIZED value (round to 1/4096, mirroring rotate()/scale()) into `alphaHash` (kept OUT of `hash`,
+    // exactly like scaleHash) and stores the raw value in `lastAlpha`. `lastAlpha` witnesses the BODY alpha:
+    // per particle the trail sets alpha*TRAIL_ALPHA then the body sets alpha, so the last set before the
+    // shape draw is the body alpha -- a hash-neutral witness a fade-in test uses to prove the ramp is
+    // non-vacuous. Identity sentinel 1 (opaque); the reduced-motion static path folds a constant 0.85.
+    let alphaHash = 0 >>> 0;
+    let lastAlpha = 1;
+    let _alpha = 1;
     // Color-over-life PROBE (v1.12.0). A `lifeColors` burst moves ONLY ctx.fillStyle; it draws no
     // translate, so it adds NOTHING to the position `hash` (colorHash is kept entirely out of the mix,
     // like strokeHash/sumX/maxY -- every committed position fingerprint is byte-identical whether or
@@ -229,7 +245,7 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
 
     const ctx = {
         fillStyle: '', strokeStyle: '', lineWidth: 1, lineJoin: '', lineCap: '',
-        font: '', textAlign: '', textBaseline: '', globalAlpha: 1,
+        font: '', textAlign: '', textBaseline: '',
         clearRect() {},
         // Body paints: fold the current fillStyle into the color-over-life probe. Covers rect
         // (fillRect), circle (arc + fill), and star/triangle/custom-vector (fill). Sprites blit
@@ -267,6 +283,21 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
         canvas: c,
     };
     c.getContext = () => ctx;
+    // globalAlpha is a plain FIELD, not a method: convert it to a get/set accessor so a fade-in can be
+    // folded on SET (crux v1.19.0). The engine only ever WRITES globalAlpha (trail :alpha*TRAIL_ALPHA,
+    // body :alpha, static :0.85) and never reads it, so a setter that stores + folds and a getter that
+    // returns the backing value is transparent to shipped code. Kept OUT of `hash`, like scaleHash.
+    Object.defineProperty(ctx, 'globalAlpha', {
+        get() { return _alpha; },
+        set(v) {
+            _alpha = v;
+            if (record) {
+                lastAlpha = v;
+                alphaHash = (Math.imul(alphaHash ^ (Math.round(v * 4096) | 0), 16777619)) >>> 0;
+            }
+        },
+        configurable: true,
+    });
     Object.defineProperty(c, 'hash', { get() { return hash >>> 0; } });
     Object.defineProperty(c, 'sumX', { get() { return sumX; } });
     Object.defineProperty(c, 'maxY', { get() { return maxY; } });
@@ -282,6 +313,8 @@ export function makeCanvas({ record = false, assertFinite = false } = {}) {
     Object.defineProperty(c, 'lastScale', { get() { return lastScale; } });
     Object.defineProperty(c, 'lastScaleX', { get() { return lastScaleX; } });
     Object.defineProperty(c, 'colorHash', { get() { return colorHash >>> 0; } });
+    Object.defineProperty(c, 'alphaHash', { get() { return alphaHash >>> 0; } });
+    Object.defineProperty(c, 'lastAlpha', { get() { return lastAlpha; } });
     return c;
 }
 

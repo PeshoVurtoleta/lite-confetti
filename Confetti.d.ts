@@ -142,6 +142,20 @@ export interface BurstOptions {
      * effect under reduced motion.
      */
     flutterRate?: number;
+    /**
+     * Birth-opacity ramp -- the FIRST public knob on the render-OPACITY axis (v1.19.0). Fade each piece
+     * up from fully transparent over the FIRST `fadeIn` fraction of its life: `0.4` eases in over the first
+     * 40%, `1` ramps across the whole life. It is the mirror of the hardcoded death fade-OUT and MULTIPLIES
+     * the same alpha, so for a normal life the two act in disjoint windows (in near birth, out near death)
+     * and for a very short life they overlap and correctly multiply; the death fade is UNCHANGED. A pure
+     * RENDER overlay on `ctx.globalAlpha` -- it never touches `pool.x/y/vx/vy`, draws no RNG, and reads only
+     * the life fraction, so the seeded POSITION fingerprint (and the rotate/scale/stroke/color streams) is
+     * byte-identical whether off or on. The trail ribbon shares the body alpha, so the streak materializes
+     * in with the body. Coerced with `clamp01`: non-finite/non-numeric/undefined/negative -> `0` (off,
+     * today's instant-on look), a value > 1 clamps to `1`. Honored by both `burst()` and `spray()`; no
+     * effect under reduced motion (the constant static opacity is untouched).
+     */
+    fadeIn?: number;
     /** Per-particle turbulence: a rotating acceleration (px/sec^2) that makes each particle
      *  wander organically. Default 0 (none). Opt-in, fingerprint-safe, draws no RNG; no effect
      *  under reduced motion. */

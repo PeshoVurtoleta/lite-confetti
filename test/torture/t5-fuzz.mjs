@@ -80,6 +80,7 @@ function genOp(prng, allowReseed) {
                 spinRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // tumble-speed multiplier, half at 1 (off); else [-2,3], render-only, zero-rng
                 scaleTo: (prng() % 2 === 0) ? 1 : (prng() % 301) / 100, // size-over-life target, half at 1 (off); else [0,3], render-only, zero-rng
                 flutterRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // wobble-speed multiplier, half at 1 (off); else [-2,3], render-only, zero-rng (flutter defaults to 1, so it is non-vacuous)
+                fadeIn: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100, // birth-opacity ramp, half at 0 (off); else [0,1], render-only, zero-rng (globalAlpha overlay)
                 lifeMin: 0.5 + (prng() % 200) / 100,
                 lifeMax: 2.5 + (prng() % 200) / 100,
             },
@@ -110,6 +111,7 @@ function genOp(prng, allowReseed) {
                 spinRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // tumble-speed multiplier, half at 1 (off); else [-2,3], spray honors it, zero-rng
                 scaleTo: (prng() % 2 === 0) ? 1 : (prng() % 301) / 100, // size-over-life target, half at 1 (off); else [0,3], spray honors it, zero-rng
                 flutterRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // wobble-speed multiplier, half at 1 (off); else [-2,3], spray honors it, zero-rng
+                fadeIn: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100, // birth-opacity ramp, half at 0 (off); else [0,1], spray honors it, zero-rng
             },
         };
     }
@@ -152,9 +154,9 @@ export function run() {
             apply(B, op);
             if (op.kind === 'pump') {
                 pump(1, op.dt); // one pump drives BOTH updates on the shared rAF queue
-                check(ca.hash === cb.hash && ca.strokeHash === cb.strokeHash && ca.rotateHash === cb.rotateHash && ca.scaleHash === cb.scaleHash, () =>
+                check(ca.hash === cb.hash && ca.strokeHash === cb.strokeHash && ca.rotateHash === cb.rotateHash && ca.scaleHash === cb.scaleHash && ca.alphaHash === cb.alphaHash, () =>
                     `T5 F1: op ${i} seed ${SEED}: same-seed instances diverged ` +
-                    `(A ${ca.hash}/${ca.strokeHash}/${ca.rotateHash}/${ca.scaleHash} != B ${cb.hash}/${cb.strokeHash}/${cb.rotateHash}/${cb.scaleHash})`);
+                    `(A ${ca.hash}/${ca.strokeHash}/${ca.rotateHash}/${ca.scaleHash}/${ca.alphaHash} != B ${cb.hash}/${cb.strokeHash}/${cb.rotateHash}/${cb.scaleHash}/${cb.alphaHash})`);
             }
         }
         A.destroy();

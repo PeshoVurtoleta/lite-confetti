@@ -15,7 +15,7 @@ zero-GC motion trails, color-over-life ramps, spawn emitter shapes (line / ring 
 staggered emission (a burst cascades in over a ms window), velocity-aligned orientation
 (pieces bank broadside to their flight, like leaves), tunable tumble speed (slow drift to
 reverse spin), size-over-life ramps (shrink-out / bloom), tunable wobble speed (lazy flutter
-to fast shimmer), and reduced-motion support.
+to fast shimmer), birth-opacity ramps (materialize-in), and reduced-motion support.
 
 **The confetti library that canvas-confetti wishes it was.**
 
@@ -119,6 +119,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `spinRate` | number | `1` | Tumble-speed multiplier on the seeded random spin: `1` = as seeded, `0` = rigid at the random birth tilt, `0.3` = slow drift, `2` = double, negative = reverse. Coerced with `num` (non-finite → `1`; `0` and negatives are valid). A pure render-orientation overlay — the seeded position stream is byte-identical off or on, **even with `turbulence` armed**. Honored by `burst()` **and** `spray()`. See [Tumble speed](#tumble-speed). |
 | `scaleTo` | number | `1` | Size-over-life target: lerp each piece's **rendered** size from `1.0` at birth to `scaleTo` at death (isotropic, both axes). `0.2` shrinks out, `2` grows/blooms, `0` vanishes at death; `1` = constant size. Coerced with `nonneg`: a **negative** clamps to `0` (a size has no direction — not a mirror flip, not a fallback to `1`); non-finite → `1`. A pure render-scale overlay folded into flutter's `ctx.scale` — `pool.w`/`pool.h` untouched, so the seeded position stream is byte-identical off or on; the trail keeps its birth width. Honored by `burst()` **and** `spray()`. See [Size over life](#size-over-life). |
 | `flutterRate` | number | `1` | Tumble-wobble **speed** multiplier on the seeded flutter (the speed knob to `flutter`'s depth): `1` = as seeded, `0` = frozen at the random birth tilt, `0.3` = slow lazy flutter, `2` = fast shimmer, negative = reversed. Coerced with `num` (`0` and negatives valid; non-finite → `1`). **Inert when `flutter` is 0** (a zero-depth wobble has no speed). A pure render-phase overlay about a birth pivot that never touches `pool.tilt` — the seeded position stream is byte-identical off, on, or on-with-turbulence. Honored by `burst()` **and** `spray()`. See [Wobble speed](#wobble-speed). |
+| `fadeIn` | number | `0` | Birth-**opacity** ramp: fade each piece up from transparent over the **first `fadeIn` fraction** of its life (`0.4` = ease in over the first 40%, `1` = ramp across the whole life; `0` = instant-on). The mirror of the hardcoded death fade-out, **multiplying** the same `alpha`. Coerced with `clamp01` (non-finite/negative → `0` off, `> 1` → `1`). A pure render overlay on `ctx.globalAlpha` that never touches `pool.x/y/vx/vy` — the seeded position stream is byte-identical off or on (and rotate/scale/stroke/color too). The trail materializes in with the body. Honored by `burst()` **and** `spray()`; inert under reduced motion. See [Birth opacity](#birth-opacity). |
 | `angle` | number | `-Math.PI / 2` | Center angle of emission cone in radians. -π/2 = upward. |
 | `onComplete` | Function | — | Called when all burst particles have died |
 
@@ -393,6 +394,22 @@ c.burst({ flutterRate: 2, flutter: 1 });
 - **`1`** (default) is the seeded rate as-is; **`0`** freezes the wobble at each piece's *own random birth tilt* (a varied constant per piece, not collapsed to one value); **`0.3`** is a slow lazy flutter; **`2`** is a fast shimmer; a **negative** value reverses the phase. Coerced with `num` (`0` and negatives are valid; non-finite → `1`), never `clamp01` — a rate multiplier is not a `0..1` blend.
 - **Inert when `flutter` is 0.** `flutter` (depth) multiplies the whole `(1 − |cos|)` term; at `flutter: 0` the wobble is `1` regardless of the phase, so there is no speed to scale. So a `flutterRate` demo always sets `flutter: 1`.
 - **A pure render overlay, turbulence-safe.** `flutterRate` is a render-time *phase scale* about a birth pivot `tilt0`: it scales only the accumulated wobble phase and **never touches `pool.tilt`** — the phase the `turbulence` curl and `sway` read. So it is fully decoupled from both, and the seeded position stream (and every committed fingerprint) is byte-identical whether off, on, or on-with-turbulence — only the wobble earns its own deterministic fingerprint (reusing the `scaleHash` probe, no new channel). Draws **no rng**. Honored by both `burst()` and `spray()`; inert under reduced motion.
+
+### Birth opacity
+
+For eighteen releases a piece's *opacity* had exactly one hardcoded behaviour: a death fade-*out* over the last 30% of life. **`fadeIn`** (added in v1.19.0) opens the render-opacity axis — an opt-in scalar that **ramps a piece up from transparent over the first `fadeIn` fraction of its life**, so it *materializes in*. It is the mirror of the death fade, on the same `alpha` scalar, by the same age fraction (`1 − life/maxL`) the death-fade and `lifeColors` already use.
+
+```js
+// Materialize in over the first 40% of life, then the built-in death fade takes it out.
+c.burst({ fadeIn: 0.4, gravity: 300 });
+// Compose with size-over-life: a piece that fades in AND shrinks out.
+c.burst({ fadeIn: 0.4, scaleTo: 0.2, gravity: 200 });
+```
+
+- **`0`** (default) is today's instant-on look; **`0.4`** eases in over the first 40% of life; **`1`** ramps across the whole life. Coerced with `clamp01` (non-finite / non-numeric / undefined / negative → `0` off; `> 1` → `1`), exactly like `align` — a fraction of life, not a rate.
+- **It multiplies the existing alpha.** The birth fade-in and the hardcoded death fade-out act on the *same* `alpha`: for a normal life they fall in disjoint windows (in near birth, out near death); for a very short life they overlap and correctly multiply. The death fade-out is unchanged.
+- **The cleanest pure render overlay in the suite.** `fadeIn` changes only `ctx.globalAlpha` — it never touches `pool.x/y/vx/vy` or `ctx.translate`, draws **no rng**, and reads only the life fraction, so the seeded position stream (and the rotate/scale/stroke/color fingerprints) is byte-identical whether off or on; only the alpha earns its own deterministic fingerprint. Unlike `spinRate`/`flutterRate` it needs no birth pivot and no decoupling machinery — nothing downstream reads alpha.
+- **The trail materializes in with the body.** The ribbon already tracks the body `alpha` (the death fade dims it too); folding `fadeIn` in before the trail block makes the streak fade up with the body for free — no independent trail opacity, and the trail *geometry* fingerprint is untouched. Honored by both `burst()` and `spray()`; inert under reduced motion (the constant static opacity is untouched).
 
 ### Canvas Sizing
 
@@ -734,21 +751,22 @@ The pool is `maxParticles` wide. Per particle, the **always-on** columns cost a 
 | `scaleTo` | Float32 | 4 | 104 |
 | `tilt0` | Float32 | 4 | 108 |
 | `flutterRate` | Float32 | 4 | 112 |
-| `turb` | Float32 | 4 | 116 |
-| `gust` | Float32 | 4 | 120 |
-| `vortX` | Float32 | 4 | 124 |
-| `vortY` | Float32 | 4 | 128 |
-| `attract` | Float32 | 4 | 132 |
-| `swirl` | Float32 | 4 | 136 |
-| `settle` | Float32 | 4 | 140 |
-| `delay` | Float32 | 4 | 144 |
-| `landed` | Uint8 | 1 | 145 |
-| `shape` | Uint8 | 1 | 146 |
-| **always-on total** | **36×F32 + 2×U8** | **146** | **146** |
+| `fadeIn` | Float32 | 4 | 116 |
+| `turb` | Float32 | 4 | 120 |
+| `gust` | Float32 | 4 | 124 |
+| `vortX` | Float32 | 4 | 128 |
+| `vortY` | Float32 | 4 | 132 |
+| `attract` | Float32 | 4 | 136 |
+| `swirl` | Float32 | 4 | 140 |
+| `settle` | Float32 | 4 | 144 |
+| `delay` | Float32 | 4 | 148 |
+| `landed` | Uint8 | 1 | 149 |
+| `shape` | Uint8 | 1 | 150 |
+| **always-on total** | **37×F32 + 2×U8** | **150** | **150** |
 
-The render-orientation / render-scale family added over v1.15.0–v1.18.0 is six of those columns — `align` + `spin0` + `spinRate` + `scaleTo` + `tilt0` + `flutterRate` = 4 + 4 + 4 + 4 + 4 + 4 = **24 B/particle** — each a birth pivot or a render-time multiplier that never enters `ctx.translate`, so they cost bytes but move no fingerprint.
+The render-orientation / render-scale / render-opacity family added over v1.15.0–v1.19.0 is seven of those columns — `align` + `spin0` + `spinRate` + `scaleTo` + `tilt0` + `flutterRate` + `fadeIn` = 4 + 4 + 4 + 4 + 4 + 4 + 4 = **28 B/particle** — each a birth pivot or a render-time multiplier that never enters `ctx.translate`, so they cost bytes but move no fingerprint.
 
-Two more classes sit **outside** the always-on 146 B:
+Two more classes sit **outside** the always-on 150 B:
 
 | Buffer | Type | B/particle | When |
 |---|---|---:|---|
@@ -765,7 +783,7 @@ The trail ring buffers are allocated **only** when the instance is built with a 
 The gated quality numbers the torture harness commits, so a regression fails CI as loudly as a leak:
 
 - **Alloc gate.** `update()` over a **full `maxParticles` pool** — including a custom vector shape, an image sprite, the living-air forces, and a trailed pool — retains **~0 B/frame**, measured against a retained-bytes floor of **8.0 B/frame** (`RETAIN_FLOOR_BPF`). A per-frame-allocating control provably exceeds it.
-- **Determinism.** Every feature-off path preserves the committed default determinism fingerprint **`1569828004`** byte-for-byte (each opt-in feature — wind, floor, box, living air, trails, vortex, settle, life colors, emit, stagger, align, spinRate, scaleTo, flutterRate — carries its own committed fingerprint when on, and leaves the default untouched when off).
+- **Determinism.** Every feature-off path preserves the committed default determinism fingerprint **`1569828004`** byte-for-byte (each opt-in feature — wind, floor, box, living air, trails, vortex, settle, life colors, emit, stagger, align, spinRate, scaleTo, flutterRate, fadeIn — carries its own committed fingerprint when on, and leaves the default untouched when off).
 - **GC budget.** The full-pool loop runs under `@zakkster/lite-gc-profiler` with `maxMajor: 0` and 0 retained bytes under `@zakkster/lite-leak`, all under `--expose-gc`.
 
 </details>
@@ -774,15 +792,15 @@ The gated quality numbers the torture harness commits, so a regression fails CI 
 
 ## Testing
 
-**204 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
+**215 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
 
 ```bash
-npm test          # 204 node:test cases (contract + boundary + fingerprint)
+npm test          # 215 node:test cases (contract + boundary + fingerprint)
 npm run torture   # @zakkster/lite-leak + lite-gc-profiler under --expose-gc
 npm run verify    # test + torture, the publish gate
 ```
 
-The unit suite (`test/Confetti.test.mjs`) covers the full options surface, fail-closed input sanitisation, per-feature determinism fingerprints, shape dispatch (built-in + `registerShape` vector/sprite + `shapes` mixing), the bounding box, living-air and vortex forces, settle/pile lifecycle, color-over-life, emitter shapes, staggered emission, and the render-orientation / render-scale overlays (`align`, `spinRate`, `scaleTo`, `flutterRate`).
+The unit suite (`test/Confetti.test.mjs`) covers the full options surface, fail-closed input sanitisation, per-feature determinism fingerprints, shape dispatch (built-in + `registerShape` vector/sprite + `shapes` mixing), the bounding box, living-air and vortex forces, settle/pile lifecycle, color-over-life, emitter shapes, staggered emission, and the render-orientation / render-scale / render-opacity overlays (`align`, `spinRate`, `scaleTo`, `flutterRate`, `fadeIn`).
 
 The torture harness (`node --expose-gc test/torture.mjs`) runs nine tiers strictly sequentially — **T0** metamorphic laws, **T1** degenerate inputs, **T3** adversarial op orders, **T4** handle / stub / buffer abuse, **T5** differential determinism, **T6** the zero-alloc gate (hard), **T7** soak + occupancy conservation, **T8** cross-package poison + shared-ticker retention, **T9** controls — with T2 (aliasing) intentionally omitted, as confetti shares no caller-owned buffers. The gate pairs `@zakkster/lite-leak` (retention returns to `size 0`) with `@zakkster/lite-gc-profiler` (`maxMajor: 0`). **T9** is the negative-control tier: every gate is shown a workload that *must* trip it, so a clean read is never a vacuous pass. Without `--expose-gc` the memory tiers degrade to inconclusive and the gate exits 0. No gate output is a FAIL.
 
@@ -791,6 +809,13 @@ The torture harness (`node --expose-gc test/torture.mjs`) runs nine tiers strict
 ## Changelog
 
 Full history in [CHANGELOG.md](./CHANGELOG.md).
+
+### v1.19.0
+
+**Birth opacity.** The first feature on the *render-opacity* axis — for eighteen releases opacity had one hardcoded behaviour, a death fade-out over the last 30% of life; now a piece can **materialize in**, fading up from transparent over the first fraction of its life.
+
+- `fadeIn: number` on `burst()` **and** `spray()`. `0` (default) = instant-on, `0.4` = ease in over the first 40% of life, `1` = ramp across the whole life. The mirror of the death fade, multiplying the same `alpha`. Coerced with `clamp01` (non-finite / negative → `0` off, `> 1` → `1`).
+- The **cleanest pure render overlay** in the suite: it changes only `ctx.globalAlpha`, never touches `pool.x/y/vx/vy`, draws no rng, and reads only the life fraction, so the seeded position stream (and the rotate/scale/stroke/color fingerprints) is byte-identical whether off or on; only the alpha earns its own deterministic fingerprint. No birth pivot, no decoupling machinery. The trail materializes in with the body. Inert under reduced motion. See [Birth opacity](#birth-opacity).
 
 ### v1.18.0
 

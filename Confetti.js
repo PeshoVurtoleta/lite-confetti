@@ -1,10 +1,27 @@
 /**
- * @zakkster/lite-confetti v1.18.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.19.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.19.0 adds: `fadeIn` -- a birth-opacity ramp, the FIRST public knob on the render-OPACITY axis. For
+ * eighteen releases a piece's opacity had exactly ONE hardcoded behaviour: a death fade-OUT over the last
+ * 30% of life. Every OTHER render channel already had a public knob (rotation via align/spinRate, scale via
+ * scaleTo/flutterRate, color via lifeColors) but OPACITY had none, so a piece that MATERIALIZES in (fades up
+ * from transparent at birth) was unreachable. `fadeIn` opens that channel: an opt-in scalar that ramps alpha
+ * 0 -> 1 over the FIRST `fadeIn` fraction of each piece's life, by the age fraction (1 - lifeT) the death-fade
+ * + lifeColors already use. `fadeIn: 0.4` eases in over the first 40% of life; default `0` = today's
+ * instant-on look. It MULTIPLIES the existing alpha (birth fade-in near birth, death fade-out near death act
+ * in disjoint windows for a normal life and correctly multiply for a very short one); the death fade-out is
+ * UNCHANGED. The crux: it is the cleanest overlay in the suite -- a PURE RENDER overlay on ctx.globalAlpha
+ * that never touches ctx.translate / x / y / vx / vy, draws no rng, and reads only `lifeT`, so the seeded
+ * POSITION stream is byte-identical off or on (and rotate/scale/stroke/color streams too). The trail ribbon
+ * shares the body `alpha` (folded BEFORE the trail block), so the streak materializes in with the body for
+ * free -- no new column, no decoupling machinery (nothing downstream reads alpha). Coerced with
+ * `clamp01(fadeIn, 0)`; both burst AND spray honor it; inert under reduced motion (the static 0.85 is
+ * untouched); zero rng, zero allocation (stack locals). A new `alphaHash`/`lastAlpha` harness probe folds
+ * globalAlpha out-of-hash, so no committed position/rotate/scale/stroke/color fingerprint moves.
  * v1.18.0 adds: `flutterRate` -- tumble-wobble speed, the THIRD tumble-axis knob and the flutter analog
  * of v1.16.0's `spinRate`. `flutter` (v1.3.0) sets the DEPTH of the 3D-ish X-scale wobble; its SPEED has
  * never had a public knob (`tiltV` is a fixed seeded random), so a slow lazy flutter, a wobble frozen at a
@@ -641,6 +658,7 @@ export function createConfetti(canvas, {
         scaleTo: new Float32Array(maxParticles), // render-time size-over-life target; 1 = constant size
         tilt0: new Float32Array(maxParticles),   // birth wobble phase (the pivot flutterRate scales about)
         flutterRate: new Float32Array(maxParticles), // render-time wobble-speed multiplier; 1 = as seeded
+        fadeIn: new Float32Array(maxParticles), // render-time birth-opacity ramp; 0 = off
         turb:  new Float32Array(maxParticles),   // turbulence accel magnitude (px/sec^2); 0 = none
         gust:  new Float32Array(maxParticles),   // gust accel magnitude (px/sec^2); 0 = none
         vortX: new Float32Array(maxParticles),   // vortex/attractor center X (CSS px)
@@ -790,6 +808,10 @@ export function createConfetti(canvas, {
         // would mean "frozen wobble" on a recycled slot that skipped the write (the default must be 1),
         // so this is unconditional like scaleTo. Mirrors the tilt0 birth-pivot capture above.
         pool.flutterRate[i] = config.flutterRate;
+        // Birth-opacity ramp (v1.19.0). ALWAYS written (house style + fail-closed pool-reuse reset). Here
+        // the Float32Array zero-init default of 0 HAPPENS to coincide with "off" (safe, unlike scaleTo/
+        // flutterRate whose 0 would be a bad state), but we still write unconditionally; we do not rely on it.
+        pool.fadeIn[i] = config.fadeIn;
         pool.turb[i] = config.turbulence;
         pool.gust[i] = config.gust;
         pool.vortX[i] = config.attractX;
@@ -1002,9 +1024,21 @@ export function createConfetti(canvas, {
                 if (trailN[i] < trailLen[i]) trailN[i]++;
             }
 
-            // Opacity fade in last 30% of life
+            // Opacity fade OUT over the last 30% of life (unchanged). lifeT = life/maxL: 1 at birth, 0 at death.
             const lifeT = pool.life[i] / pool.maxL[i];
-            const alpha = lifeT < 0.3 ? lifeT / 0.3 : 1;
+            let alpha = lifeT < 0.3 ? lifeT / 0.3 : 1;
+            // Birth fade-IN (v1.19.0). Off (fadeIn == 0) skips the branch -- alpha byte-identical to every prior
+            // release. When armed, ramp alpha 0 -> 1 over the FIRST `fadeIn` fraction of life by the age fraction
+            // (1 - lifeT), so a piece materializes in; near a very short life the fade-in and death fade-out
+            // windows overlap and correctly MULTIPLY. A pure RENDER overlay: alpha never touches ctx.translate /
+            // x / y / rng, so the seeded POSITION stream is byte-identical whether off or on -- only globalAlpha
+            // changes (its own alphaHash probe). clamp01 gates fadeIn to [0,1]; the `> 0` guard avoids a divide
+            // and keeps off exact. Zero rng, zero alloc (stack locals). Folded BEFORE the trail block so the
+            // ribbon (ctx.globalAlpha = alpha * TRAIL_ALPHA) materializes in WITH the body for free.
+            if (pool.fadeIn[i] > 0) {
+                const age = 1 - lifeT;                 // 0 at birth -> 1 at death
+                if (age < pool.fadeIn[i]) alpha *= age / pool.fadeIn[i];
+            }
 
             // 3D-ish tumble via X-scale oscillation. flutter (flut, 0..1) sets its depth:
             // flut == 1 reproduces the pre-1.3.0 wobble (0.5 + 0.5|cos|) exactly, flut == 0
@@ -1159,7 +1193,9 @@ export function createConfetti(canvas, {
             // (v1.17.0) is INERT too: the static path does no life integration and never calls ctx.scale,
             // so a piece is drawn once at its birth size. `flutterRate` (v1.18.0) is INERT for the same
             // reason: the static path advances no `tilt` and never calls ctx.scale, so there is no
-            // accumulated wobble phase to scale.
+            // accumulated wobble phase to scale. `fadeIn` (v1.19.0) is INERT too: the static path does no
+            // life integration and sets a constant `ctx.globalAlpha = 0.85` below, so there is no birth
+            // age fraction to ramp -- the 0.85 is deliberately untouched.
             const rotation = rng.next() * TAU;
             // Honour a `shapes` mix in the reduced-motion render too. Single-shape (null)
             // takes no extra rng draw, so the non-mixed static render is unchanged.
@@ -1228,6 +1264,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.spinRate=1]  Tumble-speed multiplier on the seeded random spin: 0 = rigid at the random birth tilt, 0.3 = slow drift, 2 = double, negative = reverse. A pure RENDER scale, so the seeded POSITION stream is byte-identical off or on, even with `turbulence` armed. Zero-rng; non-finite => 1; inert under reduced motion
          * @param {number} [options.scaleTo=1]   Size-over-life target: lerp each piece's RENDERED size from 1.0 at birth to `scaleTo` at death (isotropic, both axes). `0.2` shrinks out, `2` grows, `0` vanishes at death; `1` = constant size. A pure RENDER overlay folded into the flutter scale call -- pool.w/h untouched, so the seeded POSITION stream is byte-identical off or on. Coerced with nonneg: a NEGATIVE clamps to 0 (a size has no direction), NOT a mirror flip and NOT a fallback to 1; non-finite => 1. The trail ribbon keeps its birth width. Zero-rng; inert under reduced motion
          * @param {number} [options.flutterRate=1] Tumble-wobble SPEED multiplier on the seeded flutter (the SPEED knob to `flutter`'s DEPTH): 0 = wobble frozen at the random birth tilt, 0.3 = slow lazy flutter, 2 = fast shimmer, negative = reversed phase; 1 = as seeded. A pure RENDER phase scale about a birth pivot, so the seeded POSITION stream is byte-identical off or on, even with `turbulence` armed. Inert when `flutter` is 0 (a zero-depth wobble has no speed). Zero-rng; non-finite => 1; inert under reduced motion
+         * @param {number} [options.fadeIn=0]     Birth-opacity ramp: fade each piece up from transparent over the FIRST `fadeIn` fraction of its life (`0.4` eases in over the first 40%). The mirror of the hardcoded death fade-out, MULTIPLYING the same alpha; `1` ramps across the whole life; default `0` = today's instant-on. A pure RENDER overlay on ctx.globalAlpha -- pool.x/y/v untouched, so the seeded POSITION stream is byte-identical off or on. The trail ribbon materializes in with the body (shares the alpha). clamp01: non-finite/undefined/negative => 0 (off), > 1 clamps to 1. Zero-rng; inert under reduced motion
          * @param {number} [options.turbulence=0] Per-particle rotating accel px/sec^2 (organic wander). Opt-in, zero-rng, fingerprint-safe
          * @param {number} [options.gust=0]      Global oscillating horizontal accel px/sec^2 layered on wind (~3s swells). Opt-in, zero-rng
          * @param {number} [options.attract=0]   Vortex radial spring strength (1/sec^2, scaled by distance): + pulls toward the center, - repels. Opt-in, zero-rng, fingerprint-safe
@@ -1272,6 +1309,7 @@ export function createConfetti(canvas, {
                   spinRate = 1,
                   scaleTo = 1,
                   flutterRate = 1,
+                  fadeIn = 0,
                   turbulence = 0,
                   gust = 0,
                   attract = 0,
@@ -1373,7 +1411,7 @@ export function createConfetti(canvas, {
                 : (trail === undefined ? trailCap : Math.min(trailCap, Math.floor(nonneg(trail, trailCap))));
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), scaleTo: nonneg(scaleTo, 1), flutterRate: num(flutterRate, 1), turbulence, gust, trailLen: trailDraw,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), scaleTo: nonneg(scaleTo, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), turbulence, gust, trailLen: trailDraw,
                 attract, swirl, attractX: vortX, attractY: vortY, settle, lifeRamp,
             };
 
@@ -1435,6 +1473,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.spinRate=1]     Tumble-speed multiplier on the seeded random spin (0 = rigid at the random birth tilt, 0.3 = slow drift, 2 = double, negative = reverse). A pure render scale -- the seeded position stream is byte-identical off or on, even with `turbulence` armed. Zero-rng; non-finite => 1
          * @param {number} [options.scaleTo=1]      Size-over-life target: lerp each piece's rendered size from 1.0 at birth to `scaleTo` at death (isotropic). `0.2` shrinks out, `2` grows, `0` vanishes; `1` = constant size. A pure render overlay -- pool.w/h untouched, so the seeded position stream is byte-identical off or on. nonneg: a NEGATIVE clamps to 0 (not a flip, not a fallback to 1); non-finite => 1. The trail keeps its birth width. Zero-rng
          * @param {number} [options.flutterRate=1]  Tumble-wobble SPEED multiplier on the seeded flutter (0 = frozen at the random birth tilt, 0.3 = slow lazy flutter, 2 = fast shimmer, negative = reversed; 1 = as seeded). A pure render phase scale about a birth pivot -- the seeded position stream is byte-identical off or on, even with `turbulence` armed. Inert when `flutter` is 0. Zero-rng; non-finite => 1
+         * @param {number} [options.fadeIn=0]       Birth-opacity ramp: fade each piece up from transparent over the FIRST `fadeIn` fraction of its life (`0.4` eases in over the first 40%). The mirror of the hardcoded death fade-out, multiplying the same alpha; `1` ramps across the whole life; default `0` = instant-on. A pure render overlay on ctx.globalAlpha -- pool.x/y/v untouched, so the seeded position stream is byte-identical off or on. The trail materializes in with the body. clamp01: non-finite/negative => 0 (off), > 1 => 1. Zero-rng
          * @param {number} [options.turbulence=0]   Per-particle rotating accel px/sec^2 (organic wander). Opt-in, zero-rng
          * @param {number} [options.gust=0]         Global oscillating horizontal accel px/sec^2 layered on wind. Opt-in, zero-rng
          * @param {number} [options.attract=0]      Vortex radial spring strength (1/sec^2): + pulls toward the center, - repels. Opt-in, zero-rng
@@ -1476,6 +1515,7 @@ export function createConfetti(canvas, {
                   spinRate = 1,
                   scaleTo = 1,
                   flutterRate = 1,
+                  fadeIn = 0,
                   turbulence = 0,
                   gust = 0,
                   attract = 0,
@@ -1566,7 +1606,7 @@ export function createConfetti(canvas, {
                 : (trail === undefined ? trailCap : Math.min(trailCap, Math.floor(nonneg(trail, trailCap))));
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), scaleTo: nonneg(scaleTo, 1), flutterRate: num(flutterRate, 1), turbulence, gust, trailLen: trailDraw,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), scaleTo: nonneg(scaleTo, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), turbulence, gust, trailLen: trailDraw,
                 attract, swirl, attractX: vortX, attractY: vortY, settle, lifeRamp,
             };
 

@@ -181,6 +181,22 @@ export function run() {
         ['flutterRate:neg', { count: 60, flutter: 1, flutterRate: -5, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['flutterRate:tiny', { count: 60, flutter: 1, flutterRate: 1e-9, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['flutterRate:huge', { count: 60, flutter: 1, flutterRate: 1e6, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        // fadeIn poison (v1.19.0): garbage ramps coerce via clamp01 (non-finite/non-numeric/null/{} -> 0
+        // off, negative -> 0, > 1 -> 1). The render overlay is alpha *= age / fadeIn behind a `> 0` guard,
+        // so a bad fadeIn can never divide by zero nor yield a non-finite globalAlpha. Legal extremes (0,
+        // 1e-9, 1) + turbulence + wind + a bouncing box + trails confirm the ramp stays finite while forces
+        // bend the velocity every frame.
+        ['fadeIn:NaN', { count: 60, fadeIn: NaN, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeIn:Infinity', { count: 60, fadeIn: Infinity, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeIn:-Infinity', { count: 60, fadeIn: -Infinity, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeIn:nonnumeric', { count: 60, fadeIn: '0.4', turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeIn:null', { count: 60, fadeIn: null, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeIn:object', { count: 60, fadeIn: {}, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeIn:0', { count: 60, fadeIn: 0, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeIn:neg', { count: 60, fadeIn: -5, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeIn:tiny', { count: 60, fadeIn: 1e-9, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeIn:1', { count: 60, fadeIn: 1, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeIn:huge', { count: 60, fadeIn: 1e6, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
