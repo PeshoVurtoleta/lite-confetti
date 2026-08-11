@@ -288,6 +288,24 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- the fadeIn birth-opacity ramp is allocating');
     }
 
+    // (14) A death-fade live pool (v1.20.0): with fadeOut:0.8 the render guard `fo !== FADE_OUT_DEF` fires
+    // for every rendered piece INSIDE the measured window (0.8 != the fround(0.3) default), so the base
+    // alpha is recomputed (a Float32 read + a compare + the lifeT < fo ternary) and ctx.globalAlpha is set
+    // every frame; flutter:1 also arms the wobble so the render path is fully loaded. Pure stack arithmetic,
+    // so ~0 B/frame over ~MAXP pieces -- any per-frame allocation on the fadeOut path would show as retained
+    // bytes.
+    const fo = createConfetti(makeCanvas({ record: true }), { seed: 2001, maxParticles: MAXP });
+    fo.burst({ count: MAXP, x: 400, y: 300, speed: 300, spread: 2.5, gravity: 700, wind: 400,
+        flutter: 1, fadeOut: 0.8, lifeMin: 1e6, lifeMax: 1e6 });
+    pump(1, 16);
+    check(fo.count === MAXP, () => `T6: fadeOut pool has ${fo.count} alive, expected ${MAXP}`);
+    const bpfFadeOut = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    fo.destroy();
+    if (bpfFadeOut > RETAIN_FLOOR_BPF) {
+        die('T6: death-fade update() retains ' + bpfFadeOut.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the fadeOut death-fade window is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -307,6 +325,7 @@ export async function run() {
         + bpfSpin.toFixed(2) + ' B/frame from a tumble-scaled (spinRate + turbulence) live pool, '
         + bpfScale.toFixed(2) + ' B/frame from a size-ramped (scaleTo + flutter) live pool, '
         + bpfFlut.toFixed(2) + ' B/frame from a flutter-rated (flutterRate + turbulence) live pool, '
-        + bpfFade.toFixed(2) + ' B/frame from a fade-in (fadeIn + flutter) live pool); '
+        + bpfFade.toFixed(2) + ' B/frame from a fade-in (fadeIn + flutter) live pool, '
+        + bpfFadeOut.toFixed(2) + ' B/frame from a death-fade (fadeOut + flutter) live pool); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

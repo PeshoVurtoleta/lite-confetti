@@ -243,6 +243,45 @@ export function run() {
         c.destroy();
     }
 
+    // A11 -- pool-recycle retention for fadeOut (v1.20.0). fadeOut is UNCONDITIONALLY written at spawn --
+    // LOAD-BEARING, since a Float32 zero-init would mean "hard cut" (a WRONG default), so a recycled slot
+    // that skipped the write would render a piece that never fades out. UNLIKE fadeIn (A10), the witness
+    // canNOT be a first-frame lastAlpha===1: fadeOut acts at DEATH, so alpha is 1 at birth for ANY window
+    // (non-discriminating). Instead sample a LATE frame INSIDE the default fade window and compare the
+    // recycled slot against a FRESH reference. A leaked fadeOut:0 (hard cut) would read 1 while the fresh
+    // default reads < 1 -> divergence. Equal + strictly < 1 proves the spawn write overwrote the stale value
+    // AND that we are genuinely in the window. A lastAlpha SNAPSHOT compare, not a cumulative-hash replay.
+    {
+        const lateAlpha = (c, canvas) => {
+            c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 0,
+                lifeMin: 0.5, lifeMax: 0.5 });
+            pump(1, 1000);
+            for (let f = 0; f < 25; f++) pump(1, 16);
+            return canvas.lastAlpha;
+        };
+        const canvasA = makeCanvas({ record: true });
+        const cA = createConfetti(canvasA, { seed: 7, maxParticles: 1 });
+        const canvasB = makeCanvas({ record: true });
+        const cB = createConfetti(canvasB, { seed: 7, maxParticles: 1 });
+        const err = capture(() => {
+            for (let cycle = 0; cycle < 5; cycle++) {
+                cA.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 0,
+                    fadeOut: 0, lifeMin: 0.5, lifeMax: 0.5 });
+                for (let f = 0; f < 20; f++) pump(1, 50);
+                check(cA.count === 0, () => `T3 A11: cycle ${cycle} single-slot pool did not drain the fadeOut:0 piece (count ${cA.count})`);
+            }
+            const aAlpha = lateAlpha(cA, canvasA);   // recycled slot, plain (default) burst
+            const bAlpha = lateAlpha(cB, canvasB);   // fresh reference, same plain burst
+            check(aAlpha === bAlpha, () =>
+                `T3 A11: a recycled slot leaked a stale fadeOut -- late body alpha ${aAlpha} != fresh ${bAlpha}`);
+            check(aAlpha < 1, () =>
+                `T3 A11: the retention witness must sample INSIDE the fade window (got ${aAlpha}, not < 1)`);
+        });
+        check(err === null, () => `T3 A11: threw ${err && err.message}`);
+        cA.destroy();
+        cB.destroy();
+    }
+
     check(pointerListenerCount() === baseListeners,
         () => `T3: tier leaked ${pointerListenerCount() - baseListeners} pointer listener(s) overall`);
 }

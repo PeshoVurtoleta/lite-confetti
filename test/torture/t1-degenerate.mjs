@@ -197,6 +197,23 @@ export function run() {
         ['fadeIn:tiny', { count: 60, fadeIn: 1e-9, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
         ['fadeIn:1', { count: 60, fadeIn: 1, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
         ['fadeIn:huge', { count: 60, fadeIn: 1e6, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        // fadeOut poison (v1.20.0): garbage windows coerce via clamp01(fadeOut, FADE_OUT_DEF) (non-finite/
+        // non-numeric/null/{} -> the 0.3 default, negative -> 0 hard cut, > 1 -> 1). The render overlay is
+        // alpha = lifeT < fadeOut ? lifeT/fadeOut : 1 behind a `!== FADE_OUT_DEF` guard, and fadeOut 0 makes
+        // `lifeT < 0` always false (no divide), so a bad fadeOut can never divide by zero nor yield a
+        // non-finite globalAlpha. Legal extremes (0, -5 -> 0, 1e-9, 1, > 1 -> 1) + turbulence + wind + a
+        // bouncing box + trails confirm the window stays finite while forces bend the velocity every frame.
+        ['fadeOut:NaN', { count: 60, fadeOut: NaN, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeOut:Infinity', { count: 60, fadeOut: Infinity, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeOut:-Infinity', { count: 60, fadeOut: -Infinity, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeOut:nonnumeric', { count: 60, fadeOut: 'x', turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeOut:null', { count: 60, fadeOut: null, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeOut:object', { count: 60, fadeOut: {}, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeOut:0', { count: 60, fadeOut: 0, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeOut:neg', { count: 60, fadeOut: -5, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeOut:tiny', { count: 60, fadeOut: 1e-9, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeOut:1', { count: 60, fadeOut: 1, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['fadeOut:huge', { count: 60, fadeOut: 1e6, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],

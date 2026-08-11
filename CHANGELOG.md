@@ -3,6 +3,39 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.20.0] - 2026-08-11
+
+Feature release: `fadeOut` -- **death-fade window**, the SECOND public knob on the **render-opacity** axis
+and the mirror of v1.19.0's `fadeIn`. For nineteen releases the *other* half of the opacity envelope -- the
+death fade -- was a magic `0.3` baked into the render body (`alpha = lifeT < 0.3 ? lifeT/0.3 : 1`): every
+piece dissolved over exactly the last 30% of its life, with no public knob. An opt-in `fadeOut` scalar
+**parameterizes that window** -- the fraction of life over which a piece dissolves *out* at the end:
+`0.6` fades over the last 60% (a long gentle dissolve), `0.1` a quick blink-out, `0` a hard cut (full
+opacity then gone -- the alpha analog of `spinRate:0`/`scaleTo:0`), `1` across the whole life; default
+`0.3` = today's exact look: `c.burst({ fadeOut: 0.6, gravity: 200 })`. Together with `fadeIn` it
+**completes the opacity envelope** -- materialize in, hold, dissolve out -- both MULTIPLYING one shared
+`alpha`: `c.burst({ fadeIn: 0.2, fadeOut: 0.9 })`.
+
+The crux is the `Math.fround(0.3)` sentinel. The default `0.3` lives in a `Float32Array`, and
+`Math.fround(0.3) !== 0.3` (the round-trip is lossy, approx `0.30000001192`), so a naive `!== 0.3` guard
+would fire on every piece even at the default and silently drift the committed opacity fingerprint. Instead
+a module const `FADE_OUT_DEF = Math.fround(0.3)` is the sentinel: coercion is `clamp01(fadeOut,
+FADE_OUT_DEF)`, the render guard is `if (fo !== FADE_OUT_DEF)`, and the original double-`0.3` death-fade
+line is left **byte-for-byte unchanged** as the default path. At the default the guard never fires, so the
+off-look opacity fingerprint (`2389639168`) and v1.19.0's `ALPHA_HASH` (`3712788104`) are preserved
+bit-for-bit; every prior committed position/rotate/scale/stroke/color fingerprint is untouched.
+
+`fadeOut` is a pure render overlay on `ctx.globalAlpha` -- it reads only the life fraction, never touches
+`ctx.translate` / `pool.x/y/vx/vy`, and draws no rng -- so an armed burst reproduces the same-seed plain
+burst's position hash exactly (and rotate/scale/stroke/color); only the alpha earns its own committed hash
+(`FADEOUT_HASH 587626480`). It is the first "second knob on an axis" to cost **no harness change at all**,
+riding v1.19.0's `alphaHash`/`lastAlpha` probe verbatim; the trail dissolves out with the body for free.
+Coerced with `clamp01` against the fround sentinel (negative -> `0` hard cut, *not* a fallback to the
+default; `> 1` -> `1`); the unconditional spawn write is load-bearing here (a zero-init `0` would mean "no
+death fade", a wrong default). One new Float32 pool column (+4 B/particle, always-on total 150 -> 154).
+Honored by `burst()` AND `spray()`; inert under reduced motion (the constant static `0.85` is untouched).
+Unit suite 215 -> 226; torture adds a death-fade alloc lane and a late-frame `lastAlpha` retention proof.
+
 ## [1.19.0] - 2026-08-10
 
 Feature release: `fadeIn` -- **birth-opacity ramp**, the FIRST public knob on the **render-opacity** axis.

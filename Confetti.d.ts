@@ -156,6 +156,21 @@ export interface BurstOptions {
      * effect under reduced motion (the constant static opacity is untouched).
      */
     fadeIn?: number;
+    /**
+     * Death-fade window -- the SECOND public knob on the render-OPACITY axis (v1.20.0), the mirror of
+     * `fadeIn`. The fraction of life over which each piece dissolves OUT at the END: `0.6` fades over the
+     * last 60% (a long gentle dissolve), `0.1` a quick blink-out, `1` fades across the whole life; default
+     * `0.3` = today's exact look (the previously hardcoded window). It MULTIPLIES the same alpha as `fadeIn`,
+     * so the two compose into the full opacity envelope -- materialize in, hold, dissolve out. A pure RENDER
+     * overlay on `ctx.globalAlpha` -- it never touches `pool.x/y/vx/vy`, draws no RNG, and reads only the
+     * life fraction, so the seeded POSITION fingerprint (and the rotate/scale/stroke/color streams) is
+     * byte-identical whether off or on. The trail ribbon shares the body alpha, so the streak dissolves out
+     * with the body. Coerced with `clamp01`: non-finite/non-numeric/undefined -> `0.3` (the default window);
+     * a NEGATIVE value (e.g. `-1`) clamps to `0` = a hard cut (full opacity then gone), NOT a fallback to the
+     * default; a value > 1 clamps to `1`. Honored by both `burst()` and `spray()`; no effect under reduced
+     * motion (the constant static opacity is untouched).
+     */
+    fadeOut?: number;
     /** Per-particle turbulence: a rotating acceleration (px/sec^2) that makes each particle
      *  wander organically. Default 0 (none). Opt-in, fingerprint-safe, draws no RNG; no effect
      *  under reduced motion. */
