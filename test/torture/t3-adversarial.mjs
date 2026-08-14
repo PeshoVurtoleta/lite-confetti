@@ -282,6 +282,73 @@ export function run() {
         cB.destroy();
     }
 
+    // A12 -- pool-recycle retention for friction (v1.21.0). friction is ALWAYS written at spawn for
+    // pool-reuse correctness; UNLIKE fadeOut its Float32 zero-init 0 already means "off", so the write is
+    // NOT load-bearing, but this tier proves the reset holds regardless. friction acts DURING FLIGHT (at
+    // floor contact), not at death, so there is no late-frame constraint -- BUT the position/sumX stream is
+    // lifetime-CUMULATIVE, so the witness is a hash-neutral sumX SNAPSHOT DELTA, NOT "a following burst
+    // reproduces FLOOR_HASH" (the cumulative-hash trap). A single-slot pool forces slot 0 reuse: fire 5
+    // friction:0.9 floor-skid bursts, draining each, then RESEED (so the plain burst draws the identical rng
+    // sequence as a fresh instance) and fire a plain friction:0 floor burst; its sumX delta must equal a
+    // fresh instance's plain-burst sumX. A leaked friction:0.9 would have damped the recycled plain burst's
+    // skid -> a smaller sumX delta. Separately, an armed friction:0.9 burst's sumX must differ from the
+    // plain one (the witness is non-vacuous).
+    {
+        const RSEED = 7;
+        const floorSkid = { count: 1, x: 400, y: 150, speed: 300, spread: 0.6, gravity: 900,
+            floor: 360, wind: 800, bounce: 0, lifeMin: 1.0, lifeMax: 1.0 };
+        // The shared Ticker caps its FIRST tick's dt (16.66ms vs 16ms), a process-global one-off that
+        // perturbs the very first burst's trajectory by a few integer pixels. Consume it with a throwaway
+        // instance so the cumulative sumX witness below compares like-for-like. Each measured instance is
+        // then the SOLE live one (destroyed before the next), so no coexisting ticker callback can perturb it.
+        const warm = createConfetti(makeCanvas(), { seed: 1, maxParticles: 1 });
+        warm.burst({ count: 1, lifeMin: 0.1, lifeMax: 0.1 });
+        for (let f = 0; f < 12; f++) pump(1, 16);
+        warm.destroy();
+        // A plain (friction:0) floor burst's own sumX contribution, isolated as a delta: after the pool has
+        // drained, sumX is frozen, so (after - before) is exactly the plain burst's draws. c.seed() aligns
+        // the rng with a fresh instance so ONLY a leaked friction could move the result.
+        const plainDelta = (c, canvas) => {
+            c.seed(RSEED);
+            const before = canvas.sumX;
+            c.burst({ ...floorSkid, friction: 0 });
+            for (let f = 0; f < 70; f++) pump(1, 16);
+            return canvas.sumX - before;
+        };
+        const err = capture(() => {
+            // A: recycle slot 0 through 5 armed friction:0.9 skids (draining each), then a plain burst.
+            const canvasA = makeCanvas({ record: true });
+            const cA = createConfetti(canvasA, { seed: RSEED, maxParticles: 1 });
+            for (let cycle = 0; cycle < 5; cycle++) {
+                cA.burst({ ...floorSkid, friction: 0.9 });
+                let guard = 0;
+                while (cA.count > 0 && guard++ < 500) pump(1, 16);
+                check(cA.count === 0, () => `T3 A12: cycle ${cycle} single-slot pool did not drain the friction:0.9 piece (count ${cA.count})`);
+            }
+            const aDelta = plainDelta(cA, canvasA);   // recycled slot, plain (friction:0) burst
+            cA.destroy();
+            // B: fresh instance, only the plain burst (measured as the sole live instance).
+            const canvasB = makeCanvas({ record: true });
+            const cB = createConfetti(canvasB, { seed: RSEED, maxParticles: 1 });
+            const bDelta = plainDelta(cB, canvasB);
+            cB.destroy();
+            check(aDelta === bDelta, () =>
+                `T3 A12: a recycled slot leaked a stale friction -- plain-burst sumX delta ${aDelta} != fresh ${bDelta}`);
+            // Non-vacuous: an ARMED friction:0.9 skid draws a DIFFERENT sumX than the plain one (friction
+            // genuinely damps the slide), so the equality above is a real proof, not comparing constants.
+            const canvasC = makeCanvas({ record: true });
+            const cC = createConfetti(canvasC, { seed: RSEED, maxParticles: 1 });
+            cC.seed(RSEED);
+            cC.burst({ ...floorSkid, friction: 0.9 });
+            for (let f = 0; f < 70; f++) pump(1, 16);
+            const armedDelta = canvasC.sumX;
+            cC.destroy();
+            check(armedDelta !== bDelta, () =>
+                `T3 A12: friction:0.9 did not change the skid sumX vs friction:0 (${armedDelta} == ${bDelta}) -- the witness is vacuous`);
+        });
+        check(err === null, () => `T3 A12: threw ${err && err.message}`);
+    }
+
     check(pointerListenerCount() === baseListeners,
         () => `T3: tier leaked ${pointerListenerCount() - baseListeners} pointer listener(s) overall`);
 }

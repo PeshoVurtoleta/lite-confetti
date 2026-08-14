@@ -593,6 +593,11 @@
                 <input type="range" id="settle" min="0" max="120" value="0" step="10">
             </div>
             <div class="control">
+                <div class="control-header"><span class="control-name">friction</span><span class="control-val"
+                                                                                            id="frictionVal">off</span></div>
+                <input type="range" id="friction" min="0" max="1" value="0" step="0.05">
+            </div>
+            <div class="control">
                 <div class="control-header"><span class="control-name">box</span><span class="control-val"
                                                                                        id="boxVal">off</span></div>
                 <input type="range" id="box" min="0" max="1" value="0" step="1">
@@ -661,6 +666,7 @@
                 <button class="btn" id="frozenBtn">❄️ Frozen wobble</button>
                 <button class="btn" id="fadeInBtn">🌅 Fade in</button>
                 <button class="btn" id="fadeOutBtn">🌇 Dissolve out</button>
+                <button class="btn" id="skidBtn">🛝 Skid</button>
             </div>
             <div class="btn-row">
                 <button class="btn" id="followBtn" aria-pressed="false">🧲 Follow</button>
@@ -717,12 +723,13 @@
     const $frozenBtn = document.getElementById('frozenBtn');
     const $fadeInBtn = document.getElementById('fadeInBtn');
     const $fadeOutBtn = document.getElementById('fadeOutBtn');
+    const $skidBtn = document.getElementById('skidBtn');
     const $followBtn = document.getElementById('followBtn');
     const $clearBtn = document.getElementById('clearBtn');
     const $codeBtn  = document.getElementById('codeBtn');
     const $seedBtn  = document.getElementById('seedBtn');
 
-    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'box', 'spark', 'emit', 'emitSize', 'stagger', 'align', 'spinRate', 'flutterRate', 'fadeIn', 'fadeOut'];
+    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'friction', 'box', 'spark', 'emit', 'emitSize', 'stagger', 'align', 'spinRate', 'flutterRate', 'fadeIn', 'fadeOut'];
     const EMIT_SHAPES = ['off', 'line', 'ring', 'box']; // emit slider 0..3 -> shape name (v1.13.0)
     // v1.12.0 color-over-life: a fixed 3-stop ember ramp (near-white -> gold -> deep orange) the demo
     // injects when the `spark` toggle is on, so pieces cool as they age. Frozen + shared: the engine
@@ -837,6 +844,7 @@
             floor: floorPct === 0 ? Infinity : window.innerHeight * floorPct / 100,
             bounce: +$in.bounce.value,
             settle: +$in.settle.value,         // v1.11.0: rest threshold px/s; a piece freezes on the floor (0 = off; needs a floor)
+            friction: +$in.friction.value,     // v1.21.0: tangential floor drag 0..1; bleeds vx on floor contact (0 = off; needs a floor)
         };
         if (boxed) {
             // The three v1.7.0 edges, mapped to the viewport, composed with the floor slider:
@@ -912,6 +920,7 @@
                 : (id === 'turbulence' || id === 'gust') ? (+raw === 0 ? 'off' : raw)  // 0 = no force
                 : id === 'trail' ? (+raw === 0 ? 'off' : raw)        // 0 = no ribbon
                 : id === 'settle' ? (+raw === 0 ? 'off' : raw)       // 0 = no settle (needs a floor)
+                : id === 'friction' ? (+raw === 0 ? 'off' : (+raw === 1 ? 'full grip' : (+raw).toFixed(2)))  // 0 = frictionless (needs a floor)
                 : (id === 'attract' || id === 'swirl') ? (+raw === 0 ? 'off' : raw)  // 0 = no vortex
                 : FIXED2.has(id) ? (+raw).toFixed(2)
                 : FIXED1.has(id) ? (+raw).toFixed(1) : raw;
@@ -1041,6 +1050,12 @@
     // dissolve out slowly over the last 90% of life. Longer lives make the long dissolve easy to see.
     $fadeOutBtn.addEventListener('click', () => {
         c.burst({ fadeOut: 0.9, fadeIn: 0.2, gravity: 200, count: 120, lifeMin: 2.5, lifeMax: 3.5 });
+    });
+    // Skid (v1.21.0). Pieces fired sideways under strong wind land on a floor near the bottom and skid
+    // to a stop -- tangential floor friction bleeds their horizontal velocity on every contact frame.
+    $skidBtn.addEventListener('click', () => {
+        c.burst({ friction: 0.85, floor: window.innerHeight - 20, wind: 700, gravity: 900,
+                  angle: 0, spread: 0.5, count: 120, lifeMin: 3, lifeMax: 4 });
     });
 
     // Follow-spray: a continuous stream that chases the pointer (v1.2.0 followPointer).

@@ -90,6 +90,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `floor` | number | Infinity | Settle-boundary Y in CSS px. Particles that reach it land on the line instead of falling forever. Opt-in; `Infinity` = no floor. See [Floor](#floor--settle--bounce). |
 | `bounce` | number | 0 | Restitution `0–1` on **any** boundary contact (floor and walls alike): `0` rests (pile-up), `1` is perfectly elastic. Shared by the whole [bounding box](#bounding-box). |
 | `settle` | number | 0 | Rest-speed threshold in px/s. A piece whose post-bounce speed drops below it **freezes** on the `floor` and piles up (keeps aging + fades). Opt-in; `0` = off. Needs a `floor`. See [Settle & pile](#settle--pile). |
+| `friction` | number | 0 | Tangential **floor** drag `0–1`. On each floor-contact frame, the horizontal velocity is bled by `1 - friction` (the complement to `bounce`, which reflects the vertical component): `0` = frictionless (default), `1` = full grip (horizontal stop on contact), `0.2` = a long skid. Opt-in; needs a `floor`. A physics knob (it moves the position fingerprint). See [Friction](#friction). |
 | `wallLeft` | number | -Infinity | Left wall X in CSS px — the X-min edge of the [bounding box](#bounding-box). Particles reaching it clamp and reflect `vx`. Opt-in; `-Infinity` = no wall. |
 | `wallRight` | number | Infinity | Right wall X in CSS px — the X-max edge. Opt-in; `Infinity` = no wall. |
 | `ceiling` | number | -Infinity | Ceiling Y in CSS px — the Y-min edge, the mirror of `floor`. Particles rising past it clamp and reflect `vy`. Opt-in; `-Infinity` = no ceiling. |
@@ -287,6 +288,19 @@ c.burst({ floor: 520, bounce: 0.4, settle: 60 });   // fall, bounce a few times,
 - A frozen piece is truly still: its **rotation is frozen too**, and lateral forces (`wind`, `gust`, `sway`) can't nudge it — a pile lies where it landed.
 
 Like every knob, settle draws **zero random values** (a pure function of the piece's own post-bounce velocity), so a settling burst replays identically under a fixed seed with its own committed fingerprint, and the default `0` keeps every prior fingerprint byte-for-byte unchanged. A garbage threshold fails closed to `0` (off). No effect under reduced motion — the static render never integrates, so nothing lands.
+
+### Friction
+
+`settle` freezes a piece the instant it comes to rest; **friction** (added in v1.21.0) is the softer, physical in-between — a piece that lands with sideways speed **skids** and slows along the floor instead of sliding forever. It's the first new physics knob since settle, and the tangential complement to `bounce`: on a floor contact, `bounce` reflects the *vertical* (normal) component while `friction` bleeds the *horizontal* (tangent) one.
+
+```js
+c.burst({ floor: 520, wind: 700, friction: 0.85 });   // fire sideways, land, skid to a stop
+```
+
+- **`friction`** is a coefficient `0–1`. On every floor-contact frame the horizontal velocity is multiplied by `1 - friction`: `0` is frictionless (the default — today's exact behaviour), `1` is full grip (a horizontal stop on the first contact), `0.2` a long skid, `0.8` a short one. With `bounce = 0` a piece is in contact every frame, so `vx` decays geometrically to a stop; with `bounce > 0` it bleeds a little speed on each landing.
+- **It needs a `floor`.** Friction only ever acts as a piece contacts the floor, so with no floor set nothing happens (fail-closed) — the same rule as `settle`.
+- **It's a *physics* knob, not a render overlay.** Unlike `align`/`scaleTo`/`fadeIn`/`fadeOut`, friction changes `vx` → position, so a friction burst has its **own** committed fingerprint; at `friction: 0` every prior fingerprint reproduces byte-for-byte (the guard is a plain `!= 0`, and `0` is exactly representable, so nothing drifts when off).
+- **Finite by construction.** The factor `1 - friction` is always in `[0, 1]` (a negative `friction` clamps to `0`, never an anti-friction speed-up), so it's a contraction — horizontal speed can only shrink, never grow, and no acceleration cap is needed. Zero random draws; no effect under reduced motion.
 
 ### Color over life
 
@@ -777,14 +791,15 @@ The pool is `maxParticles` wide. Per particle, the **always-on** columns cost a 
 | `attract` | Float32 | 4 | 140 |
 | `swirl` | Float32 | 4 | 144 |
 | `settle` | Float32 | 4 | 148 |
-| `delay` | Float32 | 4 | 152 |
-| `landed` | Uint8 | 1 | 153 |
-| `shape` | Uint8 | 1 | 154 |
-| **always-on total** | **38×F32 + 2×U8** | **154** | **154** |
+| `friction` | Float32 | 4 | 152 |
+| `delay` | Float32 | 4 | 156 |
+| `landed` | Uint8 | 1 | 157 |
+| `shape` | Uint8 | 1 | 158 |
+| **always-on total** | **39×F32 + 2×U8** | **158** | **158** |
 
-The render-orientation / render-scale / render-opacity family added over v1.15.0–v1.20.0 is eight of those columns — `align` + `spin0` + `spinRate` + `scaleTo` + `tilt0` + `flutterRate` + `fadeIn` + `fadeOut` = 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 = **32 B/particle** — each a birth pivot or a render-time multiplier that never enters `ctx.translate`, so they cost bytes but move no fingerprint. `fadeIn` (birth) and `fadeOut` (death) now bracket the full opacity envelope on one shared `alpha`.
+The render-orientation / render-scale / render-opacity family added over v1.15.0–v1.20.0 is eight of those columns — `align` + `spin0` + `spinRate` + `scaleTo` + `tilt0` + `flutterRate` + `fadeIn` + `fadeOut` = 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 = **32 B/particle** — each a birth pivot or a render-time multiplier that never enters `ctx.translate`, so they cost bytes but move no fingerprint. `fadeIn` (birth) and `fadeOut` (death) now bracket the full opacity envelope on one shared `alpha`. `friction` (v1.21.0) is a **physics** column — the tangential complement to `bounce`, damping `vx` on each floor contact — so unlike those eight it *does* move the position fingerprint.
 
-Two more classes sit **outside** the always-on 154 B:
+Two more classes sit **outside** the always-on 158 B:
 
 | Buffer | Type | B/particle | When |
 |---|---|---:|---|
@@ -801,7 +816,7 @@ The trail ring buffers are allocated **only** when the instance is built with a 
 The gated quality numbers the torture harness commits, so a regression fails CI as loudly as a leak:
 
 - **Alloc gate.** `update()` over a **full `maxParticles` pool** — including a custom vector shape, an image sprite, the living-air forces, and a trailed pool — retains **~0 B/frame**, measured against a retained-bytes floor of **8.0 B/frame** (`RETAIN_FLOOR_BPF`). A per-frame-allocating control provably exceeds it.
-- **Determinism.** Every feature-off path preserves the committed default determinism fingerprint **`1569828004`** byte-for-byte (each opt-in feature — wind, floor, box, living air, trails, vortex, settle, life colors, emit, stagger, align, spinRate, scaleTo, flutterRate, fadeIn, fadeOut — carries its own committed fingerprint when on, and leaves the default untouched when off).
+- **Determinism.** Every feature-off path preserves the committed default determinism fingerprint **`1569828004`** byte-for-byte (each opt-in feature — wind, floor, box, living air, trails, vortex, settle, life colors, emit, stagger, align, spinRate, scaleTo, flutterRate, fadeIn, fadeOut, friction — carries its own committed fingerprint when on, and leaves the default untouched when off).
 - **GC budget.** The full-pool loop runs under `@zakkster/lite-gc-profiler` with `maxMajor: 0` and 0 retained bytes under `@zakkster/lite-leak`, all under `--expose-gc`.
 
 </details>
@@ -810,10 +825,10 @@ The gated quality numbers the torture harness commits, so a regression fails CI 
 
 ## Testing
 
-**226 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
+**237 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
 
 ```bash
-npm test          # 226 node:test cases (contract + boundary + fingerprint)
+npm test          # 237 node:test cases (contract + boundary + fingerprint)
 npm run torture   # @zakkster/lite-leak + lite-gc-profiler under --expose-gc
 npm run verify    # test + torture, the publish gate
 ```

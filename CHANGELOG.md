@@ -3,6 +3,68 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.21.0] - 2026-08-15
+
+Feature release: `friction` -- **tangential floor drag**, the FIRST physics feature since `settle`
+(v1.11.0) and the tangential complement to `bounce`. For fifteen releases the engine has had a full
+boundary system -- `floor` + `bounce`, the `wallLeft`/`wallRight`/`ceiling` box, `settle` -- but NOTHING
+damped a piece's **horizontal** velocity while it was in contact with the floor: a piece that landed with
+lateral speed either froze instantly (`settle`) or slid at constant `vx` forever, bled only by the global,
+isotropic `drag`. An opt-in `friction` scalar in `[0,1]` closes that gap -- on **each floor-contact
+frame** it multiplies `vx` by `1 - friction`: `0` (default) = frictionless (today's exact behaviour),
+`1` = full grip (horizontal stop on first contact), `0.2` = a long skid, `0.8` = a short one:
+`c.burst({ floor: 700, friction: 0.85, wind: 600 })`. Where `bounce` reflects the **normal** (vertical)
+component, `friction` damps the **tangent** (horizontal) one, so they compose on a single contact without
+interfering -- land and bounce (`bounce`) while skidding to a stop (`friction`).
+
+It lives entirely INSIDE the already-guarded floor-contact block (after the `vy` reflection, before the
+`settle` test), guarded on `if (pool.fric[i] !== 0)`, so a floorless or frictionless burst pays zero new
+bytes per frame and **every committed fingerprint is byte-identical when off**. The update is a
+**contraction** (a factor in `[0,1]`): `|vx|` can never grow, so positions stay finite for any input with
+**no accel cap** (contrast the vortex's anti-spring, which needed `VORTEX_MAX_ACCEL`). It needs a `floor`
+-- with none the branch is unreachable and friction never fires (mirrors `settle`'s "needs a floor" rule).
+
+Because it is a **physics** knob it changes `vx -> x`, so unlike the six render overlays it **moves the
+position stream** and earns its own committed hash on the MAIN position fingerprint (`FRICTION_HASH
+1451535522`, distinct from `FLOOR_HASH 2679696825`); at `friction:0` the same rig reproduces `FLOOR_HASH`
+exactly. It still costs **no new harness probe** -- it rides the position hash plus the hash-neutral
+`sumX`/`maxX`/`minX` accessors -- and **no fround sentinel**: the default `0` is exactly representable in a
+`Float32Array` (`Math.fround(0) === 0`), so the `!== 0` guard is safe (contrast `fadeOut`'s load-bearing
+`Math.fround(0.3)`). Coerced with `clamp01(friction, 0)`: a NEGATIVE clamps to `0` (frictionless, NEVER an
+anti-friction speed-up that would amplify `vx` and diverge), non-finite/undefined => `0` (off), `> 1` =>
+`1`. One new Float32 pool column (+4 B/particle, always-on total 154 -> 158). The spawn write is
+unconditional for pool-reuse correctness but NOT load-bearing (the zero-init `0` already means "off").
+Honored by `burst()` AND `spray()`; inert under reduced motion (the static path never integrates to a
+floor collision); zero rng, zero allocation. Unit suite 226 -> 237; torture adds a floor-friction alloc
+lane, threads `friction` through the differential fuzz + degenerate poison, and adds a `sumX`-snapshot
+recycle-retention proof.
+
+### Added
+- **`friction: number` on `burst()` and `spray()`** -- tangential floor drag `[0,1]`. `0` (default) =
+  frictionless, `1` = full horizontal stop on contact, `0.2` = a long skid. Needs a finite `floor`. A
+  physics property of any landing piece, so **both** `burst()` and `spray()` honor it.
+
+### Semantics
+- **One linear coefficient, house style.** On each floor-contact frame, `vx *= 1 - friction`, where
+  `friction` is `clamp01`-ed into `[0,1]` -- the tangential mirror of `bounce`'s single restitution. No
+  static/kinetic split, no stiction threshold, no velocity- or normal-force model.
+- **Damps the tangent, orthogonal to `bounce`'s normal.** `bounce` reflects `vy`, `friction` damps `vx`;
+  disjoint components on the same contact, so they multiply without interfering.
+- **A NEGATIVE clamps to 0, never amplifies.** `friction:-1` is frictionless (off), NOT an anti-friction
+  multiplier `1 - f > 1` that would amplify `vx` every contact and diverge. `clamp01` forbids it.
+- **Needs a floor.** With no floor the contact block is unreachable, so friction never fires -- exactly
+  like `settle`.
+
+### Fingerprint / performance
+- **Off is byte-identical.** `friction:0` (the default) reproduces every prior committed fingerprint
+  bit-for-bit: `COMMITTED_HASH 1569828004`, `FLOOR_HASH 2679696825`, `BOX_HASH 804161759`,
+  `WIND_HASH 2385225781`, `SETTLE_HASH 4157000621`, and all others. No fround sentinel is needed.
+- **On earns its own committed hash on the MAIN position stream** (`FRICTION_HASH 1451535522`), because it
+  is a physics feature -- distinct from `FLOOR_HASH` (friction changed the trajectory) and from
+  `friction:0.9`, deterministic across processes.
+- **Zero-GC.** One guarded Float32 read + compare + multiply per landed piece; no rng, no allocation. The
+  torture floor-friction lane holds ~0 B/frame over an immortal skidding pool, `maxMajor:0` over the soak.
+
 ## [1.20.0] - 2026-08-11
 
 Feature release: `fadeOut` -- **death-fade window**, the SECOND public knob on the **render-opacity** axis

@@ -214,6 +214,22 @@ export function run() {
         ['fadeOut:tiny', { count: 60, fadeOut: 1e-9, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
         ['fadeOut:1', { count: 60, fadeOut: 1, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
         ['fadeOut:huge', { count: 60, fadeOut: 1e6, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, trail: 8, lifeMin: 0.3, lifeMax: 0.3 }],
+        // friction poison (v1.21.0): garbage coefficients coerce via clamp01(friction, 0) (non-finite/
+        // non-numeric/null/{} -> 0 off, NEGATIVE -> 0 off never anti-friction, > 1 -> 1). The damp is a
+        // contraction `vx *= 1 - fric` with fric in [0,1] behind a `!= 0` guard, so |vx| never grows and a
+        // bad friction can never yield a non-finite vx. Legal extremes (0, -5 -> 0, 1, 1e-9) + wind + a
+        // reachable floor + a bouncing box confirm the tangential drag stays finite while pieces skid.
+        ['friction:NaN', { count: 60, friction: NaN, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['friction:Infinity', { count: 60, friction: Infinity, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['friction:-Infinity', { count: 60, friction: -Infinity, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['friction:nonnumeric', { count: 60, friction: 'x', wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['friction:null', { count: 60, friction: null, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['friction:object', { count: 60, friction: {}, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['friction:0', { count: 60, friction: 0, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['friction:neg', { count: 60, friction: -5, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['friction:1', { count: 60, friction: 1, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['friction:tiny', { count: 60, friction: 1e-9, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['friction+box', { count: 60, friction: 0.7, wind: 800, floor: 300, bounce: 0.5, wallLeft: 200, wallRight: 600, ceiling: 100, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],

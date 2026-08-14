@@ -1,10 +1,31 @@
 /**
- * @zakkster/lite-confetti v1.20.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.21.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
  *
+ * v1.21.0 adds: `friction` -- tangential floor drag, the FIRST physics feature since `settle` (v1.11.0)
+ * and the tangential complement to `bounce`. The engine has had a full boundary system for fifteen
+ * releases -- `floor` + `bounce`, the wall/ceiling box, `settle` -- but NOTHING damped a piece's
+ * HORIZONTAL velocity while it was in contact with the floor: a piece that landed with lateral speed
+ * either froze instantly (settle) or slid at constant `vx` forever (bled only by the global, isotropic
+ * `drag`). `friction` is that knob: an opt-in per-particle scalar in [0,1] that, on EACH floor-contact
+ * frame, multiplies `vx` by `1 - friction`. `0` (default) = frictionless (today's exact behaviour),
+ * `1` = full grip (horizontal stop on first contact), `0.2` = a long skid, `0.8` = a short one. Where
+ * `bounce` reflects the NORMAL (vertical) component, `friction` damps the TANGENT (horizontal) one, so
+ * they multiply on a single contact without interfering. It lives entirely INSIDE the already-guarded
+ * floor-contact block (AFTER the vy reflection, BEFORE the settle test), so a floorless or frictionless
+ * burst pays zero new bytes per frame and every committed fingerprint is byte-identical when off. The
+ * update is a CONTRACTION (factor in [0,1]): |vx| can never grow, so positions stay finite for any input
+ * with NO accel cap (contrast the vortex's anti-spring). Needs a `floor` -- with no floor the branch is
+ * unreachable, so friction never fires (mirrors settle's "needs a floor" rule). It is a PHYSICS feature,
+ * so it MOVES the position stream and earns its own committed `FRICTION_HASH` on the MAIN hash -- but it
+ * needs NO new harness probe (it rides the position hash + the hash-neutral sumX/maxX/minX accessors) and
+ * NO fround sentinel: the default `0` is exactly representable in Float32 (`Math.fround(0) === 0`), so the
+ * guard `if (pool.fric[i] !== 0)` is safe (contrast fadeOut's load-bearing `Math.fround(0.3)`). Coerced
+ * with `clamp01(friction, 0)` (negative => 0, NEVER anti-friction); both burst AND spray honor it; inert
+ * under reduced motion (the static path never integrates to a floor collision); zero rng, zero allocation.
  * v1.20.0 adds: `fadeOut` -- a death-fade window, the SECOND public knob on the render-OPACITY axis and the
  * mirror of v1.19.0's `fadeIn`. For nineteen releases a piece dissolved over exactly the last 30% of its life,
  * a magic `0.3` baked into the render body. `fadeOut` parameterizes that constant: the fraction of life over
@@ -692,6 +713,7 @@ export function createConfetti(canvas, {
         swirl: new Float32Array(maxParticles),   // tangential strength (1/sec^2); 0 = off, sign = spin
         settle:new Float32Array(maxParticles),   // rest-speed threshold (px/sec); 0 = off (never settles)
         landed:new Uint8Array(maxParticles),     // 1 = at rest on the floor (physics frozen); 0 = active
+        fric:  new Float32Array(maxParticles),   // tangential floor drag 0..1; 0 = off (frictionless)
         delay: new Float32Array(maxParticles),   // seconds until birth (staggered emission); 0 = born/active
         shape: new Uint8Array(maxParticles),     // 0..4 built-in, 5+ = registerShape() custom
     };
@@ -850,6 +872,12 @@ export function createConfetti(canvas, {
         pool.attract[i] = config.attract;
         pool.swirl[i] = config.swirl;
         pool.settle[i] = config.settle;
+        // Tangential floor drag (v1.21.0). ALWAYS written for pool-reuse correctness (a recycled slot
+        // must not inherit a prior burst's friction), but NOT load-bearing: unlike scaleTo/fadeOut, the
+        // Float32Array zero-init default of 0 == "off" (frictionless) is the CORRECT default, so nothing
+        // relies on this write to avoid a wrong state (this is the fadeIn/wind situation). We still write
+        // unconditionally, in house style. 0 is exactly representable in Float32 -- no fround sentinel.
+        pool.fric[i] = config.friction;
         // Fail-closed reset: a recycled slot must never inherit the dead particle's frozen state,
         // or a fresh piece would spawn already "landed" and skip all physics. (Same pool-reuse
         // subtlety as the trail `trailN = 0` reset.)
@@ -985,6 +1013,14 @@ export function createConfetti(canvas, {
                 if (pool.y[i] > pool.floor[i]) {
                     pool.y[i] = pool.floor[i];
                     pool.vy[i] = -pool.vy[i] * pool.bounce[i];
+                    // Friction (v1.21.0): tangential floor drag. On a floor-contact frame, bleed the HORIZONTAL
+                    // (vx) component by `1 - fric`, the complement to `bounce` (which reflects the vertical
+                    // component). Guarded on fric != 0 so the committed floor/box fingerprints are byte-identical
+                    // when off (0 is exactly representable in Float32, so no fround sentinel is needed). A
+                    // contraction (factor in [0,1]) => |vx| never grows, finite for any input, no accel cap. Draws
+                    // no rng. Runs only when NOT landed (whole block is skipped for a settled piece) and only with a
+                    // floor (this branch is otherwise unreachable), so a frictionless or floorless burst is untouched.
+                    if (pool.fric[i] !== 0) pool.vx[i] *= 1 - pool.fric[i];
                     // Settle: if the rebound is too weak to lift the piece off the floor (the
                     // reflected |vy| is below the rest threshold), it comes to REST -- freeze it
                     // here for the rest of its life. It keeps aging + fading (see the life
@@ -1238,7 +1274,9 @@ export function createConfetti(canvas, {
             // life integration and sets a constant `ctx.globalAlpha = 0.85` below, so there is no birth
             // age fraction to ramp -- the 0.85 is deliberately untouched. `fadeOut` (v1.20.0) is INERT for the
             // same reason: the static path does no life integration, so there is no `lifeT` to dissolve -- the
-            // constant 0.85 is deliberately untouched, exactly like fadeIn.
+            // constant 0.85 is deliberately untouched, exactly like fadeIn. `friction` (v1.21.0) is INERT too:
+            // the static fan does no physics integration and never reaches a floor collision, so there is no
+            // floor-contact frame on which to damp `vx` -- the tangential drag has nothing to bite.
             const rotation = rng.next() * TAU;
             // Honour a `shapes` mix in the reduced-motion render too. Single-shape (null)
             // takes no extra rng draw, so the non-mixed static render is unchanged.
@@ -1316,6 +1354,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.attractX]    Vortex center X (CSS px); default: the burst origin x
          * @param {number} [options.attractY]    Vortex center Y (CSS px); default: the burst origin y
          * @param {number} [options.settle=0]    Rest-speed threshold px/sec: a piece whose post-bounce |vy| drops below it freezes on the `floor` and piles (keeps aging + fades). Needs a `floor`. Opt-in, zero-rng, fingerprint-safe
+         * @param {number} [options.friction=0]  Tangential FLOOR drag 0..1: on each floor-contact frame, bleed the HORIZONTAL velocity by `1 - friction` (the complement to `bounce`, which reflects the vertical component). `0` = frictionless (default, today's exact behaviour), `1` = full grip (horizontal stop on first contact), `0.2` = a long skid, `0.8` = a short one. Needs a `floor` -- with none the branch never fires. A contraction (|vx| never grows), so positions stay finite with no accel cap. clamp01: a NEGATIVE clamps to `0` (frictionless, NEVER anti-friction/speed-up), non-finite/undefined => `0` (off), > 1 => 1. It MOVES the position stream (a physics knob), so a friction burst earns its own committed hash. Opt-in, zero-rng; inert under reduced motion
          * @param {number} [options.trail]       Per-particle motion-trail length 0..capacity (default: full capacity). Needs a construction `trail` budget; ignored otherwise. Render overlay, fingerprint-safe
          * @param {Array}  [options.colors]      Array of OKLCH objects or CSS strings
          * @param {Array}  [options.lifeColors]  Multi-stop OKLCH life ramp (>= 2 stops, birth-color first): the body sweeps it over each particle's life (sparks cooling white->red). Baked once per burst; the trail stays the flat `colors` pick. Opt-in, zero-rng, a pure color overlay -- position fingerprints preserved
@@ -1336,6 +1375,7 @@ export function createConfetti(canvas, {
                   floor = Infinity,
                   bounce = 0,
                   settle = 0,
+                  friction = 0,
                   wallLeft = -Infinity,
                   wallRight = Infinity,
                   ceiling = -Infinity,
@@ -1390,6 +1430,7 @@ export function createConfetti(canvas, {
             floor = num(floor, Infinity);  // opt-in: undefined/NaN/Infinity/string all => no floor
             bounce = clamp01(bounce, 0);   // restitution 0..1; a rebound can never add energy
             settle = nonneg(settle, 0);    // rest-speed threshold (px/sec); NaN/negative/string => 0 (off)
+            friction = clamp01(friction, 0);   // tangential floor drag 0..1; NaN/negative/string => 0 (off)
             wallLeft = num(wallLeft, -Infinity);   // opt-in box edge; non-finite => no left wall
             wallRight = num(wallRight, Infinity);  // opt-in box edge; non-finite => no right wall
             ceiling = num(ceiling, -Infinity);     // opt-in box edge; non-finite => no ceiling
@@ -1457,7 +1498,7 @@ export function createConfetti(canvas, {
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
                 flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), scaleTo: nonneg(scaleTo, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), fadeOut: clamp01(fadeOut, FADE_OUT_DEF), turbulence, gust, trailLen: trailDraw,
-                attract, swirl, attractX: vortX, attractY: vortY, settle, lifeRamp,
+                attract, swirl, attractX: vortX, attractY: vortY, settle, friction, lifeRamp,
             };
 
             for (let i = 0; i < count; i++) {
@@ -1527,6 +1568,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.attractX]       Vortex center X (CSS px); default: the spray origin x
          * @param {number} [options.attractY]       Vortex center Y (CSS px); default: the spray origin y
          * @param {number} [options.settle=0]       Rest-speed threshold px/sec: a piece whose post-bounce |vy| drops below it freezes on the `floor` and piles (keeps aging + fades). Needs a `floor`. Opt-in, zero-rng
+         * @param {number} [options.friction=0]     Tangential FLOOR drag 0..1: on each floor-contact frame, bleed the HORIZONTAL velocity by `1 - friction` (the complement to `bounce`). `0` = frictionless (default), `1` = full grip (horizontal stop on contact), `0.2` = a long skid. Needs a `floor`. A contraction (|vx| never grows), finite with no accel cap. clamp01: a NEGATIVE clamps to `0` (NEVER anti-friction), non-finite => `0` (off), > 1 => 1. It MOVES the position stream. Opt-in, zero-rng
          * @param {number} [options.trail]          Per-particle motion-trail length 0..capacity (default: full). Needs a construction `trail` budget; render overlay, fingerprint-safe
          * @param {Array}  [options.lifeColors]     Multi-stop OKLCH life ramp (>= 2 stops, birth-color first): the body sweeps it over each particle's life. Baked once; trail stays the flat `colors` pick. Opt-in, zero-rng, a pure color overlay
          * @param {string} [options.emit]          Spawn-origin shape: 'line' / 'ring' (radial-outward shell) / 'box', sized by `emitSize`. Default: a single point. Opt-in; off/unknown/`emitSize<=0` => point spawn, byte-identical
@@ -1544,6 +1586,7 @@ export function createConfetti(canvas, {
                   floor = Infinity,
                   bounce = 0,
                   settle = 0,
+                  friction = 0,
                   wallLeft = -Infinity,
                   wallRight = Infinity,
                   ceiling = -Infinity,
@@ -1596,6 +1639,7 @@ export function createConfetti(canvas, {
             floor = num(floor, Infinity);  // opt-in: undefined/NaN/Infinity/string all => no floor
             bounce = clamp01(bounce, 0);   // restitution 0..1; a rebound can never add energy
             settle = nonneg(settle, 0);    // rest-speed threshold (px/sec); NaN/negative/string => 0 (off)
+            friction = clamp01(friction, 0);   // tangential floor drag 0..1; NaN/negative/string => 0 (off)
             wallLeft = num(wallLeft, -Infinity);   // opt-in box edge; non-finite => no left wall
             wallRight = num(wallRight, Infinity);  // opt-in box edge; non-finite => no right wall
             ceiling = num(ceiling, -Infinity);     // opt-in box edge; non-finite => no ceiling
@@ -1654,7 +1698,7 @@ export function createConfetti(canvas, {
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
                 flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), scaleTo: nonneg(scaleTo, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), fadeOut: clamp01(fadeOut, FADE_OUT_DEF), turbulence, gust, trailLen: trailDraw,
-                attract, swirl, attractX: vortX, attractY: vortY, settle, lifeRamp,
+                attract, swirl, attractX: vortX, attractY: vortY, settle, friction, lifeRamp,
             };
 
             // Pointer-follow is opt-in and, by nature, NON-DETERMINISTIC: it injects

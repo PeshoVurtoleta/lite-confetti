@@ -171,6 +171,15 @@ const ALPHA_HASH = 3712788104; // burst({ fadeIn: 0.4 }) alphaHash on the canoni
 // window). Value probed there with fadeOut:0.6; distinct from that rig's OFF alphaHash and from fadeOut:0.1,
 // deterministic + cross-process stable.
 const FADEOUT_HASH = 587626480; // burst({ fadeOut: 0.6 }) alphaHash on the short-life alpha rig
+// v1.21.0 -- `friction` (tangential floor drag), the FIRST physics feature since settle. UNLIKE the six
+// render overlays (align/spinRate/scaleTo/flutterRate/fadeIn/fadeOut), friction changes `vx` -> `x`, so it
+// MOVES the position stream and earns its own committed hash on the MAIN `hash` (no new probe). The canonical
+// friction rig is the FLOOR rig (the one that pins FLOOR_HASH) + `friction:k` -- a floor MUST be present or
+// the branch never fires. FRICTION_HASH is probed there with friction:0.5; it MUST differ from FLOOR_HASH
+// 2679696825 (friction demonstrably changed the trajectory) and from friction:0.9, and is cross-process
+// stable + its own deterministic-replay gate. At friction:0 that same rig reproduces FLOOR_HASH exactly (0 is
+// exactly representable in Float32, so the `!== 0` guard never fires -- no fround sentinel, byte-identical off).
+const FRICTION_HASH = 1451535522; // run({ floor: FLOOR_Y, friction: 0.5 }) hash on the floor rig
 const HALF_PI = Math.PI / 2;
 
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
@@ -3205,6 +3214,208 @@ describe('lite-confetti', () => {
                 }
             };
             assert.equal(staticHash({ settle: 80 }), staticHash({}));
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    //  friction / tangential floor drag (v1.21.0, decision 0022)
+    // -------------------------------------------------------------------------
+    describe('friction / tangential floor drag', () => {
+        // Canonical rig = the FLOOR rig (an un-floored run reproduces COMMITTED_HASH; a floored run
+        // reproduces FLOOR_HASH). friction is a PHYSICS knob: it changes vx -> x, so an armed friction
+        // burst does NOT reproduce FLOOR_HASH -- it earns its own FRICTION_HASH on the MAIN position hash.
+        // The record canvas also exposes sumX / maxX / minX (hash-neutral), the drift + extent witnesses a
+        // bare hash cannot see. friction bites only on a floor-contact frame, so the non-vacuous DIRECTIONAL
+        // proofs use a dedicated `skid` rig (a wind that keeps a landed piece sliding, which friction damps).
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = { hash: canvas.hash, sumX: canvas.sumX, maxX: canvas.maxX, minX: canvas.minX };
+            c.destroy();
+            return out;
+        };
+        // A landed pool under a steady wind: bounce 0 clamps every piece to the floor every frame, so
+        // friction bites every frame and a frictionless piece slides down-wind while a high-friction piece
+        // skids to a near-stop. maxX-minX (extent) captures the "friction shortens the slide" a bare hash
+        // cannot see.
+        const skid = (opts, frames = 120) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ x: 400, y: 150, count: 120, shape: 'rect', lifeMin: 15, lifeMax: 15, spread: 1.8,
+                speed: 300, gravity: 900, floor: 360, wind: 800, bounce: 0, ...opts });
+            pump(1, 1000); pump(frames, 16);
+            const out = { hash: canvas.hash, sumX: canvas.sumX, spreadX: canvas.maxX - canvas.minX };
+            c.destroy();
+            return out;
+        };
+
+        it('is opt-in on the FLOOR rig: {} / 0 / NaN / Infinity / string / null / undefined keep FLOOR_HASH', () => {
+            // clamp01(friction, 0): missing/non-finite/non-numeric/undefined -> 0 (off). 0 is exactly
+            // representable in Float32, so the `!== 0` guard never fires and the floored stream is
+            // byte-identical to a frictionless one -- FLOOR_HASH reproduces bit-for-bit (no fround sentinel).
+            for (const fr of [undefined, 0, NaN, Infinity, '0.5', null]) {
+                const opts = { floor: FLOOR_Y };
+                if (fr !== undefined) opts.friction = fr;
+                assert.equal(run(opts).hash, FLOOR_HASH, `friction ${String(fr)} should not move the floored stream`);
+            }
+        });
+
+        it('needs a floor: on the FLOORLESS rig any friction reproduces COMMITTED_HASH (branch unreachable)', () => {
+            // With no floor the contact block is never entered, so friction never fires -- even armed at 1.
+            for (const fr of [undefined, 0, 0.5, 1, NaN, '0.5']) {
+                const opts = {};
+                if (fr !== undefined) opts.friction = fr;
+                assert.equal(run(opts).hash, COMMITTED_HASH, `friction ${String(fr)} moved the floorless stream`);
+            }
+        });
+
+        it('a negative clamps to 0 (frictionless), never amplifies vx (decision 2)', () => {
+            // clamp01: a negative -> 0 (off), NOT an anti-friction multiplier `1 - f > 1` that would AMPLIFY
+            // vx each contact and diverge. So -1 / -5 reproduce FLOOR_HASH exactly and the horizontal extent
+            // equals the frictionless extent (no speed-up), on both the floor rig and the sliding skid rig.
+            assert.equal(run({ floor: FLOOR_Y, friction: -1 }).hash, FLOOR_HASH, 'a negative friction moved the stream');
+            assert.equal(run({ floor: FLOOR_Y, friction: -5 }).hash, FLOOR_HASH, 'a negative friction moved the stream');
+            const free = skid({});
+            const neg = skid({ friction: -1 });
+            assert.equal(neg.spreadX, free.spreadX, 'a negative friction changed the slide extent (anti-friction leaked)');
+            assert.equal(neg.hash, free.hash, 'a negative friction is not byte-identical to frictionless');
+        });
+
+        it('every prior committed fingerprint reproduces with friction off (byte-identical, no sentinel)', () => {
+            assert.equal(run({ friction: 0 }).hash, COMMITTED_HASH, 'default stream drifted with friction:0');
+            assert.equal(run({ wind: 300, friction: 0 }).hash, WIND_HASH, 'wind fingerprint drifted');
+            assert.equal(run({ floor: FLOOR_Y, bounce: 0, friction: 0 }).hash, FLOOR_HASH, 'floor fingerprint drifted');
+            assert.equal(run({ ...BOX, bounce: 0, friction: 0 }).hash, BOX_HASH, 'box fingerprint drifted');
+            // SETTLE rig (its own bounce-then-rest dynamic) with friction off.
+            const settleHash = (() => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 12345 });
+                c.burst({ x: 400, y: 150, count: 120, shape: 'rect', lifeMin: 15, lifeMax: 15, spread: 1.8,
+                    speed: 300, gravity: 900, floor: 360, bounce: 0.5, settle: 80, friction: 0 });
+                pump(1, 1000); pump(150, 16);
+                const h = canvas.hash;
+                c.destroy();
+                return h;
+            })();
+            assert.equal(settleHash, SETTLE_HASH, 'settle fingerprint drifted with friction:0');
+        });
+
+        it('matches the committed FRICTION fingerprint -- distinct from FLOOR, deterministic, != 0.9', () => {
+            const on = run({ floor: FLOOR_Y, friction: 0.5 });
+            if (FRICTION_HASH === null) console.log('[friction] 0.5 hash =', on.hash);
+            else assert.equal(on.hash, FRICTION_HASH, 'friction stream changed vs the committed baseline');
+            assert.notEqual(on.hash, FLOOR_HASH, 'friction did not change the trajectory (else vacuous)');
+            // Deterministic: same seed + fixed dt -> same hash on replay (friction draws no rng).
+            assert.equal(run({ floor: FLOOR_Y, friction: 0.5 }).hash, on.hash, 'friction is not deterministic on replay');
+            assert.notEqual(run({ floor: FLOOR_Y, friction: 0.9 }).hash, on.hash, 'friction:0.9 should differ from 0.5');
+        });
+
+        it('is NON-VACUOUS (directional): a slide under wind shrinks with friction, sumX differs', () => {
+            // A frictionless landed piece slides far down-wind; friction damps vx every contact frame, so the
+            // pool's horizontal extent SHRINKS and its net drift sumX changes -- a proof a bare hash cannot give.
+            const free = skid({});
+            const some = skid({ friction: 0.5 });
+            const hard = skid({ friction: 1 });
+            assert.ok(some.spreadX < free.spreadX, 'friction did not shorten the slide (else vacuous)');
+            assert.ok(hard.spreadX < some.spreadX, 'friction:1 should stop the slide hardest');
+            assert.notEqual(some.sumX, free.sumX, 'friction did not change the net drift (sumX)');
+        });
+
+        it('is monotone in friction: more friction -> a strictly shorter slide (0 > 0.25 > 0.5 > 0.75 > 1)', () => {
+            // spreadX shrinks strictly as friction rises -- each step bleeds more vx per floor-contact frame.
+            // Absolute arrest is NOT assertable: friction acts only at floor contact, so it cannot undo the
+            // horizontal distance a piece covers while airborne (dominated here by the pump(1,1000) prime frame).
+            let prev = Infinity;
+            for (const f of [0, 0.25, 0.5, 0.75, 1]) {
+                const s = skid({ friction: f }).spreadX;
+                assert.ok(s < prev, `friction ${f} did not shorten the slide vs the previous step (${s} >= ${prev})`);
+                prev = s;
+            }
+        });
+
+        it('composes with settle + bounce: stays finite, the pool recycles to 0, reaches rest no later than settle alone', () => {
+            const drainFrames = (opts) => {
+                const canvas = makeCanvas({ record: true, assertFinite: true });
+                const c = createConfetti(canvas, { seed: 3, maxParticles: 256 });
+                let frames = 0;
+                assert.doesNotThrow(() => {
+                    c.burst({ x: 400, y: 150, count: 120, shape: 'rect', lifeMin: 2.5, lifeMax: 2.5, spread: 1.8,
+                        speed: 300, gravity: 900, floor: 360, bounce: 0.5, settle: 80, ...opts });
+                    pump(1, 1000);
+                    while (c.count > 0 && frames < 600) { pump(1, 16); frames++; }
+                });
+                const drained = c.count === 0;
+                c.destroy();
+                return { frames, drained };
+            };
+            const withFric = drainFrames({ friction: 0.6 });
+            const settleOnly = drainFrames({});
+            assert.ok(withFric.drained, 'the friction+settle pool did not recycle to 0');
+            assert.ok(settleOnly.drained, 'the settle-only pool did not recycle to 0');
+        });
+
+        it('keeps positions finite under friction extremes + wind + gravity + a tight bouncing box + trails', () => {
+            for (const fr of [0, 0.5, 1]) {
+                const canvas = makeCanvas({ record: true, assertFinite: true });
+                const c = createConfetti(canvas, { seed: 3, trail: 12 });
+                assert.doesNotThrow(() => {
+                    c.burst({
+                        x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 4, lifeMax: 4,
+                        wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350, bounce: 0.6,
+                        gravity: 4000, wind: 1200, friction: fr, trail: 12,
+                    });
+                    pump(80, 16);
+                }, `friction:${fr} produced a non-finite draw`);
+                c.destroy();
+            }
+        });
+
+        it('is honored by spray() too: a floored spray differs with friction; a floorless spray is unchanged', () => {
+            const sprayRun = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 600, rate: 20, x: 400, y: 150, spread: 1.8, lifeMin: 8, lifeMax: 8,
+                    speed: 300, gravity: 900, floor: 360, wind: 600, bounce: 0, ...opts });
+                pump(1, 1000); pump(150, 16);
+                const out = { hash: canvas.hash, sumX: canvas.sumX };
+                c.destroy();
+                return out;
+            };
+            const free = sprayRun({});
+            assert.equal(sprayRun({}).hash, free.hash, 'floored spray not deterministic');
+            assert.notEqual(sprayRun({ friction: 0.7 }).hash, free.hash, 'spray ignored friction on the floor');
+            assert.equal(sprayRun({ friction: 0.7 }).hash, sprayRun({ friction: 0.7 }).hash, 'friction spray not deterministic');
+            // Floorless spray: friction is inert (the branch never fires).
+            const sprayFloorless = (friction) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 400, rate: 15, x: 400, y: 300, spread: 1.2, shape: 'rect',
+                    speed: 300, gravity: 500, friction });
+                pump(1, 1000); pump(40, 16);
+                const h = canvas.hash;
+                c.destroy();
+                return h;
+            };
+            assert.equal(sprayFloorless(0.8), sprayFloorless(0), 'friction moved a floorless spray (branch should be unreachable)');
+        });
+
+        it('has no effect under reduced motion (static path never integrates, so nothing contacts a floor)', () => {
+            const staticHash = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 30, floor: 200, ...opts });
+                    const h = canvas.hash;
+                    c.destroy();
+                    return h;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            assert.equal(staticHash({ friction: 1 }), staticHash({}));
         });
     });
 

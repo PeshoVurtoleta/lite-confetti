@@ -54,6 +54,19 @@ export interface BurstOptions {
      */
     settle?: number;
     /**
+     * Tangential FLOOR drag 0..1 (v1.21.0) -- the complement to `bounce`. On each
+     * floor-contact frame, the HORIZONTAL velocity is multiplied by `1 - friction`, where
+     * `bounce` reflects the vertical (normal) component and `friction` damps the horizontal
+     * (tangent) one, so they compose on a single contact. `0` = frictionless (default,
+     * byte-identical to prior releases), `1` = full grip (horizontal stop on first contact),
+     * `0.2` = a long skid, `0.8` = a short one. Needs a finite `floor`; with no floor the
+     * branch never fires. A contraction (|vx| never grows), so positions stay finite with no
+     * accel cap. A NEGATIVE clamps to `0` (frictionless, NEVER an anti-friction speed-up);
+     * non-finite/undefined => `0` (off), > 1 => 1. A physics knob: it MOVES the position
+     * stream (its own committed hash). Opt-in, zero-rng; no effect under reduced motion.
+     */
+    friction?: number;
+    /**
      * Left wall X coordinate in CSS px -- the X-min edge of the bounding box. A particle
      * reaching it is clamped and its horizontal velocity reflected (scaled by `bounce`).
      * Default `-Infinity` (no wall). Opt-in and fingerprint-safe (the default never fires

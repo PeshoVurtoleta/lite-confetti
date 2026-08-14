@@ -306,6 +306,27 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- the fadeOut death-fade window is allocating');
     }
 
+    // (15) A floor-friction live pool (v1.21.0): an immortal pool under strong gravity + wind onto a
+    // reachable `floor` just below spawn with friction:0.3 armed. Every piece contacts the floor within a
+    // frame or two and, because bounce is 0, stays clamped to it EVERY frame -- so the guarded friction
+    // damp `if (fric != 0) vx *= 1 - fric` fires for the whole pool every frame while the wind keeps
+    // re-driving vx (a perpetual skid). It is a Float32 read + compare + a single multiply, allocating
+    // nothing; the immortal 1e6 life holds the pool at MAXP so any per-frame allocation on the friction
+    // path would show as retained bytes. The skidding-pool analog of the settled-pile lane (6).
+    const cf = createConfetti(makeCanvas(), { seed: 2101, maxParticles: MAXP });
+    cf.burst({
+        count: MAXP, lifeMin: 1e6, lifeMax: 1e6, sizeMin: 4, sizeMax: 12,
+        y: 50, speed: 200, gravity: 3000, wind: 500, floor: 120, bounce: 0, friction: 0.3,
+    });
+    pump(1, 1000); pump(30, 16); // let the pool fall onto the floor and start skidding
+    check(cf.count === MAXP, () => `T6: floor-friction pool has ${cf.count} alive, expected ${MAXP}`);
+    const bpfFric = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    cf.destroy();
+    if (bpfFric > RETAIN_FLOOR_BPF) {
+        die('T6: floor-friction update() retains ' + bpfFric.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the tangential-drag damp is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -326,6 +347,7 @@ export async function run() {
         + bpfScale.toFixed(2) + ' B/frame from a size-ramped (scaleTo + flutter) live pool, '
         + bpfFlut.toFixed(2) + ' B/frame from a flutter-rated (flutterRate + turbulence) live pool, '
         + bpfFade.toFixed(2) + ' B/frame from a fade-in (fadeIn + flutter) live pool, '
-        + bpfFadeOut.toFixed(2) + ' B/frame from a death-fade (fadeOut + flutter) live pool); '
+        + bpfFadeOut.toFixed(2) + ' B/frame from a death-fade (fadeOut + flutter) live pool, '
+        + bpfFric.toFixed(2) + ' B/frame from a floor-friction (skidding) live pool); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }
