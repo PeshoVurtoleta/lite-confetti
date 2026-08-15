@@ -350,6 +350,27 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- the tangential wall/ceiling damp is allocating');
     }
 
+    // (17) A spin-damped live pool (v1.23.0): with spinDrag:0.95 every rendered piece runs the NEW angular
+    // drag `if (sdrag != 1) spinV *= sdrag` before the spin advance INSIDE the measured window, AND turbulence
+    // is armed so BOTH coupling paths are exercised at once -- the render advance reads the damped spin, and
+    // the curl phase `tp = tilt*1.7 + spin` reads it too (the hybrid position coupling). flutter:1 also arms
+    // the wobble so the render path is fully loaded. It is a Float32 read + compare + a single multiply,
+    // allocating nothing; the immortal 1e6 life holds the pool at MAXP so any per-frame allocation on the
+    // spinDrag path would show as retained bytes. The angular analog of the linear-drag work in lane (1).
+    const csd = createConfetti(makeCanvas(), { seed: 2301, maxParticles: MAXP });
+    csd.burst({
+        count: MAXP, lifeMin: 1e6, lifeMax: 1e6, sizeMin: 4, sizeMax: 12,
+        flutter: 1, turbulence: 400, spinDrag: 0.95,
+    });
+    pump(1, 1000); pump(30, 16); // let the tumble decay run for a while before measuring
+    check(csd.count === MAXP, () => `T6: spin-damped pool has ${csd.count} alive, expected ${MAXP}`);
+    const bpfSdrag = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    csd.destroy();
+    if (bpfSdrag > RETAIN_FLOOR_BPF) {
+        die('T6: spin-damped update() retains ' + bpfSdrag.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the spinDrag angular damp is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -372,6 +393,7 @@ export async function run() {
         + bpfFade.toFixed(2) + ' B/frame from a fade-in (fadeIn + flutter) live pool, '
         + bpfFadeOut.toFixed(2) + ' B/frame from a death-fade (fadeOut + flutter) live pool, '
         + bpfFric.toFixed(2) + ' B/frame from a floor-friction (skidding) live pool, '
-        + bpfWfric.toFixed(2) + ' B/frame from a wall-friction (wall-skid) live pool); '
+        + bpfWfric.toFixed(2) + ' B/frame from a wall-friction (wall-skid) live pool, '
+        + bpfSdrag.toFixed(2) + ' B/frame from a spin-damped (spinDrag + turbulence + flutter) live pool); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

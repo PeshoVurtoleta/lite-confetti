@@ -406,6 +406,60 @@ export function run() {
         check(err === null, () => `T3 A13: threw ${err && err.message}`);
     }
 
+    // A14 -- pool-recycle retention for spinDrag (v1.23.0). spinDrag is UNCONDITIONALLY written at spawn --
+    // LOAD-BEARING (like scaleTo/flutterRate/fadeOut), since a Float32 zero-init would mean "instant spin
+    // freeze" (a WRONG default), so a recycled slot must never inherit a prior burst's retention. A single-slot
+    // pool FORCES slot 0 reuse: run 5 drain cycles arming the retention, then RESEED and fire a PLAIN burst
+    // (default spinDrag 1) into the recycled slot. The witness is `lastRotate` -- a hash-neutral SNAPSHOT of the
+    // current tumble angle, NOT a cumulative-hash replay (canvas.hash is cumulative and would false-fail; see
+    // the retention rule). The control B runs the IDENTICAL 5-cycle history but arms spinDrag:1 (off): both
+    // instances then share the same ticker stop/restart timing -- the first-frame dt after each drained idle
+    // depends on it, and lastRotate is a raw accumulated angle sensitive to that dt -- so the ONLY remaining
+    // difference is the armed value the spawn write must overwrite. If the write leaked, A (recycled from a
+    // FROZEN 0) would pin to its birth angle while B (recycled from an OFF 1) advanced, and the two would split.
+    // Equal angles prove no leak; the armed-live check below keeps the witness non-vacuous.
+    {
+        const recycleThenPlain = (armed) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 7, maxParticles: 1 });
+            for (let cycle = 0; cycle < 5; cycle++) {
+                c.seed(7);
+                c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 0, align: 0,
+                    spinRate: 1, turbulence: 0, spinDrag: armed, lifeMin: 0.3, lifeMax: 0.3 });
+                for (let f = 0; f < 20; f++) pump(1, 50);
+                check(c.count === 0, () => `T3 A14: an armed(${armed}) drain cycle left ${c.count} alive in the single-slot pool`);
+            }
+            c.seed(7);   // plain burst (default spinDrag 1) into the recycled slot, rng-aligned
+            c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 0, align: 0,
+                spinRate: 1, turbulence: 0, lifeMin: 5, lifeMax: 5 });
+            for (let f = 0; f < 10; f++) pump(1, 50);
+            const r = canvas.lastRotate;
+            const s = c.__stats();
+            c.destroy();
+            return { r, s };
+        };
+        const err = capture(() => {
+            const A = recycleThenPlain(0);   // recycled from a FROZEN (spinDrag:0) history
+            const B = recycleThenPlain(1);   // recycled from an OFF (spinDrag:1) history -- identical timing
+            check(B.s.aliveActual === 1 && B.s.aliveGetter === 1, () =>
+                `T3 A14: __stats after the recycled plain burst shows getter=${B.s.aliveGetter} actual=${B.s.aliveActual}, expected 1`);
+            check(A.r === B.r, () =>
+                `T3 A14: a recycled slot leaked a stale spinDrag -- plain-burst lastRotate ${A.r} != control ${B.r}`);
+            // Non-vacuous: an ARMED spinDrag:0 burst freezes at the birth angle -- a DIFFERENT lastRotate than the plain control.
+            const canvasC = makeCanvas({ record: true });
+            const cC = createConfetti(canvasC, { seed: 7, maxParticles: 1 });
+            cC.seed(7);
+            cC.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 0, align: 0,
+                spinRate: 1, turbulence: 0, spinDrag: 0, lifeMin: 5, lifeMax: 5 });
+            for (let f = 0; f < 10; f++) pump(1, 50);
+            const armedRotate = canvasC.lastRotate;
+            cC.destroy();
+            check(armedRotate !== B.r, () =>
+                `T3 A14: spinDrag:0 did not change the tumble vs spinDrag:1 (${armedRotate} == ${B.r}) -- the witness is vacuous`);
+        });
+        check(err === null, () => `T3 A14: threw ${err && err.message}`);
+    }
+
     check(pointerListenerCount() === baseListeners,
         () => `T3: tier leaked ${pointerListenerCount() - baseListeners} pointer listener(s) overall`);
 }

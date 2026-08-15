@@ -147,6 +147,19 @@ export interface BurstOptions {
      */
     spinRate?: number;
     /**
+     * Angular-velocity retention in [0,1] (v1.23.0) -- the angular mirror of the linear `drag`. Each frame,
+     * before the spin advance, `spinV` is multiplied by `spinDrag`, so the tumble decays exactly as `drag`
+     * decays translation. `1` (default) is OFF -- tumble forever, byte-identical to prior releases; `0.95`
+     * settles to a lazy drift; `0` FREEZES the piece at its birth angle. A contraction (|spinV| never grows),
+     * so it is finite for any input with no accel cap; it damps `spinV` ONLY, never `tiltV`. Coerced with
+     * clamp01: a NEGATIVE clamps to `0` (freeze -- a retention has no direction, unlike `spinRate`'s reverse),
+     * non-finite/undefined => `1` (off), > 1 => 1. A HYBRID physics knob: with `turbulence` OFF it moves ONLY
+     * the render rotation (the position fingerprint is byte-identical, rotateHash moves); with `turbulence` ON
+     * the curl phase reads the slower spin, so it MOVES the position stream too -- NOT a pure render overlay.
+     * Honored by both `burst()` and `spray()`. Draws no RNG; no effect under reduced motion. (v1.23.0)
+     */
+    spinDrag?: number;
+    /**
      * Size-over-life target. `1` (default) is a constant size; the render lerps each piece's DRAWN size
      * from `1.0` at birth to `scaleTo` at death by its life fraction. `0.2` shrinks out, `2` grows,
      * `0` vanishes at death. ISOTROPIC (one factor on both axes), folded into the same `ctx.scale` as

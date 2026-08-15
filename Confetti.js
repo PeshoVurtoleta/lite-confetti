@@ -1,9 +1,29 @@
 /**
- * @zakkster/lite-confetti v1.22.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.23.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
+ *
+ * v1.23.0 adds: `spinDrag` -- angular-velocity retention, the angular mirror of the linear `drag`. The engine
+ * has damped LINEAR velocity (`vx`/`vy *= drag`, default 0.98) since day one -- a piece slows as it flies --
+ * but its ANGULAR velocity was never damped: `spinV` was seeded once at spawn and `spin += spinV*dt` advanced
+ * it at that birth rate forever, so a piece tumbled just as fast the instant before death as at birth.
+ * `spinDrag` (opt-in scalar in [0,1], default 1 = off) closes that gap: each frame, before the spin advance,
+ * `spinV *= spinDrag`, so the tumble decays exactly as `drag` decays translation -- the last unmirrored
+ * asymmetry in the integrator. It is a CONTRACTION (factor in [0,1]): |spinV| never grows, finite for any
+ * input, no accel cap; guarded on `pool.sdrag[i] !== 1` so an off burst pays zero new bytes per frame and
+ * every committed fingerprint -- rotateHash included -- is byte-identical (1 is exactly representable in
+ * Float32, so NO fround sentinel). Coerced with `clamp01(spinDrag, 1)` (a retention has no DIRECTION, unlike
+ * spinRate's `num`): NEGATIVE => 0 (instant spin freeze at the birth angle, a legitimate finite value, the
+ * angular twin of the legal `drag: 0`), non-finite/undefined => 1 (off), > 1 => 1 (which would otherwise
+ * AMPLIFY spin and diverge). It damps `spinV` ONLY, never `tiltV` (tilt feeds sway + the turbulence curl).
+ * It is a HYBRID physics knob with ONE position-coupling path: `pool.spin` is read in exactly two places --
+ * the render rotation (always) and the turbulence curl `tp = tilt*1.7 + spin` (only inside `if (turb != 0)`).
+ * With turbulence OFF, a slower tumble moves ONLY the render rotation -- the position hash is byte-identical,
+ * rotateHash moves -- so it LOOKS like a pure render overlay; with turbulence ON, the curl reads the slower
+ * spin, so it MOVES the position stream and earns its own committed hash. NOT a pure render overlay. Both
+ * burst AND spray honor it; inert under reduced motion (the static path never integrates). +4 B/particle.
  *
  * v1.22.0 adds: `wallFriction` -- tangential drag on the box's THREE non-floor edges, the exact structural
  * twin of v1.21.0 `friction` (which covers the floor). The engine has had a full axis-aligned bounding box
@@ -705,6 +725,7 @@ export function createConfetti(canvas, {
         vy:    new Float32Array(maxParticles),
         spin:  new Float32Array(maxParticles),   // current rotation (radians)
         spinV: new Float32Array(maxParticles),   // spin velocity
+        sdrag: new Float32Array(maxParticles),   // angular retention 0..1; 1 = off (v1.23.0)
         tilt:  new Float32Array(maxParticles),   // wobble phase
         tiltV: new Float32Array(maxParticles),   // wobble speed
         w:     new Float32Array(maxParticles),   // width
@@ -853,6 +874,11 @@ export function createConfetti(canvas, {
         pool.spin[i] = rng.next() * TAU;
         pool.spin0[i] = pool.spin[i];   // birth tilt: the pivot for the spinRate render scale
         pool.spinV[i] = (rng.next() - 0.5) * 10;
+        // Angular retention (v1.23.0). ALWAYS written -- LOAD-BEARING, like scaleTo/flutterRate/fadeOut, NOT
+        // house style: a Float32Array zero-init of 0 means "instant spin freeze" -- a WRONG default. A recycled
+        // slot that skipped this write would spawn with a frozen tumble. The default must be 1 (off), so the
+        // unconditional write is REQUIRED for fail-closed pool reuse. (Contrast fric/wfric whose zero-init 0 == off.)
+        pool.sdrag[i] = config.spinDrag;
         pool.tilt[i] = rng.next() * TAU;
         pool.tilt0[i] = pool.tilt[i];   // birth wobble phase: the pivot for the flutterRate render scale
         pool.tiltV[i] = 1 + rng.next() * 4;
@@ -1091,6 +1117,14 @@ export function createConfetti(canvas, {
                 }
 
                 // Spin + wobble
+                // Angular drag (v1.23.0): the angular mirror of the linear `vx *= drag` above. Off (spinDrag == 1)
+                // leaves spinV untouched, so every committed fingerprint -- rotateHash included -- is byte-identical
+                // (1 is exact in Float32; no fround sentinel). A contraction (factor in [0,1]) => |spinV| never grows,
+                // finite for any input, no accel cap. Damps spinV ONLY, never tiltV (tilt feeds sway + the turb curl).
+                // HYBRID physics knob: with turbulence OFF this moves only the render rotation (position byte-identical,
+                // rotateHash moves); with turbulence ON the curl phase (tp = tilt*1.7 + spin) reads the slower spin, so
+                // it moves the POSITION stream too. NOT a pure render overlay.
+                if (pool.sdrag[i] !== 1) pool.spinV[i] *= pool.sdrag[i];
                 pool.spin[i] += pool.spinV[i] * dtSec;
                 pool.tilt[i] += pool.tiltV[i] * dtSec;
 
@@ -1323,7 +1357,9 @@ export function createConfetti(canvas, {
             // floor-contact frame on which to damp `vx` -- the tangential drag has nothing to bite.
             // `wallFriction` (v1.22.0) is INERT for the same reason: the static path does no integration and
             // never reaches a ceiling or wall collision, so there is no edge-contact frame on which to damp
-            // the tangential component -- the box grip has nothing to bite.
+            // the tangential component -- the box grip has nothing to bite. `spinDrag` (v1.23.0) is INERT too:
+            // the static path advances no `spin` and damps no `spinV`, so there is no accumulating tumble to
+            // decay -- the angular drag has nothing to bite.
             const rotation = rng.next() * TAU;
             // Honour a `shapes` mix in the reduced-motion render too. Single-shape (null)
             // takes no extra rng draw, so the non-mixed static render is unchanged.
@@ -1390,6 +1426,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.sway=0]      Horizontal drift 0..1 (0 straight fall)
          * @param {number} [options.align=0]     Velocity-align blend 0..1: rotate each piece BROADSIDE to its live velocity (its flat face meets the airflow, like a leaf), 0 = pure random spin, 1 = fully locked. Coerced to [0,1] (non-finite/negative => 0). A pure orientation overlay (rotation only) -- the seeded POSITION stream is byte-identical whether off or on. Zero-rng; inert under reduced motion
          * @param {number} [options.spinRate=1]  Tumble-speed multiplier on the seeded random spin: 0 = rigid at the random birth tilt, 0.3 = slow drift, 2 = double, negative = reverse. A pure RENDER scale, so the seeded POSITION stream is byte-identical off or on, even with `turbulence` armed. Zero-rng; non-finite => 1; inert under reduced motion
+         * @param {number} [options.spinDrag=1]  Angular-velocity retention in [0,1] -- the angular mirror of the linear `drag`. Each frame, before the spin advance, `spinV *= spinDrag`, so the tumble decays exactly as `drag` decays translation. `1` = off (default, tumble forever, exactly today's look), `0.95` = settle to a lazy drift, `0` = FREEZE at the birth angle. clamp01: a NEGATIVE clamps to `0` (freeze -- a retention has no direction, unlike spinRate's reverse), non-finite/undefined => `1` (off), > 1 => 1. A contraction (|spinV| never grows), finite with no accel cap. Damps `spinV` only, never `tiltV`. HYBRID physics knob: with turbulence OFF it moves ONLY the render rotation (position byte-identical, rotateHash moves); with turbulence ON the curl reads the slower spin, so it MOVES positions and earns its own hash -- NOT a pure render overlay. Zero-rng; inert under reduced motion
          * @param {number} [options.scaleTo=1]   Size-over-life target: lerp each piece's RENDERED size from 1.0 at birth to `scaleTo` at death (isotropic, both axes). `0.2` shrinks out, `2` grows, `0` vanishes at death; `1` = constant size. A pure RENDER overlay folded into the flutter scale call -- pool.w/h untouched, so the seeded POSITION stream is byte-identical off or on. Coerced with nonneg: a NEGATIVE clamps to 0 (a size has no direction), NOT a mirror flip and NOT a fallback to 1; non-finite => 1. The trail ribbon keeps its birth width. Zero-rng; inert under reduced motion
          * @param {number} [options.flutterRate=1] Tumble-wobble SPEED multiplier on the seeded flutter (the SPEED knob to `flutter`'s DEPTH): 0 = wobble frozen at the random birth tilt, 0.3 = slow lazy flutter, 2 = fast shimmer, negative = reversed phase; 1 = as seeded. A pure RENDER phase scale about a birth pivot, so the seeded POSITION stream is byte-identical off or on, even with `turbulence` armed. Inert when `flutter` is 0 (a zero-depth wobble has no speed). Zero-rng; non-finite => 1; inert under reduced motion
          * @param {number} [options.fadeIn=0]     Birth-opacity ramp: fade each piece up from transparent over the FIRST `fadeIn` fraction of its life (`0.4` eases in over the first 40%). The mirror of the hardcoded death fade-out, MULTIPLYING the same alpha; `1` ramps across the whole life; default `0` = today's instant-on. A pure RENDER overlay on ctx.globalAlpha -- pool.x/y/v untouched, so the seeded POSITION stream is byte-identical off or on. The trail ribbon materializes in with the body (shares the alpha). clamp01: non-finite/undefined/negative => 0 (off), > 1 clamps to 1. Zero-rng; inert under reduced motion
@@ -1440,6 +1477,7 @@ export function createConfetti(canvas, {
                   sway = 0,
                   align = 0,
                   spinRate = 1,
+                  spinDrag = 1,
                   scaleTo = 1,
                   flutterRate = 1,
                   fadeIn = 0,
@@ -1547,7 +1585,7 @@ export function createConfetti(canvas, {
                 : (trail === undefined ? trailCap : Math.min(trailCap, Math.floor(nonneg(trail, trailCap))));
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), scaleTo: nonneg(scaleTo, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), fadeOut: clamp01(fadeOut, FADE_OUT_DEF), turbulence, gust, trailLen: trailDraw,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), spinDrag: clamp01(spinDrag, 1), scaleTo: nonneg(scaleTo, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), fadeOut: clamp01(fadeOut, FADE_OUT_DEF), turbulence, gust, trailLen: trailDraw,
                 attract, swirl, attractX: vortX, attractY: vortY, settle, friction, wallFriction, lifeRamp,
             };
 
@@ -1607,6 +1645,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.sway=0]         Horizontal drift 0..1
          * @param {number} [options.align=0]        Velocity-align blend 0..1: rotate each piece broadside to its live velocity (0 = random spin, 1 = locked). A pure orientation overlay -- the seeded position stream is byte-identical off or on. Zero-rng
          * @param {number} [options.spinRate=1]     Tumble-speed multiplier on the seeded random spin (0 = rigid at the random birth tilt, 0.3 = slow drift, 2 = double, negative = reverse). A pure render scale -- the seeded position stream is byte-identical off or on, even with `turbulence` armed. Zero-rng; non-finite => 1
+         * @param {number} [options.spinDrag=1]     Angular-velocity retention in [0,1] -- the angular mirror of the linear `drag`. Each frame, before the spin advance, `spinV *= spinDrag`, so the tumble decays as `drag` decays translation. `1` = off (default), `0.95` = settle to a lazy drift, `0` = FREEZE at the birth angle. clamp01: a NEGATIVE clamps to `0` (freeze -- a retention has no direction), non-finite => `1` (off), > 1 => 1. A contraction (|spinV| never grows), finite with no accel cap. Damps `spinV` only, never `tiltV`. HYBRID physics knob: turbulence OFF moves only the render rotation (position byte-identical); turbulence ON the curl reads the slower spin and MOVES positions -- NOT a pure render overlay. Zero-rng
          * @param {number} [options.scaleTo=1]      Size-over-life target: lerp each piece's rendered size from 1.0 at birth to `scaleTo` at death (isotropic). `0.2` shrinks out, `2` grows, `0` vanishes; `1` = constant size. A pure render overlay -- pool.w/h untouched, so the seeded position stream is byte-identical off or on. nonneg: a NEGATIVE clamps to 0 (not a flip, not a fallback to 1); non-finite => 1. The trail keeps its birth width. Zero-rng
          * @param {number} [options.flutterRate=1]  Tumble-wobble SPEED multiplier on the seeded flutter (0 = frozen at the random birth tilt, 0.3 = slow lazy flutter, 2 = fast shimmer, negative = reversed; 1 = as seeded). A pure render phase scale about a birth pivot -- the seeded position stream is byte-identical off or on, even with `turbulence` armed. Inert when `flutter` is 0. Zero-rng; non-finite => 1
          * @param {number} [options.fadeIn=0]       Birth-opacity ramp: fade each piece up from transparent over the FIRST `fadeIn` fraction of its life (`0.4` eases in over the first 40%). The mirror of the hardcoded death fade-out, multiplying the same alpha; `1` ramps across the whole life; default `0` = instant-on. A pure render overlay on ctx.globalAlpha -- pool.x/y/v untouched, so the seeded position stream is byte-identical off or on. The trail materializes in with the body. clamp01: non-finite/negative => 0 (off), > 1 => 1. Zero-rng
@@ -1654,6 +1693,7 @@ export function createConfetti(canvas, {
                   sway = 0,
                   align = 0,
                   spinRate = 1,
+                  spinDrag = 1,
                   scaleTo = 1,
                   flutterRate = 1,
                   fadeIn = 0,
@@ -1750,7 +1790,7 @@ export function createConfetti(canvas, {
                 : (trail === undefined ? trailCap : Math.min(trailCap, Math.floor(nonneg(trail, trailCap))));
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), scaleTo: nonneg(scaleTo, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), fadeOut: clamp01(fadeOut, FADE_OUT_DEF), turbulence, gust, trailLen: trailDraw,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), spinDrag: clamp01(spinDrag, 1), scaleTo: nonneg(scaleTo, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), fadeOut: clamp01(fadeOut, FADE_OUT_DEF), turbulence, gust, trailLen: trailDraw,
                 attract, swirl, attractX: vortX, attractY: vortY, settle, friction, wallFriction, lifeRamp,
             };
 

@@ -119,6 +119,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `stagger` | number | — | Staggered-emission window in ms: spread the `count` births evenly over it (piece `i` wakes at `stagger·i/count`), so the burst cascades in instead of appearing at once. **Burst-only** (a spray already emits over time; it ignores `stagger`). Opt-in; off / `≤ 0` / non-finite = synchronous spawn, byte-identical. See [Staggered emission](#staggered-emission). |
 | `align` | number | `0` | Velocity-align blend `0..1`: rotate each piece **broadside** to its live velocity (its flat face meets the airflow, like a leaf), `0` = pure random spin, `1` = fully locked. Coerced to `[0, 1]`. A pure orientation overlay — the seeded position stream is byte-identical off or on. Honored by `burst()` **and** `spray()`. See [Velocity-aligned orientation](#velocity-aligned-orientation). |
 | `spinRate` | number | `1` | Tumble-speed multiplier on the seeded random spin: `1` = as seeded, `0` = rigid at the random birth tilt, `0.3` = slow drift, `2` = double, negative = reverse. Coerced with `num` (non-finite → `1`; `0` and negatives are valid). A pure render-orientation overlay — the seeded position stream is byte-identical off or on, **even with `turbulence` armed**. Honored by `burst()` **and** `spray()`. See [Tumble speed](#tumble-speed). |
+| `spinDrag` | number | `1` | Angular-velocity **retention** in `0–1` — the angular mirror of the linear `drag`. Each frame, before the spin advance, `spinV *= spinDrag`, so the tumble decays exactly as `drag` decays translation. `1` = off (tumble forever, today's look), `0.95` = settle to a lazy drift, `0` = freeze at the birth angle. Coerced with `clamp01` (like `drag`/`bounce`): a **negative** clamps to `0` (freeze — a retention has no direction, unlike `spinRate`'s reverse); non-finite → `1`. A contraction (`\|spinV\|` never grows; no accel cap). Damps `spinV` only, never `tiltV`. A **hybrid physics** knob: with `turbulence` off it moves only the render rotation (position byte-identical), with `turbulence` on the curl reads the slower spin and it moves the position fingerprint — **not** a pure render overlay. Honored by `burst()` **and** `spray()`. See [Spin drag](#spin-drag). |
 | `scaleTo` | number | `1` | Size-over-life target: lerp each piece's **rendered** size from `1.0` at birth to `scaleTo` at death (isotropic, both axes). `0.2` shrinks out, `2` grows/blooms, `0` vanishes at death; `1` = constant size. Coerced with `nonneg`: a **negative** clamps to `0` (a size has no direction — not a mirror flip, not a fallback to `1`); non-finite → `1`. A pure render-scale overlay folded into flutter's `ctx.scale` — `pool.w`/`pool.h` untouched, so the seeded position stream is byte-identical off or on; the trail keeps its birth width. Honored by `burst()` **and** `spray()`. See [Size over life](#size-over-life). |
 | `flutterRate` | number | `1` | Tumble-wobble **speed** multiplier on the seeded flutter (the speed knob to `flutter`'s depth): `1` = as seeded, `0` = frozen at the random birth tilt, `0.3` = slow lazy flutter, `2` = fast shimmer, negative = reversed. Coerced with `num` (`0` and negatives valid; non-finite → `1`). **Inert when `flutter` is 0** (a zero-depth wobble has no speed). A pure render-phase overlay about a birth pivot that never touches `pool.tilt` — the seeded position stream is byte-identical off, on, or on-with-turbulence. Honored by `burst()` **and** `spray()`. See [Wobble speed](#wobble-speed). |
 | `fadeIn` | number | `0` | Birth-**opacity** ramp: fade each piece up from transparent over the **first `fadeIn` fraction** of its life (`0.4` = ease in over the first 40%, `1` = ramp across the whole life; `0` = instant-on). The mirror of the hardcoded death fade-out, **multiplying** the same `alpha`. Coerced with `clamp01` (non-finite/negative → `0` off, `> 1` → `1`). A pure render overlay on `ctx.globalAlpha` that never touches `pool.x/y/vx/vy` — the seeded position stream is byte-identical off or on (and rotate/scale/stroke/color too). The trail materializes in with the body. Honored by `burst()` **and** `spray()`; inert under reduced motion. See [Birth opacity](#birth-opacity). |
@@ -307,6 +308,17 @@ c.burst({ floor: 520, wind: 700, friction: 0.85 });   // fire sideways, land, sk
 ```js
 c.burst({ ceiling: 40, wallLeft: 60, wallRight: 740, floor: 560, bounce: 0.6, wallFriction: 0.6, wind: 300 });
 ```
+
+### Spin drag
+
+`drag` has damped a piece's **translation** every frame since day one — but its **spin** was drawn once at birth and tumbled at that rate forever. **`spinDrag`** (added in v1.23.0) is the angular mirror: each frame, immediately before the spin advance, `spinV *= spinDrag`, so the tumble decays exactly as `drag` decays motion. It's the last unmirrored asymmetry in the integrator closed.
+
+```js
+c.burst({ spinDrag: 0.9, turbulence: 300 });   // pieces tumble fast, then settle to a lazy drift
+```
+
+- **`spinDrag`** is a retention `0–1`: `1` = off (tumble forever, today's exact look), `0.95` a gentle decay to a lazy drift, `0` an instant freeze at the birth angle. Coerced with `clamp01` like `drag`/`bounce` — a **negative** clamps to `0` (freeze; a retention has no direction, unlike `spinRate`'s reverse), non-finite → `1`, `> 1` → `1` (which would otherwise *amplify* spin and diverge). It's a contraction, so `|spinV|` can only shrink and no acceleration cap is needed. It damps `spinV` only, never `tiltV` (the wobble phase feeds `sway` and the turbulence curl).
+- **It's a *hybrid physics* knob, not a pure render overlay.** `pool.spin` is read in exactly two places — the render rotation and the turbulence curl (`tilt*1.7 + spin`). So with **`turbulence` off** a slower spin moves only the render rotation and the seeded **position** stream is byte-identical (only `rotateHash` moves, its own committed fingerprint); with **`turbulence` on** the curl reads the slower spin, so it moves positions too (a second committed fingerprint on the same turbulence baseline). At `spinDrag: 1` every prior fingerprint — `rotateHash` included — reproduces byte-for-byte. Zero random draws; no effect under reduced motion (the static render never advances spin).
 
 ### Color over life
 
@@ -766,47 +778,48 @@ The pool is `maxParticles` wide. Per particle, the **always-on** columns cost a 
 | `vy` | Float32 | 4 | 16 |
 | `spin` | Float32 | 4 | 20 |
 | `spinV` | Float32 | 4 | 24 |
-| `tilt` | Float32 | 4 | 28 |
-| `tiltV` | Float32 | 4 | 32 |
-| `w` | Float32 | 4 | 36 |
-| `h` | Float32 | 4 | 40 |
-| `life` | Float32 | 4 | 44 |
-| `maxL` | Float32 | 4 | 48 |
-| `grav` | Float32 | 4 | 52 |
-| `wind` | Float32 | 4 | 56 |
-| `floor` | Float32 | 4 | 60 |
-| `bounce` | Float32 | 4 | 64 |
-| `wallL` | Float32 | 4 | 68 |
-| `wallR` | Float32 | 4 | 72 |
-| `ceil` | Float32 | 4 | 76 |
-| `drag` | Float32 | 4 | 80 |
-| `flut` | Float32 | 4 | 84 |
-| `sway` | Float32 | 4 | 88 |
-| `align` | Float32 | 4 | 92 |
-| `spin0` | Float32 | 4 | 96 |
-| `spinRate` | Float32 | 4 | 100 |
-| `scaleTo` | Float32 | 4 | 104 |
-| `tilt0` | Float32 | 4 | 108 |
-| `flutterRate` | Float32 | 4 | 112 |
-| `fadeIn` | Float32 | 4 | 116 |
-| `fadeOut` | Float32 | 4 | 120 |
-| `turb` | Float32 | 4 | 124 |
-| `gust` | Float32 | 4 | 128 |
-| `vortX` | Float32 | 4 | 132 |
-| `vortY` | Float32 | 4 | 136 |
-| `attract` | Float32 | 4 | 140 |
-| `swirl` | Float32 | 4 | 144 |
-| `settle` | Float32 | 4 | 148 |
-| `friction` | Float32 | 4 | 152 |
-| `wfric` | Float32 | 4 | 156 |
-| `delay` | Float32 | 4 | 160 |
-| `landed` | Uint8 | 1 | 161 |
-| `shape` | Uint8 | 1 | 162 |
-| **always-on total** | **40×F32 + 2×U8** | **162** | **162** |
+| `sdrag` | Float32 | 4 | 28 |
+| `tilt` | Float32 | 4 | 32 |
+| `tiltV` | Float32 | 4 | 36 |
+| `w` | Float32 | 4 | 40 |
+| `h` | Float32 | 4 | 44 |
+| `life` | Float32 | 4 | 48 |
+| `maxL` | Float32 | 4 | 52 |
+| `grav` | Float32 | 4 | 56 |
+| `wind` | Float32 | 4 | 60 |
+| `floor` | Float32 | 4 | 64 |
+| `bounce` | Float32 | 4 | 68 |
+| `wallL` | Float32 | 4 | 72 |
+| `wallR` | Float32 | 4 | 76 |
+| `ceil` | Float32 | 4 | 80 |
+| `drag` | Float32 | 4 | 84 |
+| `flut` | Float32 | 4 | 88 |
+| `sway` | Float32 | 4 | 92 |
+| `align` | Float32 | 4 | 96 |
+| `spin0` | Float32 | 4 | 100 |
+| `spinRate` | Float32 | 4 | 104 |
+| `scaleTo` | Float32 | 4 | 108 |
+| `tilt0` | Float32 | 4 | 112 |
+| `flutterRate` | Float32 | 4 | 116 |
+| `fadeIn` | Float32 | 4 | 120 |
+| `fadeOut` | Float32 | 4 | 124 |
+| `turb` | Float32 | 4 | 128 |
+| `gust` | Float32 | 4 | 132 |
+| `vortX` | Float32 | 4 | 136 |
+| `vortY` | Float32 | 4 | 140 |
+| `attract` | Float32 | 4 | 144 |
+| `swirl` | Float32 | 4 | 148 |
+| `settle` | Float32 | 4 | 152 |
+| `friction` | Float32 | 4 | 156 |
+| `wfric` | Float32 | 4 | 160 |
+| `delay` | Float32 | 4 | 164 |
+| `landed` | Uint8 | 1 | 165 |
+| `shape` | Uint8 | 1 | 166 |
+| **always-on total** | **41×F32 + 2×U8** | **166** | **166** |
 
-The render-orientation / render-scale / render-opacity family added over v1.15.0–v1.20.0 is eight of those columns — `align` + `spin0` + `spinRate` + `scaleTo` + `tilt0` + `flutterRate` + `fadeIn` + `fadeOut` = 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 = **32 B/particle** — each a birth pivot or a render-time multiplier that never enters `ctx.translate`, so they cost bytes but move no fingerprint. `fadeIn` (birth) and `fadeOut` (death) now bracket the full opacity envelope on one shared `alpha`. `friction` (v1.21.0) is a **physics** column — the tangential complement to `bounce`, damping `vx` on each floor contact — so unlike those eight it *does* move the position fingerprint. `wfric` (`wallFriction`, v1.22.0) is a second physics column — the same tangential drag on the box's three non-floor edges (ceiling damps `vx`, walls damp `vy`) — so it, too, moves the fingerprint.
+The render-orientation / render-scale / render-opacity family added over v1.15.0–v1.20.0 is eight of those columns — `align` + `spin0` + `spinRate` + `scaleTo` + `tilt0` + `flutterRate` + `fadeIn` + `fadeOut` = 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 = **32 B/particle** — each a birth pivot or a render-time multiplier that never enters `ctx.translate`, so they cost bytes but move no fingerprint. `fadeIn` (birth) and `fadeOut` (death) now bracket the full opacity envelope on one shared `alpha`. `friction` (v1.21.0) is a **physics** column — the tangential complement to `bounce`, damping `vx` on each floor contact — so unlike those eight it *does* move the position fingerprint. `wfric` (`wallFriction`, v1.22.0) is a second physics column — the same tangential drag on the box's three non-floor edges (ceiling damps `vx`, walls damp `vy`) — so it, too, moves the fingerprint. `sdrag` (`spinDrag`, v1.23.0) is a third — the angular mirror of `drag`, damping `spinV` every frame — which moves the fingerprint only when `turbulence` is armed (the sole path that couples `spin` back into position).
 
-Two more classes sit **outside** the always-on 162 B:
+Two more classes sit **outside** the always-on 166 B:
 
 | Buffer | Type | B/particle | When |
 |---|---|---:|---|
@@ -823,7 +836,7 @@ The trail ring buffers are allocated **only** when the instance is built with a 
 The gated quality numbers the torture harness commits, so a regression fails CI as loudly as a leak:
 
 - **Alloc gate.** `update()` over a **full `maxParticles` pool** — including a custom vector shape, an image sprite, the living-air forces, and a trailed pool — retains **~0 B/frame**, measured against a retained-bytes floor of **8.0 B/frame** (`RETAIN_FLOOR_BPF`). A per-frame-allocating control provably exceeds it.
-- **Determinism.** Every feature-off path preserves the committed default determinism fingerprint **`1569828004`** byte-for-byte (each opt-in feature — wind, floor, box, living air, trails, vortex, settle, life colors, emit, stagger, align, spinRate, scaleTo, flutterRate, fadeIn, fadeOut, friction, wallFriction — carries its own committed fingerprint when on, and leaves the default untouched when off).
+- **Determinism.** Every feature-off path preserves the committed default determinism fingerprint **`1569828004`** byte-for-byte (each opt-in feature — wind, floor, box, living air, trails, vortex, settle, life colors, emit, stagger, align, spinRate, scaleTo, flutterRate, fadeIn, fadeOut, friction, wallFriction, spinDrag — carries its own committed fingerprint when on, and leaves the default untouched when off).
 - **GC budget.** The full-pool loop runs under `@zakkster/lite-gc-profiler` with `maxMajor: 0` and 0 retained bytes under `@zakkster/lite-leak`, all under `--expose-gc`.
 
 </details>
@@ -832,10 +845,10 @@ The gated quality numbers the torture harness commits, so a regression fails CI 
 
 ## Testing
 
-**248 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
+**259 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
 
 ```bash
-npm test          # 248 node:test cases (contract + boundary + fingerprint)
+npm test          # 259 node:test cases (contract + boundary + fingerprint)
 npm run torture   # @zakkster/lite-leak + lite-gc-profiler under --expose-gc
 npm run verify    # test + torture, the publish gate
 ```

@@ -134,6 +134,23 @@ const ALIGN_HASH = 1909618495; // burst({ align: 1 }) rotateHash on the canonica
 // rotateHash (and from align/0.5) and its own deterministic-replay gate.
 const SPINRATE_HASH = 1105261140; // burst({ spinRate: 2 }) rotateHash on the canonical rig
 
+// Committed ROTATION fingerprint for angular-velocity retention (v1.23.0, decision 0024). `spinDrag` is the
+// angular mirror of the linear `drag`: each frame, before the spin advance, `spinV *= spinDrag`. It is a
+// HYBRID physics knob with ONE position-coupling path -- `pool.spin` is read only by the render rotation
+// (always) and the turbulence curl `tp = tilt*1.7 + spin` (only inside `if (turb != 0)`). With turbulence
+// OFF, a slower tumble moves ONLY the render rotation, so the POSITION hash stays COMMITTED_HASH and only the
+// rotate sequence moves (it rides the v1.15.0 `rotateHash` probe -- no new harness channel). Value probed on
+// the canonical seed-12345 rig (turbulence OFF) with spinDrag:0.9; distinct from the OFF rotateHash and from
+// spinDrag:0.5, cross-process stable, its own deterministic-replay gate.
+const SPINDRAG_ROT_HASH = 3829166209; // run({ spinDrag: 0.9 }).rotateHash on the canonical rig (turbulence OFF)
+
+// Committed POSITION fingerprint for spinDrag UNDER TURBULENCE -- the crux. With turbulence ON the curl phase
+// reads the now-slower spin, so the wander bends and the POSITION stream MOVES. Probed on the SAME turbulence
+// baseline as TURB_HASH (turbulence:500) with spinDrag:0.9; it MUST differ from TURB_HASH 1630588936 (that
+// same baseline, spinDrag off) -- the coupling is real, so spinDrag is NEVER a pure render overlay. Draws no
+// rng (a contraction of seeded state), so it is cross-process stable and its own deterministic-replay gate.
+const SPINDRAG_TURB_HASH = 4289557192; // run({ turbulence: 500, spinDrag: 0.9 }).hash (distinct from TURB_HASH 1630588936)
+
 // Committed SCALE fingerprint for size-over-life (v1.17.0, decision 0018). `scaleTo` changes ONLY the
 // arguments to ctx.scale (folded into flutter's existing X-wobble call), never ctx.translate, so a
 // scaled burst reproduces the same-seed plain burst's POSITION hash (COMMITTED_HASH) exactly -- a pure
@@ -2230,6 +2247,218 @@ describe('lite-confetti', () => {
             const on = staticSpin({ spinRate: 0 });
             assert.equal(on.hash, off.hash, 'spinRate should be inert on the static reduced-motion positions');
             assert.equal(on.rotateHash, off.rotateHash, 'spinRate should not touch the static fan rotation');
+        });
+    });
+
+    describe('spinDrag / angular retention', () => {
+        // The canonical seed-12345 rig (shared with the wind/floor/box/spinRate suites). `run` reports every
+        // render channel: `hash` (position, translate only), `rotateHash`, `scaleHash`, `colorHash`, `alphaHash`
+        // (each kept OUT of `hash`) plus `lastRotate` (a hash-neutral witness). spinDrag is the angular mirror of
+        // the linear `drag` (`spinV *= spinDrag` before the spin advance). Its headline on this TURBULENCE-OFF rig
+        // is that the POSITION hash is byte-identical whether off or on -- only the render rotation moves. But it
+        // is NOT a pure render overlay: under turbulence the curl reads the slower spin and positions MOVE (crux).
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = {
+                hash: canvas.hash, rotateHash: canvas.rotateHash, scaleHash: canvas.scaleHash,
+                strokeHash: canvas.strokeHash, colorHash: canvas.colorHash, alphaHash: canvas.alphaHash,
+            };
+            c.destroy();
+            return out;
+        };
+
+        it('is opt-in and fail-closed: off / 1 / non-finite / string coerce to 1 (byte-identical)', () => {
+            // clamp01 maps non-finite/undefined -> 1 (off). Every such input leaves spinV untouched, so BOTH the
+            // position hash AND the rotation sequence match a pre-spinDrag run bit-for-bit.
+            const base = run({});
+            assert.equal(base.hash, COMMITTED_HASH, 'the spinDrag branch perturbed the default position stream');
+            for (const o of [
+                {},                        // omitted
+                { spinDrag: 1 },           // explicit default
+                { spinDrag: NaN },         // non-finite -> clamp01 default 1
+                { spinDrag: Infinity },    // non-finite -> clamp01 default 1
+                { spinDrag: '0.9' },       // non-numeric -> clamp01 default 1
+                { spinDrag: null },        // non-finite -> clamp01 default 1
+                { spinDrag: undefined },   // omitted -> default 1
+            ]) {
+                const r = run(o);
+                assert.equal(r.hash, COMMITTED_HASH, `spinDrag ${JSON.stringify(o)} should not move positions`);
+                assert.equal(r.rotateHash, base.rotateHash,
+                    `spinDrag ${JSON.stringify(o)} should leave spinV untouched (rotation unchanged)`);
+            }
+        });
+
+        it('a NEGATIVE freezes at 0 -- it does NOT fall back to the default (decision 1)', () => {
+            // clamp01 sends a negative to 0 (instant spin freeze at the birth angle), a legitimate finite value --
+            // the angular twin of the legal drag:0, NOT a fallback to 1. So run(-1) must match run(0), and both
+            // must DIFFER from off. Positions stay COMMITTED_HASH (turbulence off -- render-only).
+            const off = run({});
+            const neg = run({ spinDrag: -1 });
+            const zero = run({ spinDrag: 0 });
+            assert.equal(neg.rotateHash, zero.rotateHash, 'a negative spinDrag must freeze like 0, not default to 1');
+            assert.notEqual(zero.rotateHash, off.rotateHash, 'a frozen tumble must differ from the off tumble');
+            assert.equal(neg.hash, COMMITTED_HASH, 'a frozen spin must not move positions (turbulence off)');
+            assert.equal(zero.hash, COMMITTED_HASH, 'a frozen spin must not move positions (turbulence off)');
+        });
+
+        it('every prior POSITION fingerprint reproduces on its turbulence-OFF rig (0.9/0.5/0/-1)', () => {
+            // spinDrag is a HYBRID knob: with turbulence OFF it moves ONLY the render rotation. So on EVERY
+            // turbulence-off physics rig -- default / floor / box / wind / friction / wallFriction -- the position
+            // hash and the scale/stroke/color/alpha channels are byte-identical off or armed; only rotateHash moves.
+            const rigs = [
+                { name: 'default',      base: {},                                        hash: COMMITTED_HASH },
+                { name: 'floor',        base: { floor: FLOOR_Y, bounce: 0 },             hash: FLOOR_HASH },
+                { name: 'box',          base: { ...BOX, bounce: 0 },                     hash: BOX_HASH },
+                { name: 'wind',         base: { wind: 300 },                             hash: WIND_HASH },
+                { name: 'friction',     base: { floor: FLOOR_Y, friction: 0.5 },         hash: FRICTION_HASH },
+                { name: 'wallFriction', base: { ...BOX, bounce: 0.6, wallFriction: 0.5 }, hash: WALLFRICTION_HASH },
+            ];
+            for (const rig of rigs) {
+                const off = run(rig.base);
+                assert.equal(off.hash, rig.hash, `${rig.name} baseline drifted`);
+                for (const sd of [0.9, 0.5, 0, -1]) {
+                    const on = run({ ...rig.base, spinDrag: sd });
+                    assert.equal(on.hash, rig.hash, `${rig.name} position hash drifted with spinDrag:${sd}`);
+                    assert.equal(on.scaleHash, off.scaleHash, `${rig.name} scaleHash drifted with spinDrag:${sd}`);
+                    assert.equal(on.strokeHash, off.strokeHash, `${rig.name} strokeHash drifted with spinDrag:${sd}`);
+                    assert.equal(on.colorHash, off.colorHash, `${rig.name} colorHash drifted with spinDrag:${sd}`);
+                    assert.equal(on.alphaHash, off.alphaHash, `${rig.name} alphaHash drifted with spinDrag:${sd}`);
+                }
+            }
+        });
+
+        it('matches the committed SPINDRAG rotation fingerprint -- distinct + deterministic (turbulence off)', () => {
+            const on = run({ spinDrag: 0.9 });
+            if (SPINDRAG_ROT_HASH === null) console.log('[spinDrag] 0.9 rotateHash =', on.rotateHash);
+            else assert.equal(on.rotateHash, SPINDRAG_ROT_HASH, 'spinDrag rotation changed vs the committed baseline');
+            // Deterministic: same seed + fixed dt -> same rotation on replay (spinDrag draws no rng).
+            assert.equal(run({ spinDrag: 0.9 }).rotateHash, on.rotateHash, 'spinDrag not deterministic on replay');
+            // Non-vacuous: it genuinely moves the rotation vs off AND vs a different factor.
+            assert.notEqual(on.rotateHash, run({}).rotateHash, 'spinDrag:0.9 should move the rotation vs off');
+            assert.notEqual(on.rotateHash, run({ spinDrag: 0.5 }).rotateHash, 'spinDrag:0.9 should differ from 0.5');
+            // Headline: on this turbulence-off rig the position stream is byte-identical.
+            assert.equal(on.hash, COMMITTED_HASH, 'spinDrag moved positions with turbulence OFF (should be render-only)');
+        });
+
+        it('THE CRUX: under turbulence the curl reads the slower spin, so POSITIONS move', () => {
+            // pool.spin feeds the turbulence curl (tp = tilt*1.7 + spin). With turbulence armed, a slower tumble
+            // bends the per-particle wander -> vx/vy -> x/y. So on the SAME turbulence:500 baseline, spinDrag:0.9
+            // must give a DIFFERENT position hash than spinDrag off. This is why spinDrag is never documented as a
+            // pure render overlay.
+            assert.equal(run({ turbulence: 500 }).hash, TURB_HASH, 'the turbulence baseline drifted');
+            const on = run({ turbulence: 500, spinDrag: 0.9 });
+            if (SPINDRAG_TURB_HASH === null) console.log('[spinDrag] turb500+0.9 hash =', on.hash);
+            else assert.equal(on.hash, SPINDRAG_TURB_HASH, 'turbulent spinDrag positions changed vs the committed baseline');
+            assert.notEqual(on.hash, TURB_HASH, 'spinDrag under turbulence MUST move positions (the coupling is real)');
+            assert.equal(run({ turbulence: 500, spinDrag: 0.9 }).hash, on.hash, 'turbulent spinDrag not deterministic');
+        });
+
+        it('damps spinV ONLY, never tiltV: a sway-armed turbulence-off rig keeps its position hash', () => {
+            // sway is a direct x-write from Math.sin(tilt). If spinDrag damped tiltV it would move a swaying burst.
+            // It does not: on a sway-armed, turbulence-off rig, spinDrag:0.5 reproduces its spinDrag-off position
+            // hash exactly (only rotateHash moves). Proves the single-coupling-path property (decision 2).
+            const off = run({ sway: 0.8 });
+            const on = run({ sway: 0.8, spinDrag: 0.5 });
+            assert.equal(on.hash, off.hash, 'spinDrag damped tiltV (a sway-armed position hash moved)');
+            assert.notEqual(on.rotateHash, off.rotateHash, 'spinDrag should still move the rotation (non-vacuous)');
+        });
+
+        it('scales the RATE, not noise: |lastRotate - birth| strictly decreases as spinDrag drops to 0', () => {
+            // A single piece with no velocity, pumped a fixed number of frames so its seeded tumble accumulates.
+            // The damp is `spinV *= spinDrag` before each advance, so the total swept angle is
+            // spinV0*dt*(sd + sd^2 + ... + sd^N) -- strictly increasing in sd on [0,1], exactly 0 at sd 0 (the
+            // piece freezes at its birth angle). A bare hash proves determinism but not that the knob scales the RATE.
+            const pumped = (sd) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 7 });
+                c.burst({ count: 1, x: 400, y: 300, spread: 0.001, speed: 10, gravity: 0, drag: 1,
+                    align: 0, spinRate: 1, turbulence: 0, flutter: 0, lifeMin: 20, lifeMax: 20, spinDrag: sd });
+                pump(30, 50);
+                const last = canvas.lastRotate;
+                c.destroy();
+                return last;
+            };
+            const birth = pumped(0);                 // spinDrag 0 freezes at the birth angle (the pivot)
+            const swept = (sd) => Math.abs(pumped(sd) - birth);
+            const d1  = swept(1);
+            const d99 = swept(0.99);
+            const d95 = swept(0.95);
+            const d90 = swept(0.9);
+            const d0  = swept(0);
+            assert.equal(d0, 0, 'spinDrag 0 must freeze the tumble at the birth angle (zero swept)');
+            assert.ok(d1 > d99, 'spinDrag 1 must sweep more than 0.99');
+            assert.ok(d99 > d95, 'spinDrag 0.99 must sweep more than 0.95');
+            assert.ok(d95 > d90, 'spinDrag 0.95 must sweep more than 0.9');
+            assert.ok(d90 > d0, 'spinDrag 0.9 must sweep more than the frozen 0');
+        });
+
+        it('keeps draws finite under spinDrag + turbulence + wind + gravity + a bouncing box + trails', () => {
+            const canvas = makeCanvas({ record: true, assertFinite: true });
+            const c = createConfetti(canvas, { seed: 3, trail: 8 });
+            for (const sd of [0, 0.5, 1e9, -5]) {   // 1e9 -> 1 (off), -5 -> 0 (freeze)
+                assert.doesNotThrow(() => {
+                    c.burst({
+                        x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 4, lifeMax: 4,
+                        wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350, bounce: 0.6,
+                        gravity: 4000, wind: 1200, turbulence: 500, spinDrag: sd,
+                    });
+                    pump(80, 16);
+                }, `spinDrag:${sd} produced a non-finite draw under load`);
+            }
+            c.destroy();
+        });
+
+        it('is honored by spray() too (turbulence off: rotation moves, position identical)', () => {
+            const spray = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 400, rate: 15, x: 400, y: 200, spread: 1.2, shape: 'rect',
+                    lifeMin: 4, lifeMax: 4, ...opts });
+                pump(1, 1000); pump(60, 16);
+                const out = { hash: canvas.hash, rotateHash: canvas.rotateHash };
+                c.destroy();
+                return out;
+            };
+            const off = spray({});
+            const on = spray({ spinDrag: 0.9 });
+            assert.equal(on.hash, off.hash, 'spinDrag should not move spray positions (turbulence off)');
+            assert.notEqual(on.rotateHash, off.rotateHash, 'spray should honor spinDrag (rotation changed)');
+        });
+
+        it('has no effect under reduced motion (static fan is inert)', () => {
+            const staticSpin = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                    pump(1, 1000); pump(29, 16);
+                    const out = { hash: canvas.hash, rotateHash: canvas.rotateHash };
+                    c.destroy();
+                    return out;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            const off = staticSpin({});
+            const on = staticSpin({ spinDrag: 0.1 });
+            assert.equal(on.hash, off.hash, 'spinDrag should be inert on the static reduced-motion positions');
+            assert.equal(on.rotateHash, off.rotateHash, 'spinDrag should not touch the static fan rotation');
+        });
+
+        it('composes with spinRate + align: same positions (turb off), a rotation distinct from each alone', () => {
+            // spinDrag damps the accumulation; spinRate render-scales it; align blends toward the heading. All
+            // read the same spin, none collide. Turbulence off => positions byte-identical; the combined rotation
+            // differs from any single knob.
+            const off = run({});
+            const composed = run({ spinDrag: 0.5, spinRate: 2, align: 1 });
+            assert.equal(composed.hash, off.hash, 'the composition moved positions with turbulence off');
+            assert.notEqual(composed.rotateHash, run({ spinDrag: 0.5 }).rotateHash, 'composition == spinDrag alone');
+            assert.notEqual(composed.rotateHash, run({ spinRate: 2 }).rotateHash, 'composition == spinRate alone');
+            assert.notEqual(composed.rotateHash, run({ align: 1 }).rotateHash, 'composition == align alone');
         });
     });
 

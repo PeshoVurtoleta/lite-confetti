@@ -638,6 +638,11 @@
                 <input type="range" id="spinRate" min="0" max="3" value="1" step="0.1">
             </div>
             <div class="control">
+                <div class="control-header"><span class="control-name">spinDrag (tumble decay)</span><span class="control-val"
+                                                                                       id="spinDragVal">off</span></div>
+                <input type="range" id="spinDrag" min="0" max="1" value="1" step="0.05">
+            </div>
+            <div class="control">
                 <div class="control-header"><span class="control-name">flutterRate (wobble)</span><span class="control-val"
                                                                                        id="flutterRateVal">default</span></div>
                 <input type="range" id="flutterRate" min="0" max="3" value="1" step="0.1">
@@ -736,7 +741,7 @@
     const $codeBtn  = document.getElementById('codeBtn');
     const $seedBtn  = document.getElementById('seedBtn');
 
-    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'friction', 'wallFriction', 'box', 'spark', 'emit', 'emitSize', 'stagger', 'align', 'spinRate', 'flutterRate', 'fadeIn', 'fadeOut'];
+    const SLIDERS = ['count', 'spread', 'angle', 'speed', 'speedVar', 'gravity', 'drag', 'sizeMin', 'sizeMax', 'lifeMin', 'lifeMax', 'flutter', 'sway', 'wind', 'turbulence', 'gust', 'attract', 'swirl', 'trail', 'floor', 'bounce', 'settle', 'friction', 'wallFriction', 'box', 'spark', 'emit', 'emitSize', 'stagger', 'align', 'spinRate', 'spinDrag', 'flutterRate', 'fadeIn', 'fadeOut'];
     const EMIT_SHAPES = ['off', 'line', 'ring', 'box']; // emit slider 0..3 -> shape name (v1.13.0)
     // v1.12.0 color-over-life: a fixed 3-stop ember ramp (near-white -> gold -> deep orange) the demo
     // injects when the `spark` toggle is on, so pieces cool as they age. Frozen + shared: the engine
@@ -882,6 +887,11 @@
         // Read at action rate, never per frame. A render-only overlay; positions unchanged even with turbulence.
         const sr = +$in.spinRate.value;
         if (sr !== 1) cfg.spinRate = sr;
+        // v1.23.0 spinDrag: angular-velocity retention -- the angular mirror of drag (1 = off, 0.95 = lazy
+        // drift, 0 = freeze at the birth angle). Read at action rate, never per frame. A physics knob: it
+        // moves positions only when turbulence is armed (the sole path coupling spin back into position).
+        const sd = +$in.spinDrag.value;
+        if (sd !== 1) cfg.spinDrag = sd;
         // v1.18.0 flutterRate: wobble-speed multiplier on the seeded flutter (0 = frozen, 2 = fast shimmer,
         // default 1). Read at action rate, never per frame. Inert when flutter is 0 (a zero-depth wobble has
         // no speed); a render-only overlay -- positions unchanged even with turbulence.
@@ -922,6 +932,7 @@
                 : id === 'stagger' ? (+raw === 0 ? 'off' : raw + 'ms')   // 0 = synchronous spawn
                 : id === 'align' ? (+raw === 0 ? 'off' : (+raw).toFixed(2))  // 0 = random spin
                 : id === 'spinRate' ? (+raw === 1 ? 'default' : (+raw === 0 ? 'rigid' : (+raw).toFixed(1)))  // 1 = as seeded, 0 = rigid
+                : id === 'spinDrag' ? (+raw === 1 ? 'off' : (+raw === 0 ? 'freeze' : (+raw).toFixed(2)))  // 1 = off, 0 = freeze at birth angle
                 : id === 'flutterRate' ? (+raw === 1 ? 'default' : (+raw === 0 ? 'frozen' : (+raw).toFixed(1)))  // 1 = as seeded, 0 = frozen wobble
                 : id === 'fadeIn' ? (+raw === 0 ? 'off' : (+raw).toFixed(2))  // 0 = instant-on
                 : id === 'fadeOut' ? (+raw === 0.3 ? 'default' : (+raw === 0 ? 'hard cut' : (+raw).toFixed(2)))  // 0.3 = today's look, 0 = hard cut
@@ -1158,6 +1169,7 @@
             if (cfg.stagger) code += `\n${indent}stagger: <span class="num">${cfg.stagger}</span>,`;
             if (cfg.align) code += `\n${indent}align: <span class="num">${cfg.align.toFixed(2)}</span>,`;
             if (cfg.spinRate !== undefined) code += `\n${indent}spinRate: <span class="num">${cfg.spinRate.toFixed(1)}</span>,`;
+            if (cfg.spinDrag !== undefined) code += `\n${indent}spinDrag: <span class="num">${cfg.spinDrag.toFixed(2)}</span>,`;
             code += `\n${indent}lifeMin: <span class="num">${cfg.lifeMin}</span>, lifeMax: <span class="num">${cfg.lifeMax}</span>,`;
             code += `\n});`;
             $codeBox.innerHTML = code;

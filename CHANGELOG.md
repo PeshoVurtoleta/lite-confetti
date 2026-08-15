@@ -3,6 +3,40 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.23.0] - 2026-08-15
+
+Feature release: `spinDrag` -- **angular-velocity retention, the angular mirror of the linear `drag`**. Since
+day one the integrator has damped translation every frame (`vx`/`vy *= drag`, default 0.98) so a piece slows
+as it flies -- but its ANGULAR velocity was never damped: `spinV` was drawn once at spawn
+(`(rng.next() - 0.5) * 10` rad/s) and `spin += spinV*dt` advanced it at that birth rate forever. `spinDrag`
+(opt-in scalar in `[0,1]`, default `1` = off) closes the last unmirrored asymmetry in the integrator: each
+frame, immediately BEFORE the spin advance, `spinV *= spinDrag`, so the tumble decays exactly as `drag` decays
+translation. `1` = off (tumble forever, today's exact look), `0.95` = settle to a lazy drift, `0` = freeze at
+the birth angle: `c.burst({ spinDrag: 0.9, turbulence: 300 })`.
+
+It is guarded on `if (pool.sdrag[i] !== 1)`, so an off burst pays zero new bytes per frame and **every
+committed fingerprint -- `rotateHash` included -- is byte-identical when off** (`1` is exactly representable in
+`Float32`, so **no fround sentinel** is needed). A **contraction** (a factor in `[0,1]`): `|spinV|` can never
+grow, finite for any input with **no accel cap**. Coerced `clamp01(spinDrag, 1)` (like `drag`/`bounce`, NOT
+`num` -- a retention has no DIRECTION, unlike `spinRate`'s reverse): a NEGATIVE clamps to `0` (freeze -- a
+legitimate finite value, NOT a fallback to the default), non-finite/undefined => `1` (off), `> 1` => `1`
+(`> 1` would AMPLIFY spin and diverge). It damps `spinV` **only, never `tiltV`** (tilt feeds `sway` + the
+turbulence curl, so damping it would move positions on any swaying burst).
+
+`spinDrag` is a **HYBRID physics knob** with a single position-coupling path: `pool.spin` is read in exactly
+two places -- the render rotation and the turbulence curl (`tp = tilt*1.7 + spin`). So with **turbulence OFF**
+it moves ONLY the render rotation (the position stream is byte-identical; `rotateHash` moves and earns its own
+`SPINDRAG_ROT_HASH`), and with **turbulence ON** the curl reads the slower spin, so it MOVES positions and
+earns a second committed hash (`SPINDRAG_TURB_HASH`, distinct from `TURB_HASH 1630588936` on the same
+turbulence baseline). It is documented as a physics knob, NOT a pure render overlay. No render-block change
+(the render reads the damped spin for free) and **no harness change** (it rides `rotateHash` + the
+hash-neutral `lastRotate` witness + the position hash). The spawn write is unconditional and **load-bearing**
+(a `Float32` zero-init `0` would mean "instant freeze", a wrong default on a recycled slot). One new Float32
+pool column (+4 B/particle, always-on total 162 -> 166 = 41 x Float32 + 2 x Uint8). Honored by `burst()` AND
+`spray()`; inert under reduced motion; zero rng, zero allocation. Unit suite 248 -> 259; torture adds a
+spin-damped alloc lane, threads `spinDrag` through the differential fuzz + degenerate poison, and adds a
+symmetric-history `lastRotate`-snapshot recycle-retention proof.
+
 ## [1.22.0] - 2026-08-15
 
 Feature release: `wallFriction` -- **tangential drag on the box's three non-floor edges**, the exact

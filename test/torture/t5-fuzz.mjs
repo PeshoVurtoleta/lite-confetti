@@ -80,6 +80,7 @@ function genOp(prng, allowReseed) {
                 stagger: (prng() % 2 === 0) ? 0 : 50 + (prng() % 450),     // staggered-emission window (ms), half off; burst-only, zero-rng
                 align: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100,       // velocity-align blend 0..1, half off; render-only, zero-rng
                 spinRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // tumble-speed multiplier, half at 1 (off); else [-2,3], render-only, zero-rng
+                spinDrag: (prng() % 2 === 0) ? 1 : (prng() % 101) / 100, // angular retention 0..1, half at 1 (off); else [0,1], zero-rng; hybrid -- render-only unless turbulence is armed (the curl reads spin), and A/B get identical ops so the position hash still matches
                 scaleTo: (prng() % 2 === 0) ? 1 : (prng() % 301) / 100, // size-over-life target, half at 1 (off); else [0,3], render-only, zero-rng
                 flutterRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // wobble-speed multiplier, half at 1 (off); else [-2,3], render-only, zero-rng (flutter defaults to 1, so it is non-vacuous)
                 fadeIn: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100, // birth-opacity ramp, half at 0 (off); else [0,1], render-only, zero-rng (globalAlpha overlay)
@@ -114,6 +115,7 @@ function genOp(prng, allowReseed) {
                 emitSize: 20 + (prng() % 280), // emitter extent
                 align: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100, // velocity-align blend, half off; spray honors it, zero-rng
                 spinRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // tumble-speed multiplier, half at 1 (off); else [-2,3], spray honors it, zero-rng
+                spinDrag: (prng() % 2 === 0) ? 1 : (prng() % 101) / 100, // angular retention 0..1, half at 1 (off); else [0,1], spray honors it, zero-rng; hybrid (render-only unless turbulence armed), A/B get identical ops so the position hash still matches
                 scaleTo: (prng() % 2 === 0) ? 1 : (prng() % 301) / 100, // size-over-life target, half at 1 (off); else [0,3], spray honors it, zero-rng
                 flutterRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // wobble-speed multiplier, half at 1 (off); else [-2,3], spray honors it, zero-rng
                 fadeIn: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100, // birth-opacity ramp, half at 0 (off); else [0,1], spray honors it, zero-rng

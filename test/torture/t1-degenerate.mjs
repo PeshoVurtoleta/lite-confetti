@@ -245,6 +245,22 @@ export function run() {
         ['wallFriction:neg', { count: 60, wallFriction: -5, wind: 800, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 500, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
         ['wallFriction:1', { count: 60, wallFriction: 1, wind: 800, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 500, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
         ['wallFriction:tiny', { count: 60, wallFriction: 1e-9, wind: 800, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 500, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
+        // spinDrag poison (v1.23.0): garbage retentions coerce via clamp01(spinDrag, 1) (non-finite/non-numeric/
+        // null/{} -> 1 off, negative -> 0 freeze, > 1 -> 1). The integrator damp is `if (sdrag != 1) spinV *=
+        // sdrag` -- a contraction (factor in [0,1]) applied to a Float32, so |spinV| never grows and spin stays
+        // finite for any input; no accel cap. Legal extremes (0 freeze, -5 -> 0, 1e-9, 1e9 -> 1) + turbulence
+        // (so the curl coupling is armed) + wind + a bouncing box confirm the tumble decay never yields a
+        // non-finite draw or rotate under load.
+        ['spinDrag:NaN', { count: 60, spinDrag: NaN, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinDrag:Infinity', { count: 60, spinDrag: Infinity, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinDrag:-Infinity', { count: 60, spinDrag: -Infinity, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinDrag:nonnumeric', { count: 60, spinDrag: '0.9', turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinDrag:null', { count: 60, spinDrag: null, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinDrag:object', { count: 60, spinDrag: {}, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinDrag:0', { count: 60, spinDrag: 0, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinDrag:neg', { count: 60, spinDrag: -5, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinDrag:tiny', { count: 60, spinDrag: 1e-9, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['spinDrag:huge', { count: 60, spinDrag: 1e9, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
