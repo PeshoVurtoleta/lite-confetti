@@ -70,6 +70,7 @@ function genOp(prng, allowReseed) {
                 ceiling: (prng() % 2 === 0) ? -Infinity : 20 + (prng() % 150),
                 turbulence: (prng() % 2 === 0) ? 0 : (prng() % 800) - 400, // signed wander, half off
                 gust: (prng() % 2 === 0) ? 0 : (prng() % 600) - 300,       // signed gust, half off
+                gustRate: (prng() % 2 === 0) ? undefined : ((prng() % 1601) / 100) - 8, // gust swell frequency, half at the default (off); else signed [-8,8], physics (steers vx), zero-rng (rides the hash/sumX channel)
                 attract: (prng() % 2 === 0) ? 0 : (prng() % 20) - 10,      // signed spring, half off
                 swirl: (prng() % 2 === 0) ? 0 : (prng() % 20) - 10,        // signed swirl, half off
                 attractX: 100 + (prng() % 500), attractY: 50 + (prng() % 400), // jittered center
@@ -82,6 +83,7 @@ function genOp(prng, allowReseed) {
                 spinRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // tumble-speed multiplier, half at 1 (off); else [-2,3], render-only, zero-rng
                 spinDrag: (prng() % 2 === 0) ? 1 : (prng() % 101) / 100, // angular retention 0..1, half at 1 (off); else [0,1], zero-rng; hybrid -- render-only unless turbulence is armed (the curl reads spin), and A/B get identical ops so the position hash still matches
                 scaleTo: (prng() % 2 === 0) ? 1 : (prng() % 301) / 100, // size-over-life target, half at 1 (off); else [0,3], render-only, zero-rng
+                scaleFrom: (prng() % 2 === 0) ? 1 : (prng() % 301) / 100, // size-over-life ORIGIN, half at 1 (off); else [0,3], render-only, zero-rng (rides the scaleHash channel)
                 flutterRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // wobble-speed multiplier, half at 1 (off); else [-2,3], render-only, zero-rng (flutter defaults to 1, so it is non-vacuous)
                 fadeIn: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100, // birth-opacity ramp, half at 0 (off); else [0,1], render-only, zero-rng (globalAlpha overlay)
                 fadeOut: (prng() % 2 === 0) ? 0.3 : (prng() % 101) / 100, // death-fade window, half at 0.3 (default); else [0,1], render-only, zero-rng (globalAlpha overlay)
@@ -106,6 +108,7 @@ function genOp(prng, allowReseed) {
                 ceiling: (prng() % 2 === 0) ? -Infinity : 20 + (prng() % 150),
                 turbulence: (prng() % 2 === 0) ? 0 : (prng() % 800) - 400,
                 gust: (prng() % 2 === 0) ? 0 : (prng() % 600) - 300,
+                gustRate: (prng() % 2 === 0) ? undefined : ((prng() % 1601) / 100) - 8, // gust swell frequency, half at the default (off); else signed [-8,8], spray honors it, zero-rng (rides the hash/sumX channel)
                 attract: (prng() % 2 === 0) ? 0 : (prng() % 20) - 10,
                 swirl: (prng() % 2 === 0) ? 0 : (prng() % 20) - 10,
                 attractX: 100 + (prng() % 500), attractY: 50 + (prng() % 400),
@@ -117,6 +120,7 @@ function genOp(prng, allowReseed) {
                 spinRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // tumble-speed multiplier, half at 1 (off); else [-2,3], spray honors it, zero-rng
                 spinDrag: (prng() % 2 === 0) ? 1 : (prng() % 101) / 100, // angular retention 0..1, half at 1 (off); else [0,1], spray honors it, zero-rng; hybrid (render-only unless turbulence armed), A/B get identical ops so the position hash still matches
                 scaleTo: (prng() % 2 === 0) ? 1 : (prng() % 301) / 100, // size-over-life target, half at 1 (off); else [0,3], spray honors it, zero-rng
+                scaleFrom: (prng() % 2 === 0) ? 1 : (prng() % 301) / 100, // size-over-life ORIGIN, half at 1 (off); else [0,3], spray honors it, zero-rng (rides the scaleHash channel)
                 flutterRate: (prng() % 2 === 0) ? 1 : ((prng() % 501) / 100) - 2, // wobble-speed multiplier, half at 1 (off); else [-2,3], spray honors it, zero-rng
                 fadeIn: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100, // birth-opacity ramp, half at 0 (off); else [0,1], spray honors it, zero-rng
                 fadeOut: (prng() % 2 === 0) ? 0.3 : (prng() % 101) / 100, // death-fade window, half at 0.3 (default); else [0,1], spray honors it, zero-rng
@@ -147,11 +151,12 @@ export function run() {
         // A trail capacity is given to BOTH so the ring buffer + global head + per-burst trail
         // lengths are exercised under fuzz; the trail GEOMETRY (strokeHash), the render rotation
         // (rotateHash -- driven by both `align` and the v1.16.0 `spinRate` tumble scale) AND the render
-        // size fold (scaleHash -- the v1.17.0 `scaleTo` size-over-life ramp AND the v1.18.0 `flutterRate`
-        // wobble-speed scale, which rides the SAME scaleHash channel) are checked alongside the position
-        // hash, proving every render overlay is as deterministic as the physics. spinRate, scaleTo AND
-        // flutterRate armed must NOT move the position hash (render-time scales, never pool.spin/tilt/w/h),
-        // so ca.hash === cb.hash still holds with the fuzzed multipliers live.
+        // size fold (scaleHash -- the v1.17.0 `scaleTo` size-over-life ramp, the v1.24.0 `scaleFrom` birth
+        // ORIGIN, AND the v1.18.0 `flutterRate` wobble-speed scale, which all ride the SAME scaleHash
+        // channel) are checked alongside the position hash, proving every render overlay is as deterministic
+        // as the physics. spinRate, scaleTo, scaleFrom AND flutterRate armed must NOT move the position hash
+        // (render-time scales, never pool.spin/tilt/w/h), so ca.hash === cb.hash still holds with the fuzzed
+        // multipliers live.
         const A = createConfetti(ca, { seed, maxParticles: CAP, trail: 24 });
         const B = createConfetti(cb, { seed, maxParticles: CAP, trail: 24 });
         const prng = makePrng(SEED);

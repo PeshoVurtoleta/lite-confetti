@@ -59,6 +59,13 @@ const TURB_HASH = 1630588936;   // turbulence: 500
 const GUST_HASH = 4074438162;   // gust: 400
 const TURBGUST_HASH = 15761758; // turbulence: 500 + gust: 400
 
+// gustRate (v1.25.0): the swell-FREQUENCY knob to gust's depth. Parameterizes the baked GUST_HZ in
+// the SINGLE committed gust vx term via a fround sentinel, so gust-off is byte-identical for any
+// value. Draws NO rng (a pure function of the shared _elapsed clock and the per-particle grate), so
+// like GUST_HASH it is cross-process stable and its own replay gate. Distinct from GUST_HASH (gust
+// with the default swell) and from gustRate:3 (probed on the gust-armed seed-12345 rig below).
+const GUSTRATE_HASH = 870603509; // gust: 400 + gustRate: 6 (fast breeze)
+
 // Committed fingerprint for the trail GEOMETRY (v1.9.0) -- the strokeHash of the mock ctx, which
 // accumulates only stroked (trail) paths and is kept entirely out of the position `hash`. Trails
 // are a pure RENDER overlay (they draw via moveTo/lineTo/stroke, never translate), so the POSITION
@@ -159,6 +166,17 @@ const SPINDRAG_TURB_HASH = 4289557192; // run({ turbulence: 500, spinDrag: 0.9 }
 // probed on the canonical seed-12345 rig with scaleTo:2; distinct from the OFF scaleHash (and from 0.5)
 // and its own cross-process replay gate.
 const SCALE_HASH = 148099462; // burst({ scaleTo: 2 }) scaleHash on the canonical rig
+
+// Committed SCALE fingerprint for the size-over-life ORIGIN (v1.24.0, decision 0025). `scaleFrom` is the
+// BIRTH endpoint of the ramp `scaleTo` targets -- the fold becomes s = scaleFrom + (scaleTo - scaleFrom) *
+// (1 - lifeT). Like scaleTo it changes ONLY the arguments to ctx.scale (folded into the SAME existing call),
+// never ctx.translate/x/y/rng, so a scaleFrom burst reproduces the same-seed plain burst's POSITION hash
+// (COMMITTED_HASH) exactly -- a pure RENDER overlay -- and only the `scaleHash` moves. scaleFrom bites
+// HARDEST at age 0 (s == scaleFrom on the first drawn frame), so the canonical lifeMin/Max:5 rig exposes it
+// immediately (no dedicated short-life rig needed). It reuses the v1.17.0 `scaleHash` probe -- no new
+// harness channel. Value probed on the canonical seed-12345 rig with scaleFrom:0.25; distinct from the OFF
+// scaleHash, from scaleFrom:2, and from SCALE_HASH 148099462, and its own cross-process replay gate.
+const SCALEFROM_HASH = 2718696453; // burst({ scaleFrom: 0.25 }) scaleHash on the canonical rig
 
 // Committed SCALE fingerprint for tumble-wobble speed (v1.18.0, decision 0019). `flutterRate` is the
 // SPEED knob to flutter's DEPTH: the draw block scales only the ACCUMULATED wobble phase (tilt - tilt0)
@@ -2518,6 +2536,16 @@ describe('lite-confetti', () => {
             assert.equal(run({ ...BOX, bounce: 0 }).hash, BOX_HASH, 'box fingerprint drifted');
             assert.equal(run({ align: 1 }).rotateHash, ALIGN_HASH, 'align rotation fingerprint drifted');
             assert.equal(run({ spinRate: 2 }).rotateHash, SPINRATE_HASH, 'spinRate rotation fingerprint drifted');
+            // v1.24.0 cross-guard: with scaleFrom present-but-off (1), the committed SCALE fingerprints
+            // must reproduce byte-for-byte -- the formula rewrite s = sf + (scaleTo - sf) * age is the SAME
+            // double expression as the shipped 1 + (scaleTo - 1) * age when sf reads back exactly 1.0.
+            assert.equal(run({ scaleTo: 2, scaleFrom: 1 }).scaleHash, SCALE_HASH, 'SCALE_HASH drifted with scaleFrom present-but-off');
+            const fr = makeCanvas({ record: true });
+            const fc = createConfetti(fr, { seed: 12345 });
+            fc.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, flutter: 1, flutterRate: 2, scaleFrom: 1 });
+            pump(1, 1000); pump(29, 16);
+            assert.equal(fr.scaleHash, FLUTRATE_HASH, 'FLUTRATE_HASH drifted with scaleFrom present-but-off');
+            fc.destroy();
         });
 
         it('is a PURE render overlay: 2 / 0.2 / 0 / 3 keep the position hash, change only the size fold', () => {
@@ -2650,6 +2678,231 @@ describe('lite-confetti', () => {
             const on = staticRun({ scaleTo: 0.1 });
             assert.equal(on.hash, off.hash, 'scaleTo should be inert on the static reduced-motion positions');
             assert.equal(on.scaleHash, off.scaleHash, 'scaleTo should not touch the static fan size fold');
+        });
+    });
+
+    describe('scaleFrom / birth-size ramp', () => {
+        // The canonical seed-12345 rig (shared with the align/spinRate/scaleTo suites). `run` reports the
+        // position `hash` (folds only translate) plus the render probes kept OUT of it: `scaleHash` (the
+        // size fold, now two-endpoint), `rotateHash`, `colorHash`, and `alphaHash`. scaleFrom is the BIRTH
+        // endpoint of the size ramp scaleTo targets -- a render-time size scale FOLDED into flutter's
+        // existing ctx.scale call; it never touches pool.w/h or translate, so its headline is that the
+        // POSITION hash is byte-identical off or on -- a pure render overlay. It bites HARDEST at age 0
+        // (s == scaleFrom on the first drawn frame), so the canonical lifeMin/Max:5 rig exposes it at once.
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = { hash: canvas.hash, scaleHash: canvas.scaleHash, rotateHash: canvas.rotateHash, colorHash: canvas.colorHash, alphaHash: canvas.alphaHash };
+            c.destroy();
+            return out;
+        };
+
+        it('is opt-in and fail-closed: off / 1 / non-finite / null keep the size fold byte-identical (DONE-WHEN 2)', () => {
+            // Headline (the formula-rewrite proof): off, explicit 1, or any non-finite/non-numeric
+            // (nonneg -> default 1) reads back exactly 1.0, so sf + (scaleTo - sf) * age is the SAME double
+            // expression as the shipped 1 + (scaleTo - 1) * age -- BOTH the position hash AND the scale
+            // sequence match a pre-scaleFrom run, byte-for-byte.
+            const base = run({});
+            assert.equal(base.hash, COMMITTED_HASH, 'the scaleFrom branch perturbed the default position stream');
+            for (const o of [
+                {},
+                { scaleFrom: 1 },
+                { scaleFrom: NaN },
+                { scaleFrom: Infinity },
+                { scaleFrom: '2' },
+                { scaleFrom: null },
+                { scaleFrom: undefined },
+            ]) {
+                const r = run(o);
+                assert.equal(r.hash, COMMITTED_HASH, `scaleFrom ${JSON.stringify(o)} should not move positions`);
+                assert.equal(r.scaleHash, base.scaleHash, `scaleFrom ${JSON.stringify(o)} should leave the size fold untouched`);
+            }
+        });
+
+        it('a NEGATIVE clamps to 0 (born invisible), NOT to the default 1 (DONE-WHEN 5)', () => {
+            // nonneg maps a negative to 0 (a legitimate "born invisible", the size analog of scaleTo:0),
+            // NOT a mirror flip and NOT a fallback to 1. So scaleFrom:-1 must render IDENTICALLY to
+            // scaleFrom:0, and both must DIFFER from off -- while the position hash stays put.
+            const base = run({});
+            const neg = run({ scaleFrom: -1 });
+            const zero = run({ scaleFrom: 0 });
+            assert.equal(neg.scaleHash, zero.scaleHash, 'a negative scaleFrom must clamp to 0, not mirror-flip');
+            assert.notEqual(neg.scaleHash, base.scaleHash, 'scaleFrom:-1 must not fall back to the default 1');
+            assert.equal(neg.hash, COMMITTED_HASH, 'a clamped scaleFrom must not move positions');
+            assert.equal(zero.hash, COMMITTED_HASH, 'scaleFrom:0 must not move positions');
+        });
+
+        it('matches the committed SCALEFROM fingerprint -- distinct + deterministic (DONE-WHEN 3)', () => {
+            const on = run({ scaleFrom: 0.25 });
+            if (SCALEFROM_HASH === null) console.log('[scaleFrom] 0.25 scaleHash =', on.scaleHash);
+            else assert.equal(on.scaleHash, SCALEFROM_HASH, 'scaleFrom size fold changed vs the committed baseline');
+            // Deterministic: same seed + fixed dt -> same size fold on replay (scaleFrom draws no rng).
+            assert.equal(run({ scaleFrom: 0.25 }).scaleHash, on.scaleHash, 'scaleFrom not deterministic');
+            // Genuinely distinct from off (1), from scaleFrom:2, and from the scaleTo baseline SCALE_HASH.
+            assert.notEqual(on.scaleHash, run({}).scaleHash, 'scaleFrom:0.25 should differ from off');
+            assert.notEqual(on.scaleHash, run({ scaleFrom: 2 }).scaleHash, 'scaleFrom:0.25 should differ from scaleFrom:2');
+            assert.notEqual(on.scaleHash, SCALE_HASH, 'scaleFrom:0.25 should differ from the scaleTo:2 fingerprint');
+        });
+
+        it('is a PURE render overlay: 0.2 / 0.5 / 2 / 3 keep the position hash, change only the size fold (DONE-WHEN 4)', () => {
+            const off = run({});
+            for (const sf of [0.2, 0.5, 2, 3]) {
+                const on = run({ scaleFrom: sf });
+                assert.equal(on.hash, off.hash, `scaleFrom:${sf} perturbed the position stream (not a pure overlay)`);
+                assert.notEqual(on.scaleHash, off.scaleHash, `scaleFrom:${sf} should change the size sequence`);
+            }
+        });
+
+        it('is orthogonal to rotation, color, and alpha; only scaleHash moves (DONE-WHEN 4)', () => {
+            const off = run({});
+            const on = run({ scaleFrom: 0.25 });
+            assert.equal(on.rotateHash, off.rotateHash, 'scaleFrom must not touch rotation');
+            assert.equal(on.colorHash, off.colorHash, 'scaleFrom must not touch color');
+            assert.equal(on.alphaHash, off.alphaHash, 'scaleFrom must not touch alpha');
+            assert.notEqual(on.scaleHash, off.scaleHash, 'scaleFrom should move only the size fold');
+        });
+
+        it('purity on DISTINCT armed rigs: turbulence / sway positions + trail width unmoved (DONE-WHEN 4)', () => {
+            // Non-vacuous purity: pin "inert when off" on the rigs where a position or width LEAK WOULD
+            // show, with scaleFrom ARMED (not off). The turbulence curl reads tilt/spin (never sx/sy); sway
+            // is a direct x write from Math.sin(pool.tilt); the trail ribbon is world-space, never scaled.
+            assert.equal(run({ turbulence: 500, scaleFrom: 0.25 }).hash, TURB_HASH, 'scaleFrom leaked into the turbulence position stream');
+            assert.equal(run({ sway: 0.8, scaleFrom: 0.25 }).hash, run({ sway: 0.8 }).hash, 'scaleFrom leaked into the sway position stream');
+            const trailRun = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 12345, trail: 10 });
+                c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                pump(1, 1000); pump(29, 16);
+                const out = { strokeHash: canvas.strokeHash, strokes: canvas.strokes };
+                c.destroy();
+                return out;
+            };
+            const on = trailRun({ scaleFrom: 0.25 });
+            assert.ok(on.strokes > 0, 'the trail rig must actually stroke');
+            assert.equal(on.strokeHash, TRAIL_HASH, 'scaleFrom narrowed the ribbon -- the streak keeps its birth width');
+        });
+
+        it('tracks the BIRTH endpoint (lastScale): first-frame monotone in scaleFrom, blooms + settles (DONE-WHEN 6)', () => {
+            // A single piece, flutter off (so wobbleScale == 1 and the recorded Y factor is the pure size
+            // ramp). scaleFrom bites at age 0: the FIRST drawn frame's lastScale must rise monotonically as
+            // scaleFrom rises. Then a {scaleFrom:0, scaleTo:1} envelope must strictly GROW across life (a
+            // bloom), and {scaleFrom:2, scaleTo:1} must strictly SHRINK (born big, settles to full).
+            const firstFrame = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 7 });
+                c.burst({ count: 1, x: 400, y: 300, spread: 0.001, speed: 10, gravity: 0, drag: 1,
+                    flutter: 0, lifeMin: 50, lifeMax: 50, ...opts });
+                pump(1, 100);
+                const s = canvas.lastScale;
+                c.destroy();
+                return s;
+            };
+            const births = [0, 0.25, 0.5, 1, 2].map(sf => firstFrame({ scaleFrom: sf, scaleTo: 1 }));
+            for (let k = 1; k < births.length; k++) {
+                assert.ok(births[k] > births[k - 1], `first-frame lastScale must rise with scaleFrom (${births[k - 1]} -> ${births[k]})`);
+            }
+            const frames = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 7 });
+                c.burst({ count: 1, x: 400, y: 300, spread: 0.001, speed: 10, gravity: 0, drag: 1,
+                    flutter: 0, lifeMin: 50, lifeMax: 50, ...opts });
+                const xs = [];
+                for (let f = 0; f < 10; f++) { pump(1, 100); xs.push(canvas.lastScale); }
+                c.destroy();
+                return xs;
+            };
+            const bloom = frames({ scaleFrom: 0, scaleTo: 1 });
+            for (let k = 1; k < bloom.length; k++) assert.ok(bloom[k] > bloom[k - 1], 'scaleFrom:0 -> scaleTo:1 must strictly bloom');
+            const settle = frames({ scaleFrom: 2, scaleTo: 1 });
+            for (let k = 1; k < settle.length; k++) assert.ok(settle[k] < settle[k - 1], 'scaleFrom:2 -> scaleTo:1 must strictly settle');
+            // ISOTROPIC fold: with flutter:0 the recorded X and Y factors are the SAME size ramp; with
+            // flutter:1 the X wobble still MULTIPLIES the isotropic factor, so they diverge.
+            const witness = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 7 });
+                c.burst({ count: 1, x: 400, y: 300, spread: 0.001, speed: 10, gravity: 0, drag: 1,
+                    lifeMin: 50, lifeMax: 50, ...opts });
+                pump(1, 100); pump(3, 100);
+                const out = { x: canvas.lastScaleX, y: canvas.lastScale };
+                c.destroy();
+                return out;
+            };
+            const iso = witness({ flutter: 0, scaleFrom: 0.3, scaleTo: 1.5 });
+            assert.equal(iso.x, iso.y, 'with flutter:0 the fold is isotropic -- lastScaleX must equal lastScale');
+            const wobbly = witness({ flutter: 1, scaleFrom: 0.3, scaleTo: 1.5 });
+            assert.notEqual(wobbly.x, wobbly.y, 'with flutter:1 the X wobble must still multiply the isotropic factor');
+        });
+
+        it('scaleFrom == scaleTo is an emergent CONSTANT size multiplier (design note)', () => {
+            // With both endpoints equal, s = k + (k - k) * age == k for all ages: a constant size factor,
+            // flat across life. Witness it on the single-piece flutter-off rig.
+            const flat = (k) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 7 });
+                c.burst({ count: 1, x: 400, y: 300, spread: 0.001, speed: 10, gravity: 0, drag: 1,
+                    flutter: 0, lifeMin: 50, lifeMax: 50, scaleFrom: k, scaleTo: k });
+                const xs = [];
+                for (let f = 0; f < 6; f++) { pump(1, 100); xs.push(canvas.lastScale); }
+                c.destroy();
+                return xs;
+            };
+            for (const v of flat(1.5)) assert.ok(Math.abs(v - 1.5) < 1e-4, 'scaleFrom == scaleTo == 1.5 must hold a constant 1.5 factor');
+        });
+
+        it('keeps positions finite under scaleFrom extremes + gravity + wind + turbulence + a bouncing box + trails (DONE-WHEN 5)', () => {
+            for (const sf of [0, 0.2, 3, 1e6, 1e-9]) {
+                const canvas = makeCanvas({ record: true, assertFinite: true });
+                const c = createConfetti(canvas, { seed: 3, trail: 12 });
+                assert.doesNotThrow(() => {
+                    c.burst({
+                        x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 4, lifeMax: 4,
+                        wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350, bounce: 0.6,
+                        gravity: 4000, wind: 1200, turbulence: 500, scaleFrom: sf, scaleTo: 2, flutter: 1, trail: 12,
+                    });
+                    pump(80, 16);
+                }, `scaleFrom:${sf} produced a non-finite draw`);
+                c.destroy();
+            }
+        });
+
+        it('is honored by spray() too: positions identical, size fold differs (DONE-WHEN 11)', () => {
+            const spray = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 400, rate: 15, x: 400, y: 200, spread: 1.2, shape: 'rect',
+                    lifeMin: 4, lifeMax: 4, ...opts });
+                pump(1, 1000); pump(60, 16);
+                const out = { hash: canvas.hash, scaleHash: canvas.scaleHash };
+                c.destroy();
+                return out;
+            };
+            const off = spray({});
+            const on = spray({ scaleFrom: 0.25 });
+            assert.equal(on.hash, off.hash, 'scaleFrom should not move spray positions (pure overlay)');
+            assert.notEqual(on.scaleHash, off.scaleHash, 'spray should honor scaleFrom (size fold changed)');
+        });
+
+        it('has no effect under reduced motion (static fan is inert) (DONE-WHEN 10)', () => {
+            const staticRun = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                    pump(1, 1000); pump(29, 16);
+                    const out = { hash: canvas.hash, scaleHash: canvas.scaleHash };
+                    c.destroy();
+                    return out;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            const off = staticRun({});
+            const on = staticRun({ scaleFrom: 0.1 });
+            assert.equal(on.hash, off.hash, 'scaleFrom should be inert on the static reduced-motion positions');
+            assert.equal(on.scaleHash, off.scaleHash, 'scaleFrom should not touch the static fan size fold');
         });
     });
 
@@ -2826,6 +3079,200 @@ describe('lite-confetti', () => {
             const on = staticRun({ flutterRate: 0.1 });
             assert.equal(on.hash, off.hash, 'flutterRate should be inert on the static reduced-motion positions');
             assert.equal(on.scaleHash, off.scaleHash, 'flutterRate should not touch the static fan wobble');
+        });
+    });
+
+    describe('gustRate / gust swell frequency', () => {
+        // The canonical seed-12345 rig (shared with the living-air / align / spinRate / scale suites; a
+        // plain run reproduces COMMITTED_HASH). `run` reports the position `hash` (folds only translate),
+        // its drift-direction witness `sumX`, and the render probes kept OUT of the hash -- `rotateHash`,
+        // `colorHash`, `scaleHash`, `alphaHash`, `strokeHash`. gustRate parameterizes the baked GUST_HZ in
+        // the SINGLE committed gust vx term; it feeds ONLY vx -> position, so its headline is that with
+        // `gust` off it is byte-identical for ANY value (the read short-circuits behind `gust !== 0`), and
+        // with `gust` armed it moves ONLY hash/sumX -- never a render channel. No trail is armed, so the
+        // gust-off position fingerprints (GUST_HASH etc.) match their trail-free committed baselines.
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = {
+                hash: canvas.hash, sumX: canvas.sumX,
+                rotateHash: canvas.rotateHash, colorHash: canvas.colorHash,
+                scaleHash: canvas.scaleHash, alphaHash: canvas.alphaHash, strokeHash: canvas.strokeHash,
+            };
+            c.destroy();
+            return out;
+        };
+
+        it('is opt-in and fail-closed: gust-armed but gustRate absent/non-finite reproduces GUST_HASH bit-for-bit (DONE-WHEN 1)', () => {
+            // The load-bearing crux: the fround sentinel keeps the DEFAULT byte-identical. gust:400 with
+            // gustRate absent OR any non-finite/non-numeric (num -> GUST_RATE_DEF) evaluates the DOUBLE
+            // GUST_HZ literal in the off-branch, so the gust vx term is the SAME expression shipped since
+            // v1.9.0 -- GUST_HASH reproduces exactly, and TURBGUST_HASH on the turbulence baseline too.
+            for (const o of [
+                { gust: 400 },
+                { gust: 400, gustRate: NaN },
+                { gust: 400, gustRate: Infinity },
+                { gust: 400, gustRate: 'x' },
+                { gust: 400, gustRate: null },
+                { gust: 400, gustRate: undefined },
+            ]) {
+                assert.equal(run(o).hash, GUST_HASH, `gustRate ${JSON.stringify(o)} moved the committed gust stream`);
+            }
+            assert.equal(run({ turbulence: 500, gust: 400 }).hash, TURBGUST_HASH, 'gustRate off perturbed the turbulence+gust baseline');
+            assert.equal(run({ turbulence: 500, gust: 400, gustRate: NaN }).hash, TURBGUST_HASH, 'non-finite gustRate perturbed the turbulence+gust baseline');
+        });
+
+        it('leaves every PRIOR committed fingerprint byte-identical when present-but-off (DONE-WHEN 2)', () => {
+            // gustRate present but gust off (or a render-only knob armed) must not perturb any prior stream.
+            assert.equal(run({ gustRate: 6 }).hash, COMMITTED_HASH, 'gustRate perturbed the default position stream');
+            assert.equal(run({ floor: FLOOR_Y, gustRate: 6 }).hash, FLOOR_HASH, 'floor fingerprint drifted under gustRate');
+            assert.equal(run({ ...BOX, bounce: 0, gustRate: 6 }).hash, BOX_HASH, 'box fingerprint drifted under gustRate');
+            assert.equal(run({ lifeColors: EMBER, gustRate: 6 }).colorHash, COLOR_HASH, 'color fingerprint drifted under gustRate');
+            assert.equal(run({ align: 1, gustRate: 6 }).rotateHash, ALIGN_HASH, 'align fingerprint drifted under gustRate');
+            assert.equal(run({ spinRate: 2, gustRate: 6 }).rotateHash, SPINRATE_HASH, 'spinRate fingerprint drifted under gustRate');
+            assert.equal(run({ scaleTo: 2, gustRate: 6 }).scaleHash, SCALE_HASH, 'scaleTo fingerprint drifted under gustRate');
+            assert.equal(run({ scaleFrom: 0.25, gustRate: 6 }).scaleHash, SCALEFROM_HASH, 'scaleFrom fingerprint drifted under gustRate');
+            assert.equal(run({ flutter: 1, flutterRate: 2, gustRate: 6 }).scaleHash, FLUTRATE_HASH, 'flutterRate fingerprint drifted under gustRate');
+            // TRAIL geometry (own rig with trail:10) is a pure overlay -- gust off -> strokeHash unchanged.
+            const trailRun = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 12345, trail: 10 });
+                c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                pump(1, 1000); pump(29, 16);
+                const out = { hash: canvas.hash, strokeHash: canvas.strokeHash, strokes: canvas.strokes };
+                c.destroy();
+                return out;
+            };
+            const tr = trailRun({ gustRate: 6 });
+            assert.ok(tr.strokes > 0, 'the trail rig must actually stroke');
+            assert.equal(tr.hash, COMMITTED_HASH, 'gustRate perturbed the trailed position stream');
+            assert.equal(tr.strokeHash, TRAIL_HASH, 'gustRate perturbed the committed ribbon geometry');
+        });
+
+        it('inert-zero: gustRate:0 freezes the phase and reproduces COMMITTED_HASH (DONE-WHEN 3, EMPIRICAL)', () => {
+            // At gustRate:0 the term is sin(_elapsed*0) = sin(0) = 0, so vx += 0. x + 0 === x for every
+            // float except -0 + 0 = +0, and positions are hashed through Math.round(x*4096), so a -0 -> +0
+            // flip is hash-neutral. Verified empirically here before it is trusted.
+            assert.equal(run({ gust: 400, gustRate: 0 }).hash, COMMITTED_HASH, 'gustRate:0 must collapse the gust force to an inert zero');
+        });
+
+        it('gust-off short-circuits the grate read entirely for any gustRate (DONE-WHEN 4)', () => {
+            // The read lives INSIDE `if (pool.gust[i] !== 0)`, so with gust off grate is NEVER read and any
+            // gustRate value reproduces the default fingerprint.
+            for (const gr of [6, 0, -6, 1e6]) {
+                assert.equal(run({ gustRate: gr }).hash, COMMITTED_HASH, `gust-off gustRate:${gr} must not move positions`);
+            }
+        });
+
+        it('is a PURE physics scalar: gust-armed gustRate moves ONLY hash/sumX, never a render channel (DONE-WHEN 5)', () => {
+            // Zero second-reader: pool.grate feeds only vx -> x. So vs the gust-default run it moves the
+            // POSITION hash and its drift sumX, but rotateHash / colorHash / scaleHash / alphaHash / the
+            // (trail-free) strokeHash are all byte-identical (nothing downstream reads grate).
+            const off = run({ gust: 400 });
+            const on = run({ gust: 400, gustRate: 6 });
+            assert.notEqual(on.hash, off.hash, 'gustRate should move the position stream');
+            assert.notEqual(on.sumX, off.sumX, 'gustRate should move the drift witness');
+            assert.equal(on.rotateHash, off.rotateHash, 'gustRate must not touch rotation');
+            assert.equal(on.colorHash, off.colorHash, 'gustRate must not touch color');
+            assert.equal(on.scaleHash, off.scaleHash, 'gustRate must not touch the size fold');
+            assert.equal(on.alphaHash, off.alphaHash, 'gustRate must not touch alpha');
+            assert.equal(on.strokeHash, off.strokeHash, 'gustRate must not add a trail of its own');
+        });
+
+        it('matches the committed GUSTRATE fingerprint -- distinct + deterministic (DONE-WHEN 6)', () => {
+            const on = run({ gust: 400, gustRate: 6 });
+            if (GUSTRATE_HASH === null) console.log('[gustRate] gust:400 gustRate:6 hash =', on.hash);
+            else assert.equal(on.hash, GUSTRATE_HASH, 'gustRate stream changed vs the committed baseline');
+            // Deterministic: same seed + fixed dt -> same hash on replay (gustRate draws no rng).
+            assert.equal(run({ gust: 400, gustRate: 6 }).hash, on.hash, 'gustRate not deterministic on replay');
+            // Genuinely distinct from the default swell (GUST_HASH) and from another rate (gustRate:3).
+            assert.notEqual(on.hash, GUST_HASH, 'gustRate:6 should differ from the default swell');
+            assert.notEqual(on.hash, run({ gust: 400, gustRate: 3 }).hash, 'gustRate:6 should differ from gustRate:3');
+        });
+
+        it('NON-VACUOUS sign flip: a negative gustRate reverses the early swell drift (DONE-WHEN 7)', () => {
+            // Over a fixed 40-frame window from t0 (no giant warmup frame), the gust push integrates: rate 6
+            // leans the pool one way first, rate -6 (sin(-r*t) == -sin(r*t)) the OTHER. So the sumX DELTA
+            // from the gust-off baseline has OPPOSITE sign for +6 vs -6, and a different magnitude at rate 1.
+            const windowSumX = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 12345 });
+                c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                for (let f = 0; f < 40; f++) pump(1, 16);
+                const sx = canvas.sumX;
+                c.destroy();
+                return sx;
+            };
+            const base = windowSumX({});                          // gust off
+            const d6 = windowSumX({ gust: 400, gustRate: 6 }) - base;
+            const dNeg6 = windowSumX({ gust: 400, gustRate: -6 }) - base;
+            const d1 = windowSumX({ gust: 400, gustRate: 1 }) - base;
+            assert.notEqual(d6, 0, 'gustRate:6 must drift the pool (else vacuous)');
+            assert.notEqual(dNeg6, 0, 'gustRate:-6 must drift the pool (else vacuous)');
+            assert.ok((d6 > 0) !== (dNeg6 > 0), 'a negative gustRate must reverse the early swell drift');
+            assert.notEqual(Math.abs(d6), Math.abs(d1), 'gustRate:6 drift magnitude must differ from gustRate:1');
+        });
+
+        it('keeps positions finite under gustRate extremes + gust + wind + turbulence + a bouncing box + trails (DONE-WHEN 8)', () => {
+            for (const gr of [0, -6, 6, 1e6]) {
+                const canvas = makeCanvas({ record: true, assertFinite: true });
+                const c = createConfetti(canvas, { seed: 3, trail: 12 });
+                assert.doesNotThrow(() => {
+                    c.burst({
+                        x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 4, lifeMax: 4,
+                        wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350, bounce: 0.6,
+                        gravity: 4000, wind: 1200, turbulence: 500, gust: 400, gustRate: gr, trail: 12,
+                    });
+                    pump(80, 16);
+                }, `gustRate:${gr} produced a non-finite draw`);
+                c.destroy();
+            }
+        });
+
+        it('is honored by spray() too: gust-armed rate moves the stream; gust-off is unchanged (DONE-WHEN 9)', () => {
+            const spray = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 400, rate: 15, x: 400, y: 200, spread: 1.2, shape: 'rect',
+                    lifeMin: 4, lifeMax: 4, ...opts });
+                pump(1, 1000); pump(60, 16);
+                const h = canvas.hash;
+                c.destroy();
+                return h;
+            };
+            const gustOn = spray({ gust: 400 });
+            assert.notEqual(spray({ gust: 400, gustRate: 6 }), gustOn, 'spray ignored gustRate');
+            assert.equal(spray({ gust: 400, gustRate: 6 }), spray({ gust: 400, gustRate: 6 }), 'forced spray gustRate not deterministic');
+            // gust off -> gustRate inert on the spray stream too.
+            assert.equal(spray({ gustRate: 6 }), spray({}), 'gustRate perturbed a gust-off spray');
+        });
+
+        it('has no effect under reduced motion (static fan runs no update loop) (DONE-WHEN 10)', () => {
+            const staticHash = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                    pump(1, 1000); pump(29, 16);
+                    const h = canvas.hash;
+                    c.destroy();
+                    return h;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            assert.equal(staticHash({ gust: 800, gustRate: 6 }), staticHash({}), 'gustRate must be inert under reduced motion');
+        });
+
+        it('fail-closed table: garbage coerces to the default (off), gust-armed (DONE-WHEN 11)', () => {
+            // Every non-finite / non-numeric value must fall to GUST_RATE_DEF, so with gust armed each
+            // reproduces the gust-default GUST_HASH exactly (the off look).
+            for (const gr of [NaN, Infinity, -Infinity, '6', null, {}, undefined]) {
+                assert.equal(run({ gust: 400, gustRate: gr }).hash, GUST_HASH, `gustRate ${JSON.stringify(gr)} must coerce to the default (off)`);
+            }
         });
     });
 

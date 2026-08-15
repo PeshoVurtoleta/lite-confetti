@@ -171,6 +171,20 @@ export interface BurstOptions {
      */
     scaleTo?: number;
     /**
+     * Size-over-life ORIGIN -- the BIRTH endpoint of the ramp `scaleTo` targets, the exact mirror
+     * `scaleFrom:scaleTo :: fadeIn:fadeOut`. `1` (default) starts the ramp at birth size (today's exact
+     * look). The render lerps each piece's DRAWN size from `scaleFrom` at birth to `scaleTo` at death by
+     * its life fraction: `0.2` blooms from a fifth-size, `2` starts double and settles, `scaleFrom ==
+     * scaleTo` is an emergent CONSTANT size multiplier. ISOTROPIC (one factor on both axes), folded into
+     * the same `ctx.scale` as `scaleTo` and `flutter`'s X-wobble, so `pool.w`/`pool.h` are never touched
+     * and the seeded POSITION fingerprint is byte-identical whether off or on -- a pure RENDER overlay.
+     * Coerced with `nonneg`: a NEGATIVE clamps to `0` (born invisible -- a size has no direction, not a
+     * mirror flip, not a fallback to `1`); non-finite/non-numeric -> `1` (off); `> 1` passes unchanged
+     * (a size factor is unbounded above). The trail ribbon keeps its birth width. Honored by both
+     * `burst()` and `spray()`. Draws no RNG; no effect under reduced motion. (v1.24.0)
+     */
+    scaleFrom?: number;
+    /**
      * Tumble-wobble SPEED multiplier on the seeded flutter -- the SPEED knob to `flutter`'s DEPTH
      * (v1.18.0). `1` (default) is the seeded wobble rate as-is; `0` FREEZES the wobble at each piece's
      * OWN random birth tilt (a varied constant wobble, not collapsed to one value); `0.3` is a slow lazy
@@ -221,6 +235,14 @@ export interface BurstOptions {
      *  `wind` -- the whole burst swells one way then the other in ~3s waves. Default 0 (none).
      *  Opt-in, fingerprint-safe, draws no RNG. */
     gust?: number;
+    /** Gust SWELL FREQUENCY: the speed knob to `gust`'s depth (the mirror `gust:gustRate ::
+     *  flutter:flutterRate`). `6` triples the swell rate (fast breeze), `0.5` a long ocean roll,
+     *  `0` freezes the phase (inert -- the gust force collapses to `sin(0)=0`, the frequency analog
+     *  of `gust:0`), a NEGATIVE reverses the phase (the breeze leans the other way first). Default
+     *  `GUST_HZ` (= TAU/3, today's baked ~3s swell). Read only when `gust !== 0`, so a gust-off
+     *  burst is byte-identical for any value. Signed (num-coerced): non-finite => the default (off),
+     *  no upper cap. Opt-in, fingerprint-safe, draws no RNG; no effect under reduced motion. */
+    gustRate?: number;
     /** Vortex radial spring strength (1/sec^2, scaled by distance): the acceleration toward the
      *  center is `attract * (center - pos)`. Positive PULLS in (a damped inward spiral), negative
      *  REPELS. Zero at the center (no singularity). Default 0 (none). Opt-in, fingerprint-safe,

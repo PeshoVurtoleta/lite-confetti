@@ -3,6 +3,77 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.25.0] - 2026-08-15
+
+Feature release: `gustRate` -- **the SWELL FREQUENCY of `gust`, the speed knob to its depth**. Since v1.8.0
+`gust` has layered a global sinusoidal horizontal breeze on wind (the whole pool swells together), with a
+tunable DEPTH (`gust`) but a hardcoded FREQUENCY: the swell rate was the baked `GUST_HZ = TAU/3` (~3s waves),
+so a fast shimmer-breeze and a slow ocean roll were the same knob. `gustRate` (opt-in scalar, default
+`GUST_HZ` = off) parameterizes that frequency -- `6` triples the swell rate (a fast breeze), `0.5` slows it to
+a long ocean roll, `0` freezes the phase (`sin(0)=0`, the gust force collapses -- the frequency analog of
+`gust:0`), a NEGATIVE reverses the phase (the breeze leans the other way first, `sin(-r*t) == -sin(r*t)`). It
+is the exact house mirror `gust:gustRate :: flutter:flutterRate` -- `flutterRate` (v1.18.0) gave flutter its
+speed knob; `gust` was the last living-air force whose depth was tunable but whose speed was a literal.
+
+This is a **FORMULA REWRITE** of a committed PHYSICS expression (the gust `vx` integrator term), not a guarded
+add, and the crux is a **fround sentinel**: `GUST_HZ = 2.0943951023931953` is NOT `Float32`-exact, so the
+`Float32` `grate` column cannot be compared `!== GUST_HZ` (it would always fire). `Math.fround` is idempotent,
+so `GUST_RATE_DEF = Math.fround(GUST_HZ)` round-trips through the column and reads back exactly, and the
+off-branch substitutes the DOUBLE `GUST_HZ` literal (`gr === GUST_RATE_DEF ? GUST_HZ : gr`) -- the SAME double
+expression shipped since v1.8.0. So **`GUST_HASH 4074438162`, `TURBGUST_HASH 15761758`, and every committed
+fingerprint reproduce byte-for-byte when off**, verified across two processes. This is the `FADE_OUT_DEF =
+Math.fround(0.3)` pattern, NOT `scaleFrom`'s (whose default `1` IS `Float32`-exact and needs no sentinel).
+Coerced `num(gustRate, GUST_RATE_DEF)` (the same signed helper `flutterRate` uses): a frequency has a SIGN, so
+a NEGATIVE is a legal phase reversal (NOT clamped), non-finite/undefined => `GUST_HZ` (off), no upper cap.
+
+A **pure PHYSICS scalar**: `pool.grate` is read in EXACTLY one place (the gust `vx` term, inside the existing
+`gust != 0` guard) and written ONLY at spawn, feeding `vx -> position` and nothing else -- no trail, no rotate,
+no color, no rng, no second reader (contrast `spinDrag`'s `pool.spin`). So the position `hash` IS the witness:
+a gust-armed burst moves only `hash`/`sumX`, never the rotate/scale/stroke/alpha streams, and a gust-OFF burst
+reproduces `COMMITTED_HASH 1569828004` for ANY `gustRate` (the read is short-circuited). `gustRate:0` is an
+exact inert-zero (`vx += sin(0) = vx += 0`, hash-neutral) reproducing `COMMITTED_HASH`. The spawn write is
+unconditional and **load-bearing** (a `Float32` zero-init `0` would mean "frozen phase / inert gust" on a
+recycled armed slot). One new Float32 pool column (+4 B/particle, always-on total 170 -> 174 = 43 x Float32 +
+2 x Uint8). No `_env.mjs` change -- rides the existing `hash` + `sumX` channels. Honored by `burst()` AND
+`spray()`; inert under reduced motion (the static path never integrates). Unit suite 270 -> 281; torture adds a
+gust-swept alloc lane, threads `gustRate` through the differential fuzz + degenerate poison, and adds a
+symmetric-history windowed-`sumX`-delta recycle-retention proof (A16).
+
+## [1.24.0] - 2026-08-15
+
+Feature release: `scaleFrom` -- **the BIRTH endpoint of the size-over-life ramp, closing the render-SCALE
+axis**. Since v1.17.0 `scaleTo` opened that axis with a one-endpoint life ramp, but its ORIGIN was hardcoded
+to `1.0`: the render fold was literally `s = 1 + (scaleTo - 1) * (1 - lifeT)`, so "born small, blooms as it
+ages" (and its inverse, "born big, settles to full") was unreachable -- `sizeMin`/`sizeMax` move the CONSTANT
+birth size (`pool.w`/`pool.h`), not the ramp's starting factor. `scaleFrom` (opt-in scalar, default `1` = off)
+adds the birth endpoint and closes the axis with a two-endpoint envelope `s = scaleFrom + (scaleTo - scaleFrom)
+* (1 - lifeT)`, ISOTROPIC (both axes), linear in the SAME age fraction `(1 - lifeT)` that `scaleTo` and
+`lifeColors` use. `0.2` blooms from a fifth-size, `2` starts double and settles, `scaleFrom == scaleTo` is an
+emergent CONSTANT size multiplier: `c.burst({ scaleFrom: 0.2, scaleTo: 1.4, fadeIn: 0.3 })` is a birth
+entrance (size + opacity ramp up together). It is the exact house mirror `scaleFrom:scaleTo :: fadeIn:fadeOut`.
+
+This is a **FORMULA REWRITE** of a committed render expression, not a guarded add: the guard becomes
+`if (scaleTo !== 1 || scaleFrom !== 1)` (scaleTo tested first, short-circuiting a scaleTo-armed burst). Because
+the default stores and reads back exactly `1.0` (`Float32`-exact, so **no fround sentinel**), the armed-off
+expression `sf + (scaleTo - sf) * age` is the SAME double expression, operand-for-operand, as the shipped
+`1 + (scaleTo - 1) * age` -- so **`SCALE_HASH`, `FLUTRATE_HASH`, and every committed fingerprint reproduce
+byte-for-byte when off**, verified across two processes. Coerced `nonneg(scaleFrom, 1)` (the same helper
+`scaleTo` uses): a finite NEGATIVE clamps to `0` (born invisible -- the size analog of `scaleTo:0`, NOT a
+mirror flip and NOT a fallback to `1`), non-finite/undefined => `1` (off), `> 1` passes unchanged (a size
+factor is unbounded above).
+
+A **pure RENDER overlay**: `pool.scaleFrom` is read ONLY in the fold and written ONLY at spawn, feeding the
+SINGLE existing `ctx.scale` and nothing else -- no physics, no trail, no color, no rng. Purity is proven
+non-vacuously on the rigs where a leak WOULD show, with `scaleFrom` ARMED: the turbulence rig reproduces
+`TURB_HASH 1630588936`, the sway rig's position hash is unchanged, the trail rig reproduces
+`TRAIL_HASH 72519212` (the ribbon keeps its birth width). The spawn write is unconditional and
+**load-bearing** (a `Float32` zero-init `0` would mean "born at zero size", a wrong default on a recycled
+slot). One new Float32 pool column (+4 B/particle, always-on total 166 -> 170 = 42 x Float32 + 2 x Uint8).
+Honored by `burst()` AND `spray()`; inert under reduced motion (the static path never calls `ctx.scale`); zero
+rng, zero allocation. Unit suite 259 -> 270; torture adds a birth-ramped alloc lane, threads `scaleFrom`
+through the differential fuzz + degenerate poison, and adds a symmetric-history `lastScale`-snapshot
+recycle-retention proof (A15).
+
 ## [1.23.0] - 2026-08-15
 
 Feature release: `spinDrag` -- **angular-velocity retention, the angular mirror of the linear `drag`**. Since

@@ -671,6 +671,7 @@
             <div class="btn-row">
                 <button class="btn" id="shrinkBtn">🔻 Shrink out</button>
                 <button class="btn" id="bloomBtn">🌸 Bloom</button>
+                <button class="btn" id="popInBtn">🎈 Pop in</button>
             </div>
             <div class="btn-row">
                 <button class="btn" id="frozenBtn">❄️ Frozen wobble</button>
@@ -678,6 +679,8 @@
                 <button class="btn" id="fadeOutBtn">🌇 Dissolve out</button>
                 <button class="btn" id="skidBtn">🛝 Skid</button>
                 <button class="btn" id="wallSkidBtn">🧱 Wall skid</button>
+                <button class="btn" id="fastGustBtn">💨 Fast gust</button>
+                <button class="btn" id="slowSwellBtn">🌊 Slow swell</button>
             </div>
             <div class="btn-row">
                 <button class="btn" id="followBtn" aria-pressed="false">🧲 Follow</button>
@@ -731,9 +734,12 @@
     const $mixBtn   = document.getElementById('mixBtn');
     const $shrinkBtn = document.getElementById('shrinkBtn');
     const $bloomBtn  = document.getElementById('bloomBtn');
+    const $popInBtn  = document.getElementById('popInBtn');
     const $frozenBtn = document.getElementById('frozenBtn');
     const $fadeInBtn = document.getElementById('fadeInBtn');
     const $fadeOutBtn = document.getElementById('fadeOutBtn');
+    const $fastGustBtn = document.getElementById('fastGustBtn');
+    const $slowSwellBtn = document.getElementById('slowSwellBtn');
     const $skidBtn = document.getElementById('skidBtn');
     const $wallSkidBtn = document.getElementById('wallSkidBtn');
     const $followBtn = document.getElementById('followBtn');
@@ -1053,6 +1059,11 @@
     $bloomBtn.addEventListener('click', () => {
         c.burst({ scaleTo: 2.5, gravity: 200, shape: 'circle', lifeColors: EMBER_RAMP });
     });
+    // Birth-size ramp (v1.24.0). Pop in: pieces are born small (scaleFrom 0.2) and settle to full
+    // size as the birth fade eases them in -- the birth endpoint of the size ramp scaleTo targets.
+    $popInBtn.addEventListener('click', () => {
+        c.burst({ scaleFrom: 0.2, scaleTo: 1.4, fadeIn: 0.3, gravity: 200, count: 120, lifeMin: 2.5, lifeMax: 3.5 });
+    });
 
     // Wobble speed (v1.18.0). Frozen wobble: flutterRate 0 locks each piece at its OWN random birth tilt
     // (a varied constant wobble per piece, not axis-aligned) -- flutter must be on for a rate to matter.
@@ -1085,6 +1096,16 @@
         c.burst({ wallFriction: 0.6, bounce: 0.6, wind: 400, gravity: 700,
                   ceiling: 40, wallLeft: 60, wallRight: window.innerWidth - 60, floor: window.innerHeight - 20,
                   count: 140, lifeMin: 3, lifeMax: 4 });
+    });
+
+    // Gust swell frequency (v1.25.0). Same gust DEPTH, different SPEED: Fast gust swells the whole pool
+    // side to side several times a second (gustRate 6), Slow swell rolls it like an ocean (gustRate 0.5).
+    // gustRate parameterizes the baked GUST_HZ; light gravity + long life keep the horizontal swell visible.
+    $fastGustBtn.addEventListener('click', () => {
+        c.burst({ gust: 500, gustRate: 6, gravity: 120, count: 140, lifeMin: 3, lifeMax: 4 });
+    });
+    $slowSwellBtn.addEventListener('click', () => {
+        c.burst({ gust: 500, gustRate: 0.5, gravity: 120, count: 140, lifeMin: 3, lifeMax: 4 });
     });
 
     // Follow-spray: a continuous stream that chases the pointer (v1.2.0 followPointer).

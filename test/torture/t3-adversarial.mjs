@@ -460,6 +460,109 @@ export function run() {
         check(err === null, () => `T3 A14: threw ${err && err.message}`);
     }
 
+    // A15 -- pool-recycle retention for scaleFrom (v1.24.0). scaleFrom is UNCONDITIONALLY written at spawn --
+    // LOAD-BEARING (like scaleTo/flutterRate/fadeOut), since a Float32 zero-init 0 would mean "born at zero
+    // size" (invisible) -- a WRONG default -- so a recycled slot must never inherit a prior burst's origin. A
+    // single-slot pool FORCES slot 0 reuse: run 5 drain cycles arming the origin, then RESEED and fire a PLAIN
+    // burst (default scaleFrom 1, scaleTo 1) into the recycled slot. The witness is `lastScale` -- a hash-neutral
+    // SNAPSHOT of the isotropic Y size factor (flutter 0, so it is the pure size fold), NOT a cumulative-hash
+    // replay (canvas.hash is cumulative and would false-fail; see the retention rule). With both endpoints reset
+    // to 1 the render leaves ctx.scale's Y factor at EXACTLY 1 (the guard is false -- an exact identity, robust
+    // to dt). The control B runs the IDENTICAL 5-cycle history but arms scaleFrom:1 (off): symmetric history, so
+    // the ONLY remaining difference is the armed value the spawn write must overwrite. A leaked scaleFrom:0 would
+    // instead fold s = 0 + (1 - 0)*(1 - lifeT) = 1 - lifeT < 1 on the plain burst, splitting A from B. Equal
+    // factors prove no leak; the armed-live check below keeps the witness non-vacuous.
+    {
+        const recycleThenPlain = (armed) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 7, maxParticles: 1 });
+            for (let cycle = 0; cycle < 5; cycle++) {
+                c.seed(7);
+                c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 0, align: 0,
+                    scaleFrom: armed, scaleTo: 1, lifeMin: 0.3, lifeMax: 0.3 });
+                for (let f = 0; f < 20; f++) pump(1, 50);
+                check(c.count === 0, () => `T3 A15: an armed(${armed}) drain cycle left ${c.count} alive in the single-slot pool`);
+            }
+            c.seed(7);   // plain burst (default scaleFrom 1, scaleTo 1) into the recycled slot, rng-aligned
+            c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 0, align: 0,
+                lifeMin: 5, lifeMax: 5 });
+            for (let f = 0; f < 10; f++) pump(1, 50);
+            const ls = canvas.lastScale;
+            const s = c.__stats();
+            c.destroy();
+            return { ls, s };
+        };
+        const err = capture(() => {
+            const A = recycleThenPlain(0);   // recycled from a BORN-INVISIBLE (scaleFrom:0) history
+            const B = recycleThenPlain(1);   // recycled from an OFF (scaleFrom:1) history -- identical timing
+            check(B.s.aliveActual === 1 && B.s.aliveGetter === 1, () =>
+                `T3 A15: __stats after the recycled plain burst shows getter=${B.s.aliveGetter} actual=${B.s.aliveActual}, expected 1`);
+            check(A.ls === B.ls, () =>
+                `T3 A15: a recycled slot leaked a stale scaleFrom -- plain-burst lastScale ${A.ls} != control ${B.ls}`);
+            // Non-vacuous: an ARMED scaleFrom:0 burst blooms from zero size -- a DIFFERENT lastScale than the plain control.
+            const canvasC = makeCanvas({ record: true });
+            const cC = createConfetti(canvasC, { seed: 7, maxParticles: 1 });
+            cC.seed(7);
+            cC.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 0, align: 0,
+                scaleFrom: 0, scaleTo: 1, lifeMin: 5, lifeMax: 5 });
+            for (let f = 0; f < 10; f++) pump(1, 50);
+            const armedLastScale = canvasC.lastScale;
+            cC.destroy();
+            check(armedLastScale !== B.ls, () =>
+                `T3 A15: scaleFrom:0 did not change the size fold vs scaleFrom:1 (${armedLastScale} == ${B.ls}) -- the witness is vacuous`);
+        });
+        check(err === null, () => `T3 A15: threw ${err && err.message}`);
+    }
+
+    // A16 -- pool-recycle retention for gustRate (v1.25.0). gustRate is UNCONDITIONALLY written at spawn --
+    // LOAD-BEARING (like fadeOut/scaleFrom), since a Float32 zero-init 0 would mean "frozen phase" (an inert
+    // gust) on a recycled slot whose gust IS armed -- a WRONG default -- so a recycled slot must never inherit
+    // a prior burst's swell frequency. A single-slot pool FORCES slot 0 reuse: run 5 drain cycles arming the
+    // frequency, then RESEED and fire a measurement burst into the recycled slot. Because the gust phase
+    // sin(_elapsed * rate) rides the CUMULATIVE instance clock, the witness must be a hash-neutral WINDOWED
+    // sumX DELTA (a before/after snapshot over a fixed 20-frame window), NOT a cumulative-from-zero hash or
+    // sumX compare (canvas.hash/sumX accumulate and would false-fail; see the retention rule). A/B share the
+    // IDENTICAL 5-cycle history timing (gustRate draws no rng, so the histories differ ONLY in the armed value
+    // the spawn write must overwrite) and both MEASURE with the default (off) frequency: a leaked gustRate:6
+    // would have re-phased the recycled plain burst's swell -> a different windowed sumX delta. C shares B's
+    // history but MEASURES armed (gustRate:6) at the SAME _elapsed, so its delta must differ -- the non-vacuous
+    // guard, phase-matched so the difference is the RATE, not the clock.
+    {
+        const recycleThenMeasure = (historyRate, measureRate) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 7, maxParticles: 1 });
+            for (let cycle = 0; cycle < 5; cycle++) {
+                c.seed(7);
+                c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 0, align: 0,
+                    gust: 400, gustRate: historyRate, lifeMin: 0.3, lifeMax: 0.3 });
+                for (let f = 0; f < 20; f++) pump(1, 50);
+                check(c.count === 0, () => `T3 A16: an armed(${historyRate}) drain cycle left ${c.count} alive in the single-slot pool`);
+            }
+            c.seed(7);   // measurement burst into the recycled slot, rng-aligned
+            c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 0, align: 0,
+                gust: 400, gustRate: measureRate, lifeMin: 5, lifeMax: 5 });
+            const before = canvas.sumX;
+            for (let f = 0; f < 20; f++) pump(1, 16);   // fixed windowed measurement
+            const delta = canvas.sumX - before;
+            const s = c.__stats();
+            c.destroy();
+            return { delta, s };
+        };
+        const err = capture(() => {
+            const A = recycleThenMeasure(6, undefined);          // history armed 6, measure DEFAULT (off)
+            const B = recycleThenMeasure(undefined, undefined);  // history default, measure DEFAULT -- symmetric
+            check(B.s.aliveActual === 1 && B.s.aliveGetter === 1, () =>
+                `T3 A16: __stats after the recycled measurement burst shows getter=${B.s.aliveGetter} actual=${B.s.aliveActual}, expected 1`);
+            check(A.delta === B.delta, () =>
+                `T3 A16: a recycled slot leaked a stale gustRate -- windowed sumX delta ${A.delta} != control ${B.delta}`);
+            // Non-vacuous: MEASURE armed (gustRate:6) on B's history + clock -> a DIFFERENT windowed sumX delta.
+            const C = recycleThenMeasure(undefined, 6);
+            check(C.delta !== B.delta, () =>
+                `T3 A16: gustRate:6 did not change the swell delta vs the default (${C.delta} == ${B.delta}) -- the witness is vacuous`);
+        });
+        check(err === null, () => `T3 A16: threw ${err && err.message}`);
+    }
+
     check(pointerListenerCount() === baseListeners,
         () => `T3: tier leaked ${pointerListenerCount() - baseListeners} pointer listener(s) overall`);
 }

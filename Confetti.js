@@ -1,9 +1,52 @@
 /**
- * @zakkster/lite-confetti v1.23.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.25.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
+ *
+ * v1.25.0 adds: `gustRate` -- the SWELL-FREQUENCY knob to `gust`'s depth, the exact house mirror of
+ * `gust:gustRate :: flutter:flutterRate`. `gust` (v1.9.0) layers one global sinusoidal horizontal breeze
+ * over `wind`, its DEPTH per-particle tunable (`gust: 400`) but its FREQUENCY baked at `GUST_HZ = TAU/3`
+ * (~3s swells) since it shipped -- so a fast shimmer-gust and a slow ocean-swell were the same knob.
+ * `gustRate` (opt-in scalar, default `GUST_HZ` = off) parameterizes that baked frequency: `6` triples the
+ * swell rate (fast breeze), `0.5` slows it to a long roll, `0` freezes the phase (the gust force collapses
+ * to `sin(0) = 0` -- inert, the frequency analog of `gust: 0`), a NEGATIVE reverses the phase (the breeze
+ * leans the other way first, `sin(-r*t) == -sin(r*t)`). Coerced with `num(gustRate, GUST_RATE_DEF)` (the
+ * SAME signed helper `flutterRate` uses -- a frequency has a SIGN, so NOT nonneg/clamp01); non-finite/
+ * undefined => GUST_RATE_DEF (off). It REWRITES the committed gust vx integrator expression, not a guarded
+ * add: `GUST_RATE_DEF = Math.fround(GUST_HZ)` is a fround SENTINEL (GUST_HZ = 2.0943951023931953 is NOT
+ * Float32-exact, the FADE_OUT_DEF case, UNLIKE scaleFrom/flutterRate whose default 1 IS exact), so the
+ * default round-trips through the `grate` column and reads back exactly, and the off-branch substitutes the
+ * DOUBLE `GUST_HZ` literal -- so GUST_HASH and TURBGUST_HASH reproduce bit-for-bit. The read stays INSIDE
+ * the existing `if (pool.gust[i] !== 0)` guard, so a gust-off burst reproduces every committed fingerprint
+ * for ANY gustRate. A PURE physics scalar: `pool.grate` is read ONLY in the gust vx term and written ONLY
+ * at spawn (unconditional and LOAD-BEARING -- a Float32 zero-init `0` would mean "frozen phase" on a
+ * recycled armed slot), feeding `vx -> x -> position hash + sumX` and nothing else -- no trail, no rotate,
+ * no color, no alpha, no rng. Both burst AND spray honor it; inert under reduced motion (the static path
+ * runs no update loop). +4 B/particle.
+ *
+ * v1.24.0 adds: `scaleFrom` -- the BIRTH endpoint of the size-over-life ramp, the exact house mirror of
+ * `scaleFrom:scaleTo :: fadeIn:fadeOut`. Since v1.17.0 `scaleTo` opened the render-SCALE axis with a
+ * one-endpoint life ramp, but its ORIGIN was hardcoded to `1.0`: the fold was literally
+ * `s = 1 + (scaleTo - 1) * (1 - lifeT)`, so "born small, blooms as it ages" (and its inverse, "born big,
+ * settles to full") was unreachable -- `sizeMin`/`sizeMax` move the CONSTANT birth size (`pool.w`/`pool.h`),
+ * not the ramp's starting factor. `scaleFrom` (opt-in scalar, default 1 = off) adds the birth endpoint and
+ * closes the axis with a two-endpoint envelope: `s = scaleFrom + (scaleTo - scaleFrom) * (1 - lifeT)`,
+ * ISOTROPIC (both axes), linear in the SAME age fraction `(1 - lifeT)` that `scaleTo` and `lifeColors` use.
+ * `scaleFrom: 0.2` blooms from a fifth-size to `scaleTo`; `2` starts double and settles; `scaleFrom ==
+ * scaleTo` is an emergent CONSTANT size multiplier. Coerced with `nonneg(scaleFrom, 1)` (the same helper
+ * `scaleTo` uses): a finite NEGATIVE => 0 (born invisible, the size analog of `scaleTo:0`, NOT a mirror flip
+ * and NOT a fallback to 1); non-finite/undefined => 1 (off); `> 1` passes unchanged (a size factor is
+ * unbounded above). The fold is a FORMULA REWRITE of the committed render expression, not a guarded add:
+ * because the default stores/reads back exactly `1.0` (Float32-exact, so NO fround sentinel), the armed-off
+ * expression `sf + (scaleTo - sf) * age` is the SAME double expression as the shipped `1 + (scaleTo - 1) *
+ * age` -- so SCALE_HASH, FLUTRATE_HASH, and every committed fingerprint reproduce byte-for-byte when off.
+ * A PURE render overlay: `pool.scaleFrom` is read ONLY in the fold and written ONLY at spawn, feeding the
+ * SINGLE existing `ctx.scale` and nothing else -- no physics, no trail, no color, no rng. The spawn write is
+ * unconditional and LOAD-BEARING (a Float32 zero-init `0` would mean "born at zero size" on a recycled slot,
+ * the scaleTo case). Both burst AND spray honor it; inert under reduced motion (the static path never calls
+ * ctx.scale). The trail ribbon keeps its birth width. +4 B/particle.
  *
  * v1.23.0 adds: `spinDrag` -- angular-velocity retention, the angular mirror of the linear `drag`. The engine
  * has damped LINEAR velocity (`vx`/`vy *= drag`, default 0.98) since day one -- a piece slows as it flies --
@@ -339,6 +382,14 @@ const HALF_PI = Math.PI / 2;
 // The whole pool shares this phase (driven by the instance `_elapsed` clock), so gust reads
 // as a coherent breeze rather than per-particle noise.
 const GUST_HZ = TAU / 3;
+
+// gustRate default sentinel (v1.25.0). GUST_HZ = TAU/3 = 2.0943951023931953 is NOT Float32-exact
+// (Math.fround(GUST_HZ) = 2.094395160675049 !== GUST_HZ), so the default round-trips through the
+// Float32 `grate` column and gr === GUST_RATE_DEF detects "off". Math.fround is idempotent, so the
+// column reads it back EXACTLY, and the off-branch substitutes the DOUBLE GUST_HZ literal to reproduce
+// GUST_HASH/TURBGUST_HASH bit-for-bit. This is the FADE_OUT_DEF = fround(0.3) pattern, NOT scaleFrom's
+// (whose default 1 IS Float32-exact and needs no sentinel).
+const GUST_RATE_DEF = Math.fround(GUST_HZ);
 
 // Color-over-life (v1.12.0). A `lifeColors` burst bakes its multi-stop OKLCH ramp ONCE into a
 // fixed-resolution LUT of CSS strings (bakeCssGradient), and the render loop indexes it by the
@@ -746,12 +797,14 @@ export function createConfetti(canvas, {
         spin0: new Float32Array(maxParticles),   // birth orientation (the pivot spinRate scales about)
         spinRate: new Float32Array(maxParticles), // render-time tumble-speed multiplier; 1 = as seeded
         scaleTo: new Float32Array(maxParticles), // render-time size-over-life target; 1 = constant size
+        scaleFrom: new Float32Array(maxParticles), // render-time size-over-life ORIGIN; 1 = ramp starts at birth size (v1.24.0)
         tilt0: new Float32Array(maxParticles),   // birth wobble phase (the pivot flutterRate scales about)
         flutterRate: new Float32Array(maxParticles), // render-time wobble-speed multiplier; 1 = as seeded
         fadeIn: new Float32Array(maxParticles), // render-time birth-opacity ramp; 0 = off
         fadeOut: new Float32Array(maxParticles), // death-fade window fraction; default fround(0.3)
         turb:  new Float32Array(maxParticles),   // turbulence accel magnitude (px/sec^2); 0 = none
         gust:  new Float32Array(maxParticles),   // gust accel magnitude (px/sec^2); 0 = none
+        grate: new Float32Array(maxParticles),   // gust swell frequency; GUST_RATE_DEF = baked ~3s swell (v1.25.0)
         vortX: new Float32Array(maxParticles),   // vortex/attractor center X (CSS px)
         vortY: new Float32Array(maxParticles),   // vortex/attractor center Y (CSS px)
         attract:new Float32Array(maxParticles),  // radial spring strength (1/sec^2); 0 = off, <0 = repel
@@ -902,6 +955,10 @@ export function createConfetti(canvas, {
         // would mean "shrink to nothing", so a recycled slot that skipped the write would render a
         // vanishing piece. Fail-closed pool-reuse reset, like `landed = 0` / `trailN = 0`.
         pool.scaleTo[i] = config.scaleTo;
+        // Size-over-life ORIGIN (v1.24.0). ALWAYS written, never zero-init: a Float32Array default of 0
+        // would mean "born at zero size" (invisible) on a recycled slot that skipped the write (the default
+        // must be 1), so this is unconditional like scaleTo -- the write CARRIES the correct non-zero default.
+        pool.scaleFrom[i] = config.scaleFrom;
         // Tumble-wobble speed (v1.18.0). ALWAYS written, never zero-init: a Float32Array default of 0
         // would mean "frozen wobble" on a recycled slot that skipped the write (the default must be 1),
         // so this is unconditional like scaleTo. Mirrors the tilt0 birth-pivot capture above.
@@ -918,6 +975,10 @@ export function createConfetti(canvas, {
         pool.fadeOut[i] = config.fadeOut;
         pool.turb[i] = config.turbulence;
         pool.gust[i] = config.gust;
+        // Gust swell frequency (v1.25.0). ALWAYS written -- LOAD-BEARING, like fadeOut/scaleTo. A Float32
+        // zero-init of 0 would mean "frozen phase" (inert gust) on a recycled slot whose gust IS armed --
+        // a WRONG default. The unconditional write of the NON-zero GUST_RATE_DEF is REQUIRED for pool reuse.
+        pool.grate[i] = config.gustRate;
         pool.vortX[i] = config.attractX;
         pool.vortY[i] = config.attractY;
         pool.attract[i] = config.attract;
@@ -1027,8 +1088,14 @@ export function createConfetti(canvas, {
                 // Gust: a global sinusoidal horizontal acceleration (a coherent breeze), layered
                 // on wind. Phase is the shared `_elapsed` clock so the whole pool swells together;
                 // amplitude is per-particle. Guarded so gust == 0 is byte-identical. Applied
-                // before drag, like wind, so it too damps toward a terminal velocity.
-                if (pool.gust[i] !== 0) pool.vx[i] += Math.sin(_elapsed * GUST_HZ) * pool.gust[i] * dtSec;
+                // before drag, like wind, so it too damps toward a terminal velocity. gustRate (v1.25.0)
+                // parameterizes the baked GUST_HZ swell frequency; the fround sentinel keeps the default
+                // byte-identical -- when off, gr === GUST_RATE_DEF substitutes the DOUBLE GUST_HZ literal,
+                // so this is the SAME expression shipped since gust (GUST_HASH/TURBGUST_HASH reproduce).
+                if (pool.gust[i] !== 0) {
+                    const gr = pool.grate[i];
+                    pool.vx[i] += Math.sin(_elapsed * (gr === GUST_RATE_DEF ? GUST_HZ : gr)) * pool.gust[i] * dtSec;
+                }
                 // Vortex: a linear-spring point force. `attract` pulls toward (center - pos) -- the
                 // force is ZERO at the center (no singularity), so a PULL (attract > 0) is a damped
                 // oscillator that spirals in; `swirl` adds the perpendicular tangential component, so
@@ -1270,16 +1337,21 @@ export function createConfetti(canvas, {
                 rot += d * pool.align[i];
             }
 
-            // Size-over-life (v1.17.0). Off (scaleTo == 1) leaves ctx.scale(wobbleScale, 1) byte-identical.
-            // When armed, lerp an ISOTROPIC factor from 1 at birth to scaleTo at death by the SAME age
-            // fraction (1 - lifeT) the lifeColors ramp indexes with, and fold it into the SINGLE existing
-            // scale call so flutter's X-wobble and the size ramp multiply on one transform. pool.w/h are
-            // NEVER touched, so the seeded POSITION stream is byte-identical whether off or on. lifeT is in
-            // (0,1] (life<=0 pieces already `continue`), so age is in [0,1) and s stays finite and >=0.
+            // Size-over-life (v1.17.0 scaleTo + v1.24.0 scaleFrom). Off (both == 1) leaves
+            // ctx.scale(wobbleScale, 1) byte-identical. When armed, lerp an ISOTROPIC factor from scaleFrom
+            // at BIRTH to scaleTo at DEATH by the SAME age fraction (1 - lifeT) the lifeColors ramp indexes
+            // with -- a two-endpoint envelope -- and fold it into the SINGLE existing scale call so flutter's
+            // X-wobble and the size ramp multiply on one transform. pool.w/h are NEVER touched, so the seeded
+            // POSITION stream is byte-identical whether off or on. lifeT is in (0,1] (life<=0 pieces already
+            // `continue`), so age is in [0,1) and s stays finite and >=0. BIT-IDENTITY WHEN OFF: scaleFrom's
+            // default reads back exactly 1.0 (Float32-exact), so sf + (scaleTo - sf) * age is the SAME double
+            // expression, operand-for-operand, as the shipped 1 + (scaleTo - 1) * age -- SCALE_HASH and
+            // FLUTRATE_HASH reproduce byte-for-byte with scaleFrom present-but-off.
             let sx = wobbleScale;
             let sy = 1;
-            if (pool.scaleTo[i] !== 1) {
-                const s = 1 + (pool.scaleTo[i] - 1) * (1 - lifeT);
+            if (pool.scaleTo[i] !== 1 || pool.scaleFrom[i] !== 1) {   // scaleTo tested first: short-circuits a scaleTo-armed burst
+                const sf = pool.scaleFrom[i];
+                const s = sf + (pool.scaleTo[i] - sf) * (1 - lifeT);
                 sx = wobbleScale * s;
                 sy = s;
             }
@@ -1359,7 +1431,11 @@ export function createConfetti(canvas, {
             // never reaches a ceiling or wall collision, so there is no edge-contact frame on which to damp
             // the tangential component -- the box grip has nothing to bite. `spinDrag` (v1.23.0) is INERT too:
             // the static path advances no `spin` and damps no `spinV`, so there is no accumulating tumble to
-            // decay -- the angular drag has nothing to bite.
+            // decay -- the angular drag has nothing to bite. `scaleFrom` (v1.24.0) is INERT for the same reason
+            // as `scaleTo`: the static path does no life integration and never calls ctx.scale, so there is no
+            // birth-to-death age fraction to ramp -- a piece is drawn once at its birth size. `gustRate`
+            // (v1.25.0) is INERT for the same reason as `gust`: the static fan runs no update loop, so the
+            // gust vx term is never integrated and there is no swell phase to advance at any frequency.
             const rotation = rng.next() * TAU;
             // Honour a `shapes` mix in the reduced-motion render too. Single-shape (null)
             // takes no extra rng draw, so the non-mixed static render is unchanged.
@@ -1428,11 +1504,13 @@ export function createConfetti(canvas, {
          * @param {number} [options.spinRate=1]  Tumble-speed multiplier on the seeded random spin: 0 = rigid at the random birth tilt, 0.3 = slow drift, 2 = double, negative = reverse. A pure RENDER scale, so the seeded POSITION stream is byte-identical off or on, even with `turbulence` armed. Zero-rng; non-finite => 1; inert under reduced motion
          * @param {number} [options.spinDrag=1]  Angular-velocity retention in [0,1] -- the angular mirror of the linear `drag`. Each frame, before the spin advance, `spinV *= spinDrag`, so the tumble decays exactly as `drag` decays translation. `1` = off (default, tumble forever, exactly today's look), `0.95` = settle to a lazy drift, `0` = FREEZE at the birth angle. clamp01: a NEGATIVE clamps to `0` (freeze -- a retention has no direction, unlike spinRate's reverse), non-finite/undefined => `1` (off), > 1 => 1. A contraction (|spinV| never grows), finite with no accel cap. Damps `spinV` only, never `tiltV`. HYBRID physics knob: with turbulence OFF it moves ONLY the render rotation (position byte-identical, rotateHash moves); with turbulence ON the curl reads the slower spin, so it MOVES positions and earns its own hash -- NOT a pure render overlay. Zero-rng; inert under reduced motion
          * @param {number} [options.scaleTo=1]   Size-over-life target: lerp each piece's RENDERED size from 1.0 at birth to `scaleTo` at death (isotropic, both axes). `0.2` shrinks out, `2` grows, `0` vanishes at death; `1` = constant size. A pure RENDER overlay folded into the flutter scale call -- pool.w/h untouched, so the seeded POSITION stream is byte-identical off or on. Coerced with nonneg: a NEGATIVE clamps to 0 (a size has no direction), NOT a mirror flip and NOT a fallback to 1; non-finite => 1. The trail ribbon keeps its birth width. Zero-rng; inert under reduced motion
+         * @param {number} [options.scaleFrom=1] Size-over-life ORIGIN, the BIRTH endpoint of the ramp `scaleTo` targets (the exact mirror `scaleFrom:scaleTo :: fadeIn:fadeOut`). Lerp each piece's RENDERED size from `scaleFrom` at birth to `scaleTo` at death (isotropic): `0.2` blooms from a fifth-size, `2` starts double and settles, `scaleFrom == scaleTo` is a constant size multiplier; `1` = today's look (the ramp starts at birth size). A pure RENDER overlay folded into the SAME scale call -- pool.w/h untouched, so the seeded POSITION stream is byte-identical off or on. Coerced with nonneg: a NEGATIVE clamps to 0 (born invisible -- a size has no direction, NOT a mirror flip and NOT a fallback to 1), non-finite => 1 (off), `> 1` passes unchanged (a size factor is unbounded above). The trail ribbon keeps its birth width. Zero-rng; inert under reduced motion
          * @param {number} [options.flutterRate=1] Tumble-wobble SPEED multiplier on the seeded flutter (the SPEED knob to `flutter`'s DEPTH): 0 = wobble frozen at the random birth tilt, 0.3 = slow lazy flutter, 2 = fast shimmer, negative = reversed phase; 1 = as seeded. A pure RENDER phase scale about a birth pivot, so the seeded POSITION stream is byte-identical off or on, even with `turbulence` armed. Inert when `flutter` is 0 (a zero-depth wobble has no speed). Zero-rng; non-finite => 1; inert under reduced motion
          * @param {number} [options.fadeIn=0]     Birth-opacity ramp: fade each piece up from transparent over the FIRST `fadeIn` fraction of its life (`0.4` eases in over the first 40%). The mirror of the hardcoded death fade-out, MULTIPLYING the same alpha; `1` ramps across the whole life; default `0` = today's instant-on. A pure RENDER overlay on ctx.globalAlpha -- pool.x/y/v untouched, so the seeded POSITION stream is byte-identical off or on. The trail ribbon materializes in with the body (shares the alpha). clamp01: non-finite/undefined/negative => 0 (off), > 1 clamps to 1. Zero-rng; inert under reduced motion
          * @param {number} [options.fadeOut=0.3]  Death-fade window: the fraction of life over which each piece dissolves OUT at the END. `0.6` fades over the last 60% (a long gentle dissolve), `0.1` a quick blink-out, `1` fades across the whole life; default `0.3` = today's exact look. The mirror of `fadeIn`, MULTIPLYING the same alpha to compose the full opacity envelope. A pure RENDER overlay on ctx.globalAlpha (reads only lifeT) -- pool.x/y/v untouched, so the seeded POSITION stream is byte-identical off or on; the trail dissolves out with the body. clamp01: non-finite/undefined => `0.3` (the default window); NEGATIVE (e.g. `-1`) clamps to `0` = a hard cut (full opacity then gone), NOT a fallback to the default; > 1 clamps to 1. Zero-rng; inert under reduced motion
          * @param {number} [options.turbulence=0] Per-particle rotating accel px/sec^2 (organic wander). Opt-in, zero-rng, fingerprint-safe
          * @param {number} [options.gust=0]      Global oscillating horizontal accel px/sec^2 layered on wind (~3s swells). Opt-in, zero-rng
+         * @param {number} [options.gustRate=GUST_HZ] Gust SWELL FREQUENCY, the SPEED knob to `gust`'s depth (the mirror `gust:gustRate :: flutter:flutterRate`): `6` triples the swell rate (fast breeze), `0.5` a long ocean roll, `0` freezes the phase (inert -- the gust force collapses to `sin(0)=0`, the frequency analog of `gust:0`), a NEGATIVE reverses the phase (the breeze leans the other way first); default `GUST_HZ` = today's baked ~3s swell. Parameterizes the SINGLE committed gust vx term inside the existing `gust !== 0` guard -- a fround sentinel keeps the default byte-identical, so a gust-off burst reproduces every fingerprint for ANY gustRate. Coerced with num: a NEGATIVE is legal phase reversal (a frequency has a SIGN, like reverse spin, NOT clamped), non-finite => GUST_HZ (off), no upper cap. A pure PHYSICS scalar feeding only vx -> position -- zero-rng; inert under reduced motion
          * @param {number} [options.attract=0]   Vortex radial spring strength (1/sec^2, scaled by distance): + pulls toward the center, - repels. Opt-in, zero-rng, fingerprint-safe
          * @param {number} [options.swirl=0]     Vortex tangential strength (1/sec^2): spins particles around the center; sign = spin direction. Opt-in, zero-rng
          * @param {number} [options.attractX]    Vortex center X (CSS px); default: the burst origin x
@@ -1479,11 +1557,13 @@ export function createConfetti(canvas, {
                   spinRate = 1,
                   spinDrag = 1,
                   scaleTo = 1,
+                  scaleFrom = 1,
                   flutterRate = 1,
                   fadeIn = 0,
                   fadeOut = FADE_OUT_DEF,
                   turbulence = 0,
                   gust = 0,
+                  gustRate = GUST_RATE_DEF,
                   attract = 0,
                   swirl = 0,
                   attractX,
@@ -1512,6 +1592,7 @@ export function createConfetti(canvas, {
             wind = num(wind, 0); // signed: negative wind drifts left, so num (not nonneg)
             turbulence = num(turbulence, 0); // signed accel (px/sec^2); non-finite => 0 (off)
             gust = num(gust, 0);             // signed accel (px/sec^2); non-finite => 0 (off)
+            gustRate = num(gustRate, GUST_RATE_DEF); // signed swell frequency; negative = phase reversal; non-finite => GUST_HZ (off)
             attract = num(attract, 0);       // signed spring strength; non-finite => 0 (off), <0 = repel
             swirl = num(swirl, 0);           // signed tangential strength; non-finite => 0 (off)
             floor = num(floor, Infinity);  // opt-in: undefined/NaN/Infinity/string all => no floor
@@ -1585,7 +1666,7 @@ export function createConfetti(canvas, {
                 : (trail === undefined ? trailCap : Math.min(trailCap, Math.floor(nonneg(trail, trailCap))));
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), spinDrag: clamp01(spinDrag, 1), scaleTo: nonneg(scaleTo, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), fadeOut: clamp01(fadeOut, FADE_OUT_DEF), turbulence, gust, trailLen: trailDraw,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), spinDrag: clamp01(spinDrag, 1), scaleTo: nonneg(scaleTo, 1), scaleFrom: nonneg(scaleFrom, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), fadeOut: clamp01(fadeOut, FADE_OUT_DEF), turbulence, gust, gustRate, trailLen: trailDraw,
                 attract, swirl, attractX: vortX, attractY: vortY, settle, friction, wallFriction, lifeRamp,
             };
 
@@ -1647,11 +1728,13 @@ export function createConfetti(canvas, {
          * @param {number} [options.spinRate=1]     Tumble-speed multiplier on the seeded random spin (0 = rigid at the random birth tilt, 0.3 = slow drift, 2 = double, negative = reverse). A pure render scale -- the seeded position stream is byte-identical off or on, even with `turbulence` armed. Zero-rng; non-finite => 1
          * @param {number} [options.spinDrag=1]     Angular-velocity retention in [0,1] -- the angular mirror of the linear `drag`. Each frame, before the spin advance, `spinV *= spinDrag`, so the tumble decays as `drag` decays translation. `1` = off (default), `0.95` = settle to a lazy drift, `0` = FREEZE at the birth angle. clamp01: a NEGATIVE clamps to `0` (freeze -- a retention has no direction), non-finite => `1` (off), > 1 => 1. A contraction (|spinV| never grows), finite with no accel cap. Damps `spinV` only, never `tiltV`. HYBRID physics knob: turbulence OFF moves only the render rotation (position byte-identical); turbulence ON the curl reads the slower spin and MOVES positions -- NOT a pure render overlay. Zero-rng
          * @param {number} [options.scaleTo=1]      Size-over-life target: lerp each piece's rendered size from 1.0 at birth to `scaleTo` at death (isotropic). `0.2` shrinks out, `2` grows, `0` vanishes; `1` = constant size. A pure render overlay -- pool.w/h untouched, so the seeded position stream is byte-identical off or on. nonneg: a NEGATIVE clamps to 0 (not a flip, not a fallback to 1); non-finite => 1. The trail keeps its birth width. Zero-rng
+         * @param {number} [options.scaleFrom=1]    Size-over-life ORIGIN, the BIRTH endpoint of the ramp `scaleTo` targets (the mirror `scaleFrom:scaleTo :: fadeIn:fadeOut`). Lerp each piece's rendered size from `scaleFrom` at birth to `scaleTo` at death (isotropic): `0.2` blooms from a fifth-size, `2` starts double and settles, `scaleFrom == scaleTo` is a constant multiplier; `1` = today's look. A pure render overlay folded into the SAME scale call -- pool.w/h untouched, so the seeded position stream is byte-identical off or on. nonneg: a NEGATIVE clamps to 0 (born invisible, not a flip, not a fallback to 1), non-finite => 1, `> 1` passes unchanged. The trail keeps its birth width. Zero-rng
          * @param {number} [options.flutterRate=1]  Tumble-wobble SPEED multiplier on the seeded flutter (0 = frozen at the random birth tilt, 0.3 = slow lazy flutter, 2 = fast shimmer, negative = reversed; 1 = as seeded). A pure render phase scale about a birth pivot -- the seeded position stream is byte-identical off or on, even with `turbulence` armed. Inert when `flutter` is 0. Zero-rng; non-finite => 1
          * @param {number} [options.fadeIn=0]       Birth-opacity ramp: fade each piece up from transparent over the FIRST `fadeIn` fraction of its life (`0.4` eases in over the first 40%). The mirror of the hardcoded death fade-out, multiplying the same alpha; `1` ramps across the whole life; default `0` = instant-on. A pure render overlay on ctx.globalAlpha -- pool.x/y/v untouched, so the seeded position stream is byte-identical off or on. The trail materializes in with the body. clamp01: non-finite/negative => 0 (off), > 1 => 1. Zero-rng
          * @param {number} [options.fadeOut=0.3]    Death-fade window: the fraction of life over which each piece dissolves OUT at the END. `0.6` fades over the last 60%, `0.1` a quick blink-out, `1` across the whole life; default `0.3` = today's look. The mirror of `fadeIn`, multiplying the same alpha to compose the full opacity envelope. A pure render overlay on ctx.globalAlpha (reads only lifeT) -- pool.x/y/v untouched, so the seeded position stream is byte-identical off or on; the trail dissolves out with the body. clamp01: non-finite/undefined => `0.3`; NEGATIVE clamps to `0` = hard cut (NOT a fallback to the default); > 1 => 1. Zero-rng
          * @param {number} [options.turbulence=0]   Per-particle rotating accel px/sec^2 (organic wander). Opt-in, zero-rng
          * @param {number} [options.gust=0]         Global oscillating horizontal accel px/sec^2 layered on wind. Opt-in, zero-rng
+         * @param {number} [options.gustRate=GUST_HZ] Gust SWELL FREQUENCY, the SPEED knob to `gust`'s depth (the mirror `gust:gustRate :: flutter:flutterRate`): `6` fast breeze, `0.5` a long ocean roll, `0` freezes the phase (inert -- collapses to `sin(0)=0`), a NEGATIVE reverses the phase; default `GUST_HZ` = today's baked ~3s swell. Parameterizes the committed gust vx term inside the existing `gust !== 0` guard; a fround sentinel keeps the default byte-identical. Coerced with num: a NEGATIVE is legal phase reversal, non-finite => GUST_HZ (off), no upper cap. A pure physics scalar feeding only vx -> position; zero-rng, inert under reduced motion
          * @param {number} [options.attract=0]      Vortex radial spring strength (1/sec^2): + pulls toward the center, - repels. Opt-in, zero-rng
          * @param {number} [options.swirl=0]        Vortex tangential strength (1/sec^2): spins around the center; sign = direction. Opt-in, zero-rng
          * @param {number} [options.attractX]       Vortex center X (CSS px); default: the spray origin x
@@ -1695,11 +1778,13 @@ export function createConfetti(canvas, {
                   spinRate = 1,
                   spinDrag = 1,
                   scaleTo = 1,
+                  scaleFrom = 1,
                   flutterRate = 1,
                   fadeIn = 0,
                   fadeOut = FADE_OUT_DEF,
                   turbulence = 0,
                   gust = 0,
+                  gustRate = GUST_RATE_DEF,
                   attract = 0,
                   swirl = 0,
                   attractX,
@@ -1726,6 +1811,7 @@ export function createConfetti(canvas, {
             wind = num(wind, 0); // signed: negative wind drifts left, so num (not nonneg)
             turbulence = num(turbulence, 0); // signed accel (px/sec^2); non-finite => 0 (off)
             gust = num(gust, 0);             // signed accel (px/sec^2); non-finite => 0 (off)
+            gustRate = num(gustRate, GUST_RATE_DEF); // signed swell frequency; negative = phase reversal; non-finite => GUST_HZ (off)
             attract = num(attract, 0);       // signed spring strength; non-finite => 0 (off), <0 = repel
             swirl = num(swirl, 0);           // signed tangential strength; non-finite => 0 (off)
             floor = num(floor, Infinity);  // opt-in: undefined/NaN/Infinity/string all => no floor
@@ -1790,7 +1876,7 @@ export function createConfetti(canvas, {
                 : (trail === undefined ? trailCap : Math.min(trailCap, Math.floor(nonneg(trail, trailCap))));
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), spinDrag: clamp01(spinDrag, 1), scaleTo: nonneg(scaleTo, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), fadeOut: clamp01(fadeOut, FADE_OUT_DEF), turbulence, gust, trailLen: trailDraw,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), spinDrag: clamp01(spinDrag, 1), scaleTo: nonneg(scaleTo, 1), scaleFrom: nonneg(scaleFrom, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), fadeOut: clamp01(fadeOut, FADE_OUT_DEF), turbulence, gust, gustRate, trailLen: trailDraw,
                 attract, swirl, attractX: vortX, attractY: vortY, settle, friction, wallFriction, lifeRamp,
             };
 

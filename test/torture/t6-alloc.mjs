@@ -371,6 +371,48 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- the spinDrag angular damp is allocating');
     }
 
+    // (18) A birth-ramped live pool (v1.24.0): with scaleFrom:0.2, scaleTo:2 every rendered piece runs the
+    // REWRITTEN two-endpoint size fold `s = sf + (scaleTo - sf) * (1 - lifeT)` (BOTH endpoints armed, so the
+    // guard fires and the full lerp runs) folded into the flutter X-wobble, INSIDE the measured window.
+    // flutter:1 arms the wobble so the render path is fully loaded. It is a Float32 read + a subtract + a
+    // multiply + an add + a multiply, allocating nothing; the immortal 1e6 life holds the pool at MAXP so any
+    // per-frame allocation on the scaleFrom path would show as retained bytes. The two-endpoint analog of
+    // lane (11)'s one-endpoint scaleTo work.
+    const csf = createConfetti(makeCanvas(), { seed: 2401, maxParticles: MAXP });
+    csf.burst({
+        count: MAXP, lifeMin: 1e6, lifeMax: 1e6, sizeMin: 4, sizeMax: 12,
+        flutter: 1, scaleFrom: 0.2, scaleTo: 2,
+    });
+    pump(1, 1000); pump(30, 16); // let the size ramp advance for a while before measuring
+    check(csf.count === MAXP, () => `T6: birth-ramped pool has ${csf.count} alive, expected ${MAXP}`);
+    const bpfScaleFrom = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    csf.destroy();
+    if (bpfScaleFrom > RETAIN_FLOOR_BPF) {
+        die('T6: birth-ramped update() retains ' + bpfScaleFrom.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the scaleFrom two-endpoint size fold is allocating');
+    }
+
+    // (19) A gust-swept live pool (v1.25.0): with gust:400 + gustRate:6 every alive piece runs the gust vx
+    // term `vx += sin(_elapsed * (gr === GUST_RATE_DEF ? GUST_HZ : gr)) * gust * dtSec` on the ARMED branch
+    // (gustRate:6 != the sentinel, so the parameterized-frequency path runs, not the byte-identical default),
+    // INSIDE the measured window. wind:400 arms the sustained drift the gust rides on. It is a Float32 read +
+    // a compare + a Math.sin + two multiplies, allocating nothing; the immortal 1e6 life holds the pool at
+    // MAXP so any per-frame allocation on the gustRate path would show as retained bytes. The living-air
+    // analog of lane (1)'s baseline update work, exercising the rewritten gust integrator.
+    const cgr = createConfetti(makeCanvas(), { seed: 2501, maxParticles: MAXP });
+    cgr.burst({
+        count: MAXP, lifeMin: 1e6, lifeMax: 1e6, sizeMin: 4, sizeMax: 12,
+        gust: 400, gustRate: 6, wind: 400,
+    });
+    pump(1, 1000); pump(30, 16); // let the swell phase advance for a while before measuring
+    check(cgr.count === MAXP, () => `T6: gust-swept pool has ${cgr.count} alive, expected ${MAXP}`);
+    const bpfGustRate = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    cgr.destroy();
+    if (bpfGustRate > RETAIN_FLOOR_BPF) {
+        die('T6: gust-swept update() retains ' + bpfGustRate.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the gustRate parameterized-frequency gust term is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -394,6 +436,8 @@ export async function run() {
         + bpfFadeOut.toFixed(2) + ' B/frame from a death-fade (fadeOut + flutter) live pool, '
         + bpfFric.toFixed(2) + ' B/frame from a floor-friction (skidding) live pool, '
         + bpfWfric.toFixed(2) + ' B/frame from a wall-friction (wall-skid) live pool, '
-        + bpfSdrag.toFixed(2) + ' B/frame from a spin-damped (spinDrag + turbulence + flutter) live pool); '
+        + bpfSdrag.toFixed(2) + ' B/frame from a spin-damped (spinDrag + turbulence + flutter) live pool, '
+        + bpfScaleFrom.toFixed(2) + ' B/frame from a birth-ramped (scaleFrom + scaleTo + flutter) live pool, '
+        + bpfGustRate.toFixed(2) + ' B/frame from a gust-swept (gust + gustRate) live pool); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

@@ -261,6 +261,40 @@ export function run() {
         ['spinDrag:neg', { count: 60, spinDrag: -5, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['spinDrag:tiny', { count: 60, spinDrag: 1e-9, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['spinDrag:huge', { count: 60, spinDrag: 1e9, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        // scaleFrom poison (v1.24.0): garbage origins coerce via nonneg(scaleFrom, 1) (non-finite/non-numeric/
+        // null/{} -> 1 off, negative -> 0 born-invisible, > 1 passes unchanged). The render fold is
+        // s = scaleFrom + (scaleTo - scaleFrom)*(1 - lifeT), feeding the SINGLE ctx.scale -- it draws no rng
+        // and touches no position, so a poisoned origin can only mis-scale a draw, never a physics step. lifeT
+        // is in (0,1] (dead pieces `continue`), so s stays finite and >= 0 for any finite endpoints. Legal
+        // extremes (0 born-invisible, -5 -> 0, 1e-9, 1e9) + flutter (the wobble multiplies the fold) +
+        // turbulence + wind + a bouncing box confirm the birth ramp never yields a non-finite draw under load.
+        ['scaleFrom:NaN', { count: 60, scaleFrom: NaN, flutter: 1, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleFrom:Infinity', { count: 60, scaleFrom: Infinity, flutter: 1, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleFrom:-Infinity', { count: 60, scaleFrom: -Infinity, flutter: 1, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleFrom:nonnumeric', { count: 60, scaleFrom: '0.5', flutter: 1, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleFrom:null', { count: 60, scaleFrom: null, flutter: 1, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleFrom:object', { count: 60, scaleFrom: {}, flutter: 1, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleFrom:0', { count: 60, scaleFrom: 0, scaleTo: 2, flutter: 1, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleFrom:neg', { count: 60, scaleFrom: -5, scaleTo: 2, flutter: 1, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleFrom:tiny', { count: 60, scaleFrom: 1e-9, scaleTo: 2, flutter: 1, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['scaleFrom:huge', { count: 60, scaleFrom: 1e9, scaleTo: 2, flutter: 1, turbulence: 400, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        // gustRate poison (v1.25.0): garbage frequencies coerce via num(gustRate, GUST_RATE_DEF) (non-finite/
+        // non-numeric/null/{} -> GUST_HZ off; a NEGATIVE is legal phase reversal, NOT clamped; no upper cap).
+        // The read lives inside `if (pool.gust[i] !== 0)`, parameterizing the SINGLE gust vx term
+        // sin(_elapsed * rate) -- it draws no rng and only steers vx, so a poisoned rate can only re-phase the
+        // breeze, never blow up a draw (sin is bounded in [-1,1] for any finite argument). gust 400 arms the
+        // read; legal extremes (0 frozen-phase inert, -6 reversed, 1e-9 near-frozen, 1e6 fast shimmer) + wind +
+        // turbulence + a bouncing box confirm the swell never yields a non-finite draw under load.
+        ['gustRate:NaN', { count: 60, gust: 400, gustRate: NaN, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['gustRate:Infinity', { count: 60, gust: 400, gustRate: Infinity, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['gustRate:-Infinity', { count: 60, gust: 400, gustRate: -Infinity, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['gustRate:nonnumeric', { count: 60, gust: 400, gustRate: '6', turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['gustRate:null', { count: 60, gust: 400, gustRate: null, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['gustRate:object', { count: 60, gust: 400, gustRate: {}, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['gustRate:0', { count: 60, gust: 400, gustRate: 0, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['gustRate:neg', { count: 60, gust: 400, gustRate: -6, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['gustRate:tiny', { count: 60, gust: 400, gustRate: 1e-9, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['gustRate:huge', { count: 60, gust: 400, gustRate: 1e6, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
