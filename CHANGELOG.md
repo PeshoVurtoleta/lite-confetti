@@ -3,6 +3,74 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.22.0] - 2026-08-15
+
+Feature release: `wallFriction` -- **tangential drag on the box's three non-floor edges**, the exact
+structural twin of v1.21.0 `friction` (which covers the floor) and the tangential analog to `bounce`'s ONE
+shared restitution. Since v1.7.0 the engine has had a full axis-aligned bounding box -- `floor` + the
+`wallLeft`/`wallRight`/`ceiling` edges -- all sharing one `bounce` that reflects the **normal** velocity at
+every edge. But only the FLOOR had a tangential-drag term (`friction`): a piece pinned against a wall by
+wind, or launched up under a ceiling with lateral speed, slid along that edge at constant tangential
+velocity, bled only by the global, isotropic `drag`. An opt-in `wallFriction` scalar in `[0,1]` closes that
+gap -- on **each contact with a non-floor edge** it damps the **tangential** velocity by `1 - wallFriction`:
+`c.burst({ wallLeft: 300, wallRight: 500, ceiling: 80, floor: 700, bounce: 0.6, wind: 600, wallFriction: 0.85 })`.
+
+The tangent **inverts per edge**: where `bounce` reflects the normal, `wallFriction` damps the OTHER
+component -- at the **ceiling** it damps horizontal `vx` (after the `vy` reflection), at each **wall** it
+damps vertical `vy` (after the `vx` reflection). This is the tangential analog to `bounce`'s single shared
+restitution: ONE coefficient for the box's three non-floor edges, the **ceiling included by design** (bounce
+never fragmented the box edge-by-edge, so its tangential twin does not either). The **floor keeps its own
+separate `friction`** knob, byte-for-byte untouched (`FRICTION_HASH 1451535522` preserved).
+
+It lives entirely INSIDE the already-guarded ceiling + wall blocks, guarded on `if (pool.wfric[i] !== 0)`,
+so a box-less or frictionless burst pays zero new bytes per frame and **every committed fingerprint is
+byte-identical when off**. The update is a **contraction** (a factor in `[0,1]`): `|v|` can never grow, so
+positions stay finite for any input with **no accel cap**. It needs a box -- with none the edges sit at their
+infinity sentinels and no edge branch fires, so `wallFriction` never fires (mirrors `friction`'s "needs a
+floor"). Because it is a **physics** knob it changes `vx`/`vy -> x`/`y`, so it **moves the position stream**
+and earns its own committed hash (`WALLFRICTION_HASH 87358650`); it still costs **no new harness probe** (it
+rides the position hash plus the hash-neutral `maxY`/`maxX`/`minX` accessors) and **no fround sentinel** (the
+default `0` is exactly representable in a `Float32Array`, so the `!== 0` guard is safe). Coerced with
+`clamp01(wallFriction, 0)`: a NEGATIVE clamps to `0` (NEVER an anti-friction speed-up), non-finite/undefined
+=> `0` (off), `> 1` => `1`. One new Float32 pool column (+4 B/particle, always-on total 158 -> 162). The
+spawn write is unconditional for pool-reuse correctness but NOT load-bearing (the zero-init `0` already means
+"off"). Honored by `burst()` AND `spray()`; inert under reduced motion; zero rng, zero allocation. Unit
+suite 237 -> 248; torture adds a wall-friction alloc lane, threads `wallFriction` through the differential
+fuzz + degenerate poison, and adds a `maxY`-snapshot recycle-retention proof.
+
+### Added
+- **`wallFriction: number` on `burst()` and `spray()`** -- tangential drag `[0,1]` on the box's three
+  non-floor edges. `0` (default) = frictionless, `1` = full grip. At the ceiling it damps horizontal `vx`;
+  at each wall it damps vertical `vy`. Needs a box (`ceiling`/`wallLeft`/`wallRight`). A physics property of
+  any edge contact, so **both** `burst()` and `spray()` honor it. The floor keeps its own `friction`.
+
+### Semantics
+- **One shared linear coefficient for the three non-floor edges, house style.** On each non-floor edge
+  contact, the tangential velocity `*= 1 - wallFriction`, `clamp01`-ed into `[0,1]` -- the tangential analog
+  of `bounce`'s single shared restitution, the ceiling included by design. No static/kinetic split, no
+  stiction threshold, no per-edge coefficients.
+- **Damps the tangent, the OTHER component from `bounce`'s normal.** At the ceiling `bounce` reflects `vy`
+  and `wallFriction` damps `vx`; at each wall `bounce` reflects `vx` and `wallFriction` damps `vy`. Disjoint
+  components on the same contact, so they multiply without interfering (never killing the reflection).
+- **A NEGATIVE clamps to 0, never amplifies.** `wallFriction:-1` is frictionless (off), NOT an anti-friction
+  multiplier `1 - f > 1` that would amplify the tangential velocity every contact and diverge.
+- **Needs a box, orthogonal to floor `friction`.** With no box every edge branch is unreachable, so
+  `wallFriction` never fires. Two orthogonal knobs: `friction` = floor tangent, `wallFriction` = the box's
+  other three edges' tangent.
+
+### Fingerprint / performance
+- **Off is byte-identical.** `wallFriction:0` (the default) reproduces every prior committed fingerprint
+  bit-for-bit: `COMMITTED_HASH 1569828004`, `BOX_HASH 804161759`, `FLOOR_HASH 2679696825`,
+  `WIND_HASH 2385225781`, `FRICTION_HASH 1451535522`, `SETTLE_HASH 4157000621`, and all others. No fround
+  sentinel is needed. At `bounce:0` the damp is inert even when armed (no rebound keeps tangential speed
+  alive) -- a valid property, so a plain box burst reproduces `BOX_HASH` for any `wallFriction`.
+- **On earns its own committed hash on the MAIN position stream** (`WALLFRICTION_HASH 87358650`), probed on a
+  bouncing box (`{ ...box, bounce: 0.6, wallFriction: 0.5 }`) where pieces ricochet and re-strike the edges
+  with tangential speed -- distinct from that rig off and from `wallFriction:0.9`, deterministic across
+  processes.
+- **Zero-GC.** One guarded Float32 read + compare + multiply per edge contact; no rng, no allocation. The
+  torture wall-friction lane holds ~0 B/frame over an immortal wall-skidding pool, `maxMajor:0` over the soak.
+
 ## [1.21.0] - 2026-08-15
 
 Feature release: `friction` -- **tangential floor drag**, the FIRST physics feature since `settle`

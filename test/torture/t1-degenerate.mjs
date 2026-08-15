@@ -230,6 +230,21 @@ export function run() {
         ['friction:1', { count: 60, friction: 1, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['friction:tiny', { count: 60, friction: 1e-9, wind: 500, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['friction+box', { count: 60, friction: 0.7, wind: 800, floor: 300, bounce: 0.5, wallLeft: 200, wallRight: 600, ceiling: 100, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
+        // wallFriction poison (v1.22.0): garbage coefficients coerce via clamp01(wallFriction, 0) (non-finite/
+        // non-numeric/null/{} -> 0 off, NEGATIVE -> 0 off never anti-friction, > 1 -> 1). The damp is a
+        // contraction `v *= 1 - wfric` with wfric in [0,1] behind a `!= 0` guard, so |v| never grows and a
+        // bad wallFriction can never yield a non-finite draw. All rigs run in a tight bouncing box (a box is
+        // required or no non-floor edge branch fires) under strong wind so pieces skid the walls/ceiling.
+        ['wallFriction:NaN', { count: 60, wallFriction: NaN, wind: 800, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 500, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['wallFriction:Infinity', { count: 60, wallFriction: Infinity, wind: 800, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 500, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['wallFriction:-Infinity', { count: 60, wallFriction: -Infinity, wind: 800, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 500, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['wallFriction:nonnumeric', { count: 60, wallFriction: 'x', wind: 800, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 500, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['wallFriction:null', { count: 60, wallFriction: null, wind: 800, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 500, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['wallFriction:object', { count: 60, wallFriction: {}, wind: 800, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 500, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['wallFriction:0', { count: 60, wallFriction: 0, wind: 800, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 500, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['wallFriction:neg', { count: 60, wallFriction: -5, wind: 800, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 500, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['wallFriction:1', { count: 60, wallFriction: 1, wind: 800, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 500, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['wallFriction:tiny', { count: 60, wallFriction: 1e-9, wind: 800, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 500, bounce: 0.5, gravity: 3000, lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],

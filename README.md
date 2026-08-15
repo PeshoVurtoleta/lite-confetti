@@ -91,6 +91,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `bounce` | number | 0 | Restitution `0–1` on **any** boundary contact (floor and walls alike): `0` rests (pile-up), `1` is perfectly elastic. Shared by the whole [bounding box](#bounding-box). |
 | `settle` | number | 0 | Rest-speed threshold in px/s. A piece whose post-bounce speed drops below it **freezes** on the `floor` and piles up (keeps aging + fades). Opt-in; `0` = off. Needs a `floor`. See [Settle & pile](#settle--pile). |
 | `friction` | number | 0 | Tangential **floor** drag `0–1`. On each floor-contact frame, the horizontal velocity is bled by `1 - friction` (the complement to `bounce`, which reflects the vertical component): `0` = frictionless (default), `1` = full grip (horizontal stop on contact), `0.2` = a long skid. Opt-in; needs a `floor`. A physics knob (it moves the position fingerprint). See [Friction](#friction). |
+| `wallFriction` | number | 0 | Tangential drag `0–1` on the box's three **non-floor** edges — the tangential twin of `friction` (which covers the floor) and the analog to `bounce`'s one shared restitution. On a non-floor-edge contact it bleeds the *tangential* velocity (the ceiling damps horizontal `vx`, each wall damps vertical `vy` — always the component `bounce` does **not** reflect there, so it never cancels the rebound). Opt-in; needs a box. A physics knob (it moves the position fingerprint). See [Friction](#friction). |
 | `wallLeft` | number | -Infinity | Left wall X in CSS px — the X-min edge of the [bounding box](#bounding-box). Particles reaching it clamp and reflect `vx`. Opt-in; `-Infinity` = no wall. |
 | `wallRight` | number | Infinity | Right wall X in CSS px — the X-max edge. Opt-in; `Infinity` = no wall. |
 | `ceiling` | number | -Infinity | Ceiling Y in CSS px — the Y-min edge, the mirror of `floor`. Particles rising past it clamp and reflect `vy`. Opt-in; `-Infinity` = no ceiling. |
@@ -301,6 +302,11 @@ c.burst({ floor: 520, wind: 700, friction: 0.85 });   // fire sideways, land, sk
 - **It needs a `floor`.** Friction only ever acts as a piece contacts the floor, so with no floor set nothing happens (fail-closed) — the same rule as `settle`.
 - **It's a *physics* knob, not a render overlay.** Unlike `align`/`scaleTo`/`fadeIn`/`fadeOut`, friction changes `vx` → position, so a friction burst has its **own** committed fingerprint; at `friction: 0` every prior fingerprint reproduces byte-for-byte (the guard is a plain `!= 0`, and `0` is exactly representable, so nothing drifts when off).
 - **Finite by construction.** The factor `1 - friction` is always in `[0, 1]` (a negative `friction` clamps to `0`, never an anti-friction speed-up), so it's a contraction — horizontal speed can only shrink, never grow, and no acceleration cap is needed. Zero random draws; no effect under reduced motion.
+- **`wallFriction` (v1.22.0)** extends the same idea to the box's other three edges. On a contact with a wall or the ceiling it bleeds the *tangential* component by `1 - wallFriction` — the ceiling damps horizontal `vx`, each wall damps vertical `vy`, always the component `bounce` does *not* reflect there, so it never cancels the rebound. It is **one shared coefficient** for the box's non-floor edges (the tangential analog to `bounce`'s single restitution; the ceiling rides along because `bounce` never split the box edge-by-edge). Like `friction` it is a contraction (finite, no acceleration cap), needs a box or no edge fires, and moves the position fingerprint (its own committed hash), while the floor keeps its separate `friction`. One subtlety: on a **resting** box (`bounce: 0`) `wallFriction` is *inert* — once the normal velocity is killed a piece pins to the edge and the strict guard never re-fires, so there's no tangential speed left to bleed and the committed box fingerprint is byte-identical; the grip bites only once pieces ricochet (`bounce > 0`) or are re-driven into an edge by sustained wind.
+
+```js
+c.burst({ ceiling: 40, wallLeft: 60, wallRight: 740, floor: 560, bounce: 0.6, wallFriction: 0.6, wind: 300 });
+```
 
 ### Color over life
 
@@ -792,14 +798,15 @@ The pool is `maxParticles` wide. Per particle, the **always-on** columns cost a 
 | `swirl` | Float32 | 4 | 144 |
 | `settle` | Float32 | 4 | 148 |
 | `friction` | Float32 | 4 | 152 |
-| `delay` | Float32 | 4 | 156 |
-| `landed` | Uint8 | 1 | 157 |
-| `shape` | Uint8 | 1 | 158 |
-| **always-on total** | **39×F32 + 2×U8** | **158** | **158** |
+| `wfric` | Float32 | 4 | 156 |
+| `delay` | Float32 | 4 | 160 |
+| `landed` | Uint8 | 1 | 161 |
+| `shape` | Uint8 | 1 | 162 |
+| **always-on total** | **40×F32 + 2×U8** | **162** | **162** |
 
-The render-orientation / render-scale / render-opacity family added over v1.15.0–v1.20.0 is eight of those columns — `align` + `spin0` + `spinRate` + `scaleTo` + `tilt0` + `flutterRate` + `fadeIn` + `fadeOut` = 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 = **32 B/particle** — each a birth pivot or a render-time multiplier that never enters `ctx.translate`, so they cost bytes but move no fingerprint. `fadeIn` (birth) and `fadeOut` (death) now bracket the full opacity envelope on one shared `alpha`. `friction` (v1.21.0) is a **physics** column — the tangential complement to `bounce`, damping `vx` on each floor contact — so unlike those eight it *does* move the position fingerprint.
+The render-orientation / render-scale / render-opacity family added over v1.15.0–v1.20.0 is eight of those columns — `align` + `spin0` + `spinRate` + `scaleTo` + `tilt0` + `flutterRate` + `fadeIn` + `fadeOut` = 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 = **32 B/particle** — each a birth pivot or a render-time multiplier that never enters `ctx.translate`, so they cost bytes but move no fingerprint. `fadeIn` (birth) and `fadeOut` (death) now bracket the full opacity envelope on one shared `alpha`. `friction` (v1.21.0) is a **physics** column — the tangential complement to `bounce`, damping `vx` on each floor contact — so unlike those eight it *does* move the position fingerprint. `wfric` (`wallFriction`, v1.22.0) is a second physics column — the same tangential drag on the box's three non-floor edges (ceiling damps `vx`, walls damp `vy`) — so it, too, moves the fingerprint.
 
-Two more classes sit **outside** the always-on 158 B:
+Two more classes sit **outside** the always-on 162 B:
 
 | Buffer | Type | B/particle | When |
 |---|---|---:|---|
@@ -816,7 +823,7 @@ The trail ring buffers are allocated **only** when the instance is built with a 
 The gated quality numbers the torture harness commits, so a regression fails CI as loudly as a leak:
 
 - **Alloc gate.** `update()` over a **full `maxParticles` pool** — including a custom vector shape, an image sprite, the living-air forces, and a trailed pool — retains **~0 B/frame**, measured against a retained-bytes floor of **8.0 B/frame** (`RETAIN_FLOOR_BPF`). A per-frame-allocating control provably exceeds it.
-- **Determinism.** Every feature-off path preserves the committed default determinism fingerprint **`1569828004`** byte-for-byte (each opt-in feature — wind, floor, box, living air, trails, vortex, settle, life colors, emit, stagger, align, spinRate, scaleTo, flutterRate, fadeIn, fadeOut, friction — carries its own committed fingerprint when on, and leaves the default untouched when off).
+- **Determinism.** Every feature-off path preserves the committed default determinism fingerprint **`1569828004`** byte-for-byte (each opt-in feature — wind, floor, box, living air, trails, vortex, settle, life colors, emit, stagger, align, spinRate, scaleTo, flutterRate, fadeIn, fadeOut, friction, wallFriction — carries its own committed fingerprint when on, and leaves the default untouched when off).
 - **GC budget.** The full-pool loop runs under `@zakkster/lite-gc-profiler` with `maxMajor: 0` and 0 retained bytes under `@zakkster/lite-leak`, all under `--expose-gc`.
 
 </details>
@@ -825,10 +832,10 @@ The gated quality numbers the torture harness commits, so a regression fails CI 
 
 ## Testing
 
-**237 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
+**248 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
 
 ```bash
-npm test          # 237 node:test cases (contract + boundary + fingerprint)
+npm test          # 248 node:test cases (contract + boundary + fingerprint)
 npm run torture   # @zakkster/lite-leak + lite-gc-profiler under --expose-gc
 npm run verify    # test + torture, the publish gate
 ```

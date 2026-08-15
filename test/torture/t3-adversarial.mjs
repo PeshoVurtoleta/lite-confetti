@@ -349,6 +349,63 @@ export function run() {
         check(err === null, () => `T3 A12: threw ${err && err.message}`);
     }
 
+    // A13 -- pool-recycle retention for wallFriction (v1.22.0), the A12 pattern applied to a WALL slide.
+    // wallFriction is ALWAYS written at spawn for pool-reuse correctness; like friction its Float32 zero-init
+    // 0 already means "off", so the write is NOT load-bearing, but this tier proves the reset holds. The
+    // witness is the hash-neutral maxY (the deepest a piece descended), NOT a cumulative-hash replay (per the
+    // retention-phrasing rule): the wall-slide rig pins each piece to the right wall (wind INTO it, bounce 0)
+    // so the wall vy-damp fires every frame -- a wallFriction:0.9 piece descends SHALLOWLY, a plain
+    // wallFriction:0 piece descends DEEPEST. A single-slot pool forces slot 0 reuse: fire 5 wallFriction:0.9
+    // wall-slide bursts (draining each), then a plain wallFriction:0 burst; because the plain burst descends
+    // deepest, instance A's cumulative maxY equals a FRESH instance B's plain-burst maxY. A leaked
+    // wallFriction:0.9 would have damped the recycled plain burst's descent -> a SHALLOWER (smaller) maxY.
+    {
+        const RSEED = 11;
+        const wallSkid = { count: 1, x: 300, y: 150, speed: 300, spread: 0.6, gravity: 900,
+            wallRight: 450, wind: 1500, bounce: 0, lifeMin: 1.0, lifeMax: 1.0 };
+        // maxY of a plain (wallFriction:0) wall-slide burst on instance `c`. maxY is a cumulative running max
+        // on the canvas, but the plain burst descends deepest, so after it drains the canvas maxY IS the plain
+        // burst's deepest reach. c.seed() aligns the rng with a fresh instance so ONLY a leaked wallFriction moves it.
+        const plainMaxY = (c, canvas) => {
+            c.seed(RSEED);
+            c.burst({ ...wallSkid, wallFriction: 0 });
+            for (let f = 0; f < 70; f++) pump(1, 16);
+            return canvas.maxY;
+        };
+        const err = capture(() => {
+            // A: recycle slot 0 through 5 armed wallFriction:0.9 wall-slides (draining each), then a plain burst.
+            const canvasA = makeCanvas({ record: true });
+            const cA = createConfetti(canvasA, { seed: RSEED, maxParticles: 1 });
+            for (let cycle = 0; cycle < 5; cycle++) {
+                cA.burst({ ...wallSkid, wallFriction: 0.9 });
+                let guard = 0;
+                while (cA.count > 0 && guard++ < 500) pump(1, 16);
+                check(cA.count === 0, () => `T3 A13: cycle ${cycle} single-slot pool did not drain the wallFriction:0.9 piece (count ${cA.count})`);
+            }
+            const aMaxY = plainMaxY(cA, canvasA);   // recycled slot, plain (wallFriction:0) burst descends deepest
+            cA.destroy();
+            // B: fresh instance, only the plain burst (measured as the sole live instance).
+            const canvasB = makeCanvas({ record: true });
+            const cB = createConfetti(canvasB, { seed: RSEED, maxParticles: 1 });
+            const bMaxY = plainMaxY(cB, canvasB);
+            cB.destroy();
+            check(aMaxY === bMaxY, () =>
+                `T3 A13: a recycled slot leaked a stale wallFriction -- plain-burst maxY ${aMaxY} != fresh ${bMaxY}`);
+            // Non-vacuous: an ARMED wallFriction:0.9 wall-slide reaches a SHALLOWER maxY than the plain one
+            // (the vy damp genuinely shortens the descent), so the equality above is a real proof.
+            const canvasC = makeCanvas({ record: true });
+            const cC = createConfetti(canvasC, { seed: RSEED, maxParticles: 1 });
+            cC.seed(RSEED);
+            cC.burst({ ...wallSkid, wallFriction: 0.9 });
+            for (let f = 0; f < 70; f++) pump(1, 16);
+            const armedMaxY = canvasC.maxY;
+            cC.destroy();
+            check(armedMaxY !== bMaxY, () =>
+                `T3 A13: wallFriction:0.9 did not change the wall-slide maxY vs wallFriction:0 (${armedMaxY} == ${bMaxY}) -- the witness is vacuous`);
+        });
+        check(err === null, () => `T3 A13: threw ${err && err.message}`);
+    }
+
     check(pointerListenerCount() === baseListeners,
         () => `T3: tier leaked ${pointerListenerCount() - baseListeners} pointer listener(s) overall`);
 }

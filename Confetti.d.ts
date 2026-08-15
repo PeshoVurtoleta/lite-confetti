@@ -67,6 +67,22 @@ export interface BurstOptions {
      */
     friction?: number;
     /**
+     * Tangential drag 0..1 on the box's THREE NON-floor edges (v1.22.0) -- the tangential
+     * twin of `friction` (which covers the floor) and the tangential analog to `bounce`'s
+     * ONE shared restitution. On each contact with a non-floor edge, the TANGENTIAL velocity
+     * is multiplied by `1 - wallFriction`: at the CEILING it damps HORIZONTAL (vx) after the
+     * vy reflection; at each WALL it damps VERTICAL (vy) after the vx reflection -- always the
+     * OTHER component from what `bounce` reflects there, so it never kills the bounce. `0` =
+     * frictionless (default, byte-identical to prior releases), `1` = full grip. The ceiling
+     * is included by design (bounce never fragmented the box edge-by-edge). Needs a box
+     * (`ceiling`/`wallLeft`/`wallRight`); with none the branches never fire. A contraction
+     * (|v| never grows), so positions stay finite with no accel cap. A NEGATIVE clamps to `0`
+     * (NEVER an anti-friction speed-up); non-finite/undefined => `0` (off), > 1 => 1. A
+     * physics knob: it MOVES the position stream (its own committed hash). The floor keeps its
+     * own separate `friction`. Opt-in, zero-rng; no effect under reduced motion.
+     */
+    wallFriction?: number;
+    /**
      * Left wall X coordinate in CSS px -- the X-min edge of the bounding box. A particle
      * reaching it is clamped and its horizontal velocity reflected (scaled by `bounce`).
      * Default `-Infinity` (no wall). Opt-in and fingerprint-safe (the default never fires

@@ -180,6 +180,18 @@ const FADEOUT_HASH = 587626480; // burst({ fadeOut: 0.6 }) alphaHash on the shor
 // stable + its own deterministic-replay gate. At friction:0 that same rig reproduces FLOOR_HASH exactly (0 is
 // exactly representable in Float32, so the `!== 0` guard never fires -- no fround sentinel, byte-identical off).
 const FRICTION_HASH = 1451535522; // run({ floor: FLOOR_Y, friction: 0.5 }) hash on the floor rig
+// wallFriction (v1.22.0) is the tangential twin of friction on the box's THREE non-floor edges. Like friction
+// it is a PHYSICS knob: it changes vx (ceiling) / vy (walls) -> position, so an armed box burst earns its own
+// WALLFRICTION_HASH on the MAIN position hash (no new probe; the directional proofs ride the hash-neutral
+// maxY/maxX/minX accessors). RIG CHOICE (see decisions/0023): the plain BOX rig defaults `bounce:0`, which is
+// a DEGENERATE witness -- the floor zeroes vy before a piece reaches a wall (the wall vy-damp becomes a no-op)
+// and once vx->0 at a wall the strict `x > wallR` guard never re-fires, so nothing tangential survives to a
+// rounded draw position and wallFriction:0.5 reproduces BOX_HASH byte-for-byte (a VALID inertness property,
+// asserted below). The canonical hash rig therefore adds `bounce:0.6`: pieces RICOCHET and re-strike the
+// walls/ceiling with tangential speed each bounce, so the damp accumulates and moves the stream. It MUST
+// differ from that same rig with wallFriction OFF (bounce:0.6, wf:0) and from wallFriction:0.9, and is
+// cross-process stable + its own deterministic-replay gate.
+const WALLFRICTION_HASH = 87358650; // run({ ...BOX, bounce: 0.6, wallFriction: 0.5 }) hash on the bouncing box rig
 const HALF_PI = Math.PI / 2;
 
 /** Run `fn` with console.warn silenced; report how many warnings it emitted. */
@@ -3416,6 +3428,231 @@ describe('lite-confetti', () => {
                 }
             };
             assert.equal(staticHash({ friction: 1 }), staticHash({}));
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    //  wallFriction / tangential drag on the box edges (v1.22.0)
+    // -------------------------------------------------------------------------
+    describe('wallFriction / tangential drag on the box edges', () => {
+        // Canonical rig = the same seeded plain rig as friction (an un-boxed run reproduces COMMITTED_HASH; a
+        // boxed run reproduces BOX_HASH). wallFriction is a PHYSICS knob: it changes vx (ceiling) / vy (walls)
+        // -> position, so an armed box burst does NOT reproduce BOX_HASH -- it earns its own WALLFRICTION_HASH
+        // on the MAIN position hash. The record canvas also exposes maxY / minY / maxX / minX (hash-neutral),
+        // the drift + extent witnesses a bare hash cannot see. wallFriction bites only on a non-floor edge
+        // contact frame, so the non-vacuous DIRECTIONAL proofs use dedicated `wallSlide` / `ceilSlide` rigs.
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = { hash: canvas.hash, maxY: canvas.maxY, minY: canvas.minY, maxX: canvas.maxX, minX: canvas.minX };
+            c.destroy();
+            return out;
+        };
+        // A pool pinned to the RIGHT wall by a strong wind, sliding DOWN under gravity: bounce 0 stops vx at
+        // the wall every frame, wind re-breaches it, so a wall contact fires every frame and wallFriction damps
+        // vy (the tangent). No floor, so vertical descent is bounded only by drag + this wall grip: more grip
+        // => descends LESS. maxY is the deepest a piece reached -- the wall analog of the friction skid.
+        const wallSlide = (wf, frames = 120) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ x: 400, y: 150, count: 120, shape: 'rect', lifeMin: 15, lifeMax: 15, spread: 1.8,
+                speed: 300, gravity: 900, wind: 1500, wallRight: 450, bounce: 0, wallFriction: wf });
+            pump(1, 1000); pump(frames, 16);
+            const out = { hash: canvas.hash, maxY: canvas.maxY };
+            c.destroy();
+            return out;
+        };
+        // A pool pinned to the CEILING by a strong UPWARD (negative) gravity, sliding SIDEWAYS under wind:
+        // bounce 0 stops vy at the ceiling every frame, buoyancy re-breaches it, so a ceiling contact fires
+        // every frame and wallFriction damps vx (the tangent). No walls, so horizontal travel is bounded only
+        // by drag + this ceiling grip: more grip => a NARROWER slide. spreadX = maxX - minX.
+        const ceilSlide = (wf, frames = 120) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ x: 400, y: 300, count: 120, shape: 'rect', lifeMin: 15, lifeMax: 15, spread: 1.8,
+                speed: 300, gravity: -900, wind: 1500, ceiling: 100, bounce: 0, wallFriction: wf });
+            pump(1, 1000); pump(frames, 16);
+            const spreadX = canvas.maxX - canvas.minX;
+            c.destroy();
+            return spreadX;
+        };
+
+        it('is opt-in on the plain BOX rig (bounce:0): {} / 0 / NaN / Infinity / string / null keep BOX_HASH', () => {
+            // clamp01(wallFriction, 0): missing/non-finite/non-numeric -> 0 (off). 0 is exactly representable
+            // in Float32, so the `!== 0` guard never fires and the boxed stream is byte-identical to a
+            // frictionless one -- BOX_HASH reproduces bit-for-bit (no fround sentinel). NOTE: at bounce:0 the
+            // damp is ALSO a genuine no-op even when ARMED (the floor zeroes vy before a wall; vx->0 pins at a
+            // wall so the strict re-breach never fires) -- wallFriction:anything reproduces BOX_HASH too, a
+            // valid inertness property: without a rebound to keep tangential speed alive, there is nothing to bite.
+            for (const wf of [undefined, 0, NaN, Infinity, '0.5', null, 0.5, 1]) {
+                const opts = { ...BOX, bounce: 0 };
+                if (wf !== undefined) opts.wallFriction = wf;
+                assert.equal(run(opts).hash, BOX_HASH, `wallFriction ${String(wf)} should not move the plain (bounce:0) boxed stream`);
+            }
+        });
+
+        it('every prior committed fingerprint reproduces with wallFriction present-but-off (floor friction untouched)', () => {
+            assert.equal(run({ wallFriction: 0 }).hash, COMMITTED_HASH, 'default stream drifted with wallFriction:0');
+            assert.equal(run({ wind: 300, wallFriction: 0 }).hash, WIND_HASH, 'wind fingerprint drifted');
+            assert.equal(run({ floor: FLOOR_Y, bounce: 0, wallFriction: 0 }).hash, FLOOR_HASH, 'floor fingerprint drifted');
+            assert.equal(run({ ...BOX, bounce: 0, wallFriction: 0 }).hash, BOX_HASH, 'box fingerprint drifted');
+            // FRICTION rig (floor friction) with wallFriction off: the floor knob is byte-for-byte untouched.
+            assert.equal(run({ floor: FLOOR_Y, friction: 0.5, wallFriction: 0 }).hash, FRICTION_HASH, 'floor friction fingerprint drifted with wallFriction:0');
+            // SETTLE rig (its own bounce-then-rest dynamic) with wallFriction off.
+            const settleHash = (() => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 12345 });
+                c.burst({ x: 400, y: 150, count: 120, shape: 'rect', lifeMin: 15, lifeMax: 15, spread: 1.8,
+                    speed: 300, gravity: 900, floor: 360, bounce: 0.5, settle: 80, wallFriction: 0 });
+                pump(1, 1000); pump(150, 16);
+                const h = canvas.hash;
+                c.destroy();
+                return h;
+            })();
+            assert.equal(settleHash, SETTLE_HASH, 'settle fingerprint drifted with wallFriction:0');
+        });
+
+        it('needs a box: on the BOX-LESS rig any wallFriction reproduces COMMITTED_HASH (all edge branches unreachable)', () => {
+            // With no box the edges sit at their infinity sentinels, so no ceiling/wall branch is ever entered
+            // and wallFriction never fires -- even armed at 1.
+            for (const wf of [undefined, 0, 0.5, 1, NaN, '0.5']) {
+                const opts = {};
+                if (wf !== undefined) opts.wallFriction = wf;
+                assert.equal(run(opts).hash, COMMITTED_HASH, `wallFriction ${String(wf)} moved the box-less stream`);
+            }
+        });
+
+        it('a negative clamps to 0 (frictionless), never amplifies (decision 4)', () => {
+            // clamp01: a negative -> 0 (off), NOT an anti-friction multiplier `1 - f > 1` that would AMPLIFY
+            // the tangential velocity each contact and diverge. So -1 reproduces BOX_HASH exactly and the
+            // wall-slide depth equals the frictionless depth (no speed-up).
+            assert.equal(run({ ...BOX, bounce: 0.6, wallFriction: -1 }).hash, run({ ...BOX, bounce: 0.6 }).hash, 'a negative wallFriction moved the bouncing-box stream');
+            const free = wallSlide(0);
+            const neg = wallSlide(-1);
+            assert.equal(neg.maxY, free.maxY, 'a negative wallFriction changed the slide depth (anti-friction leaked)');
+            assert.equal(neg.hash, free.hash, 'a negative wallFriction is not byte-identical to frictionless');
+        });
+
+        it('matches the committed WALLFRICTION fingerprint -- distinct from the same rig off, deterministic, != 0.9', () => {
+            // Canonical rig adds bounce:0.6 so pieces ricochet and re-strike the walls/ceiling with tangential
+            // speed (see the WALLFRICTION_HASH note): the damp accumulates and moves the stream.
+            const on = run({ ...BOX, bounce: 0.6, wallFriction: 0.5 });
+            const off = run({ ...BOX, bounce: 0.6 });
+            if (WALLFRICTION_HASH === null) console.log('[wallFriction] 0.5 hash =', on.hash);
+            else assert.equal(on.hash, WALLFRICTION_HASH, 'wallFriction stream changed vs the committed baseline');
+            assert.notEqual(on.hash, off.hash, 'wallFriction did not change the trajectory vs the same rig off (else vacuous)');
+            // Deterministic: same seed + fixed dt -> same hash on replay (wallFriction draws no rng).
+            assert.equal(run({ ...BOX, bounce: 0.6, wallFriction: 0.5 }).hash, on.hash, 'wallFriction is not deterministic on replay');
+            assert.notEqual(run({ ...BOX, bounce: 0.6, wallFriction: 0.9 }).hash, on.hash, 'wallFriction:0.9 should differ from 0.5');
+        });
+
+        it('is NON-VACUOUS (wall slide, vy damp): maxY strictly DECREASES over {0,0.25,0.5,0.75,1}', () => {
+            // A piece pinned to the wall slides down at reduced vertical speed as wallFriction rises -- each
+            // step bleeds more vy per wall-contact frame, so the deepest reach (maxY) shrinks STRICTLY. This is
+            // the 0022-named wall-slide case; a bare hash cannot show it.
+            let prev = Infinity;
+            for (const wf of [0, 0.25, 0.5, 0.75, 1]) {
+                const y = wallSlide(wf).maxY;
+                assert.ok(y < prev, `wallFriction ${wf} did not shorten the descent vs the previous step (${y} >= ${prev})`);
+                prev = y;
+            }
+        });
+
+        it('is NON-VACUOUS (ceiling slide, vx damp): spreadX strictly DECREASES over {0,0.25,0.5,0.75,1}', () => {
+            // A piece pinned to the ceiling slides sideways at reduced horizontal speed as wallFriction rises --
+            // each step bleeds more vx per ceiling-contact frame, so the horizontal extent shrinks STRICTLY.
+            // Proves the ceiling branch fires and damps the correct (horizontal) component.
+            let prev = Infinity;
+            for (const wf of [0, 0.25, 0.5, 0.75, 1]) {
+                const s = ceilSlide(wf);
+                assert.ok(s < prev, `wallFriction ${wf} did not narrow the ceiling slide vs the previous step (${s} >= ${prev})`);
+                prev = s;
+            }
+        });
+
+        it('is orthogonal to floor friction: each knob acts on its own edge set, neither leaks into the other', () => {
+            // Two independent knobs: `friction` = the FLOOR tangent, `wallFriction` = the box's other three
+            // edges' tangent. bounce:0.6 so each knob bites (a bounce:0 box pins pieces at corners and washes
+            // both out). Each moves the stream ON ITS OWN, and they are distinct from each other. (Their
+            // COMBINATION is not asserted to be a third distinct hash: on this rig floor friction slows pieces
+            // enough that they no longer re-strike the walls tangentially, so wallFriction rides along inertly
+            // -- a physics trajectory coupling, NOT interference. The clean orthogonality proof is the two
+            // domain checks below: wallFriction is inert on a floor-only rig, friction is inert on a box.)
+            const plain = run({ ...BOX, bounce: 0.6 });
+            const floorOnly = run({ ...BOX, bounce: 0.6, friction: 0.5 });
+            const wallsOnly = run({ ...BOX, bounce: 0.6, wallFriction: 0.5 });
+            assert.notEqual(floorOnly.hash, plain.hash, 'floor friction did not move the stream (else vacuous)');
+            assert.notEqual(wallsOnly.hash, plain.hash, 'wall friction did not move the stream (else vacuous)');
+            assert.notEqual(floorOnly.hash, wallsOnly.hash, 'floor friction and wall friction produced the same stream');
+            // Domain isolation: on a FLOOR-ONLY rig (no box) wallFriction is inert -- the floor `friction`
+            // behaviour is byte-identical to FRICTION_HASH (wallFriction never leaks into the floor's tangent).
+            assert.equal(run({ floor: FLOOR_Y, friction: 0.5, wallFriction: 0.9 }).hash, FRICTION_HASH, 'wallFriction leaked into a floor-only rig');
+            // ...and on a BOX-only rig (no floor knob) wallFriction moves it while friction stays off.
+            assert.notEqual(run({ ...BOX, bounce: 0.6, wallFriction: 0.5 }).hash, plain.hash, 'wallFriction inert on a bouncing box');
+        });
+
+        it('keeps positions finite under wallFriction extremes + gravity + wind + turbulence in a tight bouncing box + trails', () => {
+            for (const wf of [0, 0.5, 1, 1e6]) {
+                const canvas = makeCanvas({ record: true, assertFinite: true });
+                const c = createConfetti(canvas, { seed: 3, trail: 12 });
+                assert.doesNotThrow(() => {
+                    c.burst({
+                        x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 4, lifeMax: 4,
+                        wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350, bounce: 0.8,
+                        gravity: 4000, wind: 1200, turbulence: 900, wallFriction: wf, trail: 12,
+                    });
+                    pump(80, 16);
+                }, `wallFriction:${wf} produced a non-finite draw`);
+                c.destroy();
+            }
+        });
+
+        it('is honored by spray() too: a boxed spray differs with wallFriction; a box-less spray is unchanged', () => {
+            const sprayRun = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 600, rate: 20, x: 400, y: 300, spread: 1.8, lifeMin: 8, lifeMax: 8,
+                    speed: 300, gravity: 900, ...BOX, bounce: 0.6, wind: 600, ...opts });
+                pump(1, 1000); pump(150, 16);
+                const h = canvas.hash;
+                c.destroy();
+                return h;
+            };
+            const free = sprayRun({});
+            assert.equal(sprayRun({}), free, 'boxed spray not deterministic');
+            assert.notEqual(sprayRun({ wallFriction: 0.7 }), free, 'spray ignored wallFriction on the box');
+            assert.equal(sprayRun({ wallFriction: 0.7 }), sprayRun({ wallFriction: 0.7 }), 'wallFriction spray not deterministic');
+            // Box-less spray: wallFriction is inert (no edge branch fires).
+            const sprayBoxless = (wallFriction) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 400, rate: 15, x: 400, y: 300, spread: 1.2, shape: 'rect',
+                    speed: 300, gravity: 500, wallFriction });
+                pump(1, 1000); pump(40, 16);
+                const h = canvas.hash;
+                c.destroy();
+                return h;
+            };
+            assert.equal(sprayBoxless(0.8), sprayBoxless(0), 'wallFriction moved a box-less spray (branches should be unreachable)');
+        });
+
+        it('has no effect under reduced motion (static path never integrates, so nothing contacts an edge)', () => {
+            const staticHash = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 30, ...BOX, ...opts });
+                    const h = canvas.hash;
+                    c.destroy();
+                    return h;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            assert.equal(staticHash({ wallFriction: 0.7 }), staticHash({}));
         });
     });
 

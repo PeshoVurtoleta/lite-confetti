@@ -327,6 +327,29 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- the tangential-drag damp is allocating');
     }
 
+    // (16) A wall-friction (skidding) live pool (v1.22.0): an immortal pool under strong wind driving pieces
+    // into the RIGHT wall of a tight box with wallFriction:0.3 armed. Wind re-breaches the wall every frame
+    // (bounce 0 zeroes vx at contact, wind re-drives it), so the guarded wall damp `if (wfric != 0) vy *= 1 -
+    // wfric` fires for the whole pool every frame; the strong downward gravity keeps pieces pressed against
+    // the ceiling-to-floor wall band, and where a piece is launched up it also strikes the ceiling (the vx
+    // damp). It is a Float32 read + compare + a single multiply, allocating nothing; the immortal 1e6 life
+    // holds the pool at MAXP so any per-frame allocation on the wall-friction path shows as retained bytes.
+    // The non-floor-edge analog of lane (15).
+    const cw = createConfetti(makeCanvas(), { seed: 2201, maxParticles: MAXP });
+    cw.burst({
+        count: MAXP, lifeMin: 1e6, lifeMax: 1e6, sizeMin: 4, sizeMax: 12,
+        x: 300, y: 200, speed: 200, gravity: 3000, wind: 2000,
+        wallLeft: 200, wallRight: 400, ceiling: 100, floor: 500, bounce: 0, wallFriction: 0.3,
+    });
+    pump(1, 1000); pump(30, 16); // drive the pool into the right wall and start skidding down it
+    check(cw.count === MAXP, () => `T6: wall-friction pool has ${cw.count} alive, expected ${MAXP}`);
+    const bpfWfric = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    cw.destroy();
+    if (bpfWfric > RETAIN_FLOOR_BPF) {
+        die('T6: wall-friction update() retains ' + bpfWfric.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the tangential wall/ceiling damp is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -348,6 +371,7 @@ export async function run() {
         + bpfFlut.toFixed(2) + ' B/frame from a flutter-rated (flutterRate + turbulence) live pool, '
         + bpfFade.toFixed(2) + ' B/frame from a fade-in (fadeIn + flutter) live pool, '
         + bpfFadeOut.toFixed(2) + ' B/frame from a death-fade (fadeOut + flutter) live pool, '
-        + bpfFric.toFixed(2) + ' B/frame from a floor-friction (skidding) live pool); '
+        + bpfFric.toFixed(2) + ' B/frame from a floor-friction (skidding) live pool, '
+        + bpfWfric.toFixed(2) + ' B/frame from a wall-friction (wall-skid) live pool); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

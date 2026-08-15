@@ -64,6 +64,7 @@ function genOp(prng, allowReseed) {
                 bounce: (prng() % 101) / 100, // restitution 0..1 (settle .. elastic)
                 settle: (prng() % 2 === 0) ? 0 : (prng() % 150), // rest threshold px/s, half off; pairs with the floor above
                 friction: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100, // tangential floor drag 0..1, half off; needs the floor above, zero-rng
+                wallFriction: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100, // tangential drag on non-floor box edges 0..1, half off; needs the box below, zero-rng
                 wallLeft: (prng() % 2 === 0) ? -Infinity : 100 + (prng() % 200),  // box edges, half off
                 wallRight: (prng() % 2 === 0) ? Infinity : 400 + (prng() % 300),
                 ceiling: (prng() % 2 === 0) ? -Infinity : 20 + (prng() % 150),
@@ -98,6 +99,7 @@ function genOp(prng, allowReseed) {
                 bounce: (prng() % 101) / 100,
                 settle: (prng() % 2 === 0) ? 0 : (prng() % 150), // rest threshold px/s, half off
                 friction: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100, // tangential floor drag 0..1, half off; needs the floor above, zero-rng
+                wallFriction: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100, // tangential drag on non-floor box edges 0..1, half off; needs the box below, zero-rng
                 wallLeft: (prng() % 2 === 0) ? -Infinity : 100 + (prng() % 200),
                 wallRight: (prng() % 2 === 0) ? Infinity : 400 + (prng() % 300),
                 ceiling: (prng() % 2 === 0) ? -Infinity : 20 + (prng() % 150),
