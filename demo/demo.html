@@ -763,7 +763,11 @@
     // trail: 24 sets the ring-buffer CAPACITY once (zero-GC -- can't grow lazily), so the
     // per-burst `trail` slider (0..24) can vary the ribbon length live with no instance rebuild.
     // The library caps capacity at 64.
-    const c = createConfetti($canvas, { maxParticles: 800, trail: 24 });
+    // maxParticles sized for the demo's longest continuous spray: a sustained spray keeps a
+    // steady-state population of ~ rate * 60 * avgLife alive, so a generous pool keeps the stream
+    // fully dense instead of dropping new pieces once it saturates (v1.26.0 drops gracefully rather
+    // than overwriting live pieces, but headroom is what makes a long spray look full).
+    const c = createConfetti($canvas, { maxParticles: 2000, trail: 24 });
     let currentSeed = null;
 
     // ── Custom shapes via registerShape() (v1.3.0). Per-instance: registered on THIS

@@ -146,9 +146,11 @@ Spray accepts all burst options plus:
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `seed` | number | `Date.now()` | RNG seed for deterministic output |
-| `maxParticles` | number | 500 | Pool size (ring buffer — overwrites oldest when full) |
+| `maxParticles` | number | 500 | Pool size (fixed ring buffer). When full a new spawn is **dropped** — existing pieces live out their life + fade — rather than overwriting a live one (v1.26.0). A full continuous spray wants `maxParticles ≥ rate × 60 × avgLife`; below that, excess spawns drop gracefully (never a pop). 500 fits typical bursts. |
 | `respectReducedMotion` | boolean | true | Honor `prefers-reduced-motion: reduce` |
 | `trail` | number | 0 | Motion-trail capacity: ring-buffer depth for the per-particle ribbon. `0` = off (no buffers). Sized once here (zero-GC); capped at 64. See [Motion trails](#motion-trails). |
+
+**Sizing the pool for sprays.** The pool is a fixed ring buffer of `maxParticles` slots. A one-shot `burst()` just needs `maxParticles ≥ count`. A **continuous** `spray()` keeps a *steady-state* population alive of roughly `rate × 60 × avgLife` (with `avgLife = (lifeMin + lifeMax) / 2`) — size the pool to that for a fully dense stream. Below it, the pool saturates and each new spawn is **dropped** (existing pieces finish their life + fade), so a long spray thins gracefully instead of cutting live pieces off mid-flight (fixed in v1.26.0). This is the zero-GC counterpart to object-per-particle engines: they never drop a piece but allocate without bound; lite-confetti stays at 0 B/frame and caps the live set, so you pick the ceiling. Example: `spray({ rate: 15, lifeMin: 1.2, lifeMax: 2.5 })` wants `≈ 15 × 60 × 1.85 ≈ 1665` slots for zero drops.
 
 ---
 
@@ -852,10 +854,10 @@ The gated quality numbers the torture harness commits, so a regression fails CI 
 
 ## Testing
 
-**281 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
+**285 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
 
 ```bash
-npm test          # 281 node:test cases (contract + boundary + fingerprint)
+npm test          # 285 node:test cases (contract + boundary + fingerprint)
 npm run torture   # @zakkster/lite-leak + lite-gc-profiler under --expose-gc
 npm run verify    # test + torture, the publish gate
 ```

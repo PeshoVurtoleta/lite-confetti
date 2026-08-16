@@ -166,18 +166,46 @@ export async function run() {
     // origin), so it needs a lane that spawns INSIDE the window. A long-duration spray with the ring
     // emitter armed spawns `rate` pieces through the emitter branch every measured frame -- the ring
     // rng draw + the radial-outward re-derivation (a few Math.cos/sin on stack locals, the shape-id an
-    // int). Immortal pieces saturate the pool to MAXP (steady state), so any per-frame SPAWN allocation
-    // shows up as retained bytes exactly like a leaking update() would.
+    // int). FINITE life (0.4s, v1.26.0 re-rig): with immortal life every post-fill spawn would take
+    // the drop-new-when-full guard and return early (vacuous -- no spawn work measured). A short life
+    // recycles slots continuously, so real spawns run through the emitter branch every measured frame
+    // (steady-state ~rate*60*0.4 = 576 > MAXP, so the pool sits near-full and each frame's deaths free
+    // slots the fresh spawns refill). Any per-frame SPAWN allocation shows up as retained bytes exactly
+    // like a leaking update() would. The pool hovers just under MAXP (head-of-line), so assert the
+    // occupied-but-bounded invariant, not an exact fill.
     const ce = createConfetti(makeCanvas(), { seed: 1313, maxParticles: MAXP });
     ce.spray({ duration: 1e9, rate: 24, x: 400, y: 300, speed: 300, gravity: 0,
-        lifeMin: 1e6, lifeMax: 1e6, emit: 'ring', emitSize: 120 });
-    pump(1, 1000); pump(40, 16); // saturate the pool through the emitter branch
-    check(ce.count === MAXP, () => `T6: emit-spray pool has ${ce.count} alive, expected ${MAXP}`);
+        lifeMin: 0.4, lifeMax: 0.4, emit: 'ring', emitSize: 120 });
+    pump(1, 1000); pump(40, 16); // reach the recycling steady state through the emitter branch
+    check(ce.count > 0 && ce.count <= MAXP,
+        () => `T6: emit-spray pool has ${ce.count} alive, expected 0 < count <= ${MAXP}`);
     const bpfEmit = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
     ce.destroy();
     if (bpfEmit > RETAIN_FLOOR_BPF) {
         die('T6: emit-spray retains ' + bpfEmit.toFixed(2) + ' B/frame over the '
             + RETAIN_FLOOR_BPF + ' floor -- the emitter spawn branch is allocating');
+    }
+
+    // (7b) The DROP path (v1.26.0): the one lane where the drop-new-when-full guard IS the hot path.
+    // Fill the pool with an IMMORTAL burst so every slot stays alive forever, then spray forever so
+    // EVERY subsequent spawn finds pool.life[head] > 0 and returns -1 without writing a single column.
+    // The guard must allocate nothing -- it is one Float32 read + compare + an early return. Immortal
+    // life pins the pool at exactly MAXP (nothing ever dies, so nothing is ever recycled), and the
+    // spray fires `rate` guarded drops every measured frame. Any per-frame allocation on the drop path
+    // shows up as retained bytes.
+    const cd = createConfetti(makeCanvas(), { seed: 2601, maxParticles: MAXP });
+    cd.burst({ count: MAXP, x: 400, y: 300, speed: 200, gravity: 0,
+        lifeMin: 1e6, lifeMax: 1e6, sizeMin: 4, sizeMax: 12 });
+    pump(1, 1000);
+    check(cd.count === MAXP, () => `T6: drop-path fill pool has ${cd.count} alive, expected ${MAXP}`);
+    cd.spray({ duration: 1e9, rate: 32, x: 400, y: 300, speed: 300, gravity: 0, lifeMin: 1e6, lifeMax: 1e6 });
+    pump(1, 16); // arm the spray; every spawn from here on takes the guard and drops
+    check(cd.count === MAXP, () => `T6: drop-path pool grew past ${MAXP} (a drop wrote a slot): ${cd.count}`);
+    const bpfDrop = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    cd.destroy();
+    if (bpfDrop > RETAIN_FLOOR_BPF) {
+        die('T6: drop-path spray retains ' + bpfDrop.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the pool-full drop guard is allocating');
     }
 
     // (8) A staggered burst mid-emission (v1.14.0): the birth gate + the per-frame `delay -= dtSec`
@@ -426,7 +454,8 @@ export async function run() {
         + bpfPoison.toFixed(2) + ' B/frame from sanitised garbage inputs, '
         + bpfMix.toFixed(2) + ' B/frame from a shapes[] mix under wind + full box + turbulence/gust + vortex + trails, '
         + bpfSettle.toFixed(2) + ' B/frame from a fully-settled (frozen) pile, '
-        + bpfEmit.toFixed(2) + ' B/frame from a continuous ring-emitter spray, '
+        + bpfEmit.toFixed(2) + ' B/frame from a continuous ring-emitter spray (recycling), '
+        + bpfDrop.toFixed(2) + ' B/frame from a pool-full drop-path spray, '
         + bpfStagger.toFixed(2) + ' B/frame from a staggered burst mid-emission, '
         + bpfAlign.toFixed(2) + ' B/frame from a velocity-aligned live pool, '
         + bpfSpin.toFixed(2) + ' B/frame from a tumble-scaled (spinRate + turbulence) live pool, '

@@ -309,6 +309,13 @@ export function run() {
         // drained, sumX is frozen, so (after - before) is exactly the plain burst's draws. c.seed() aligns
         // the rng with a fresh instance so ONLY a leaked friction could move the result.
         const plainDelta = (c, canvas) => {
+            // Consume the ticker's capped first tick: acquireTicker's start() resets _lastTime to the
+            // real wall clock, so the FIRST pumped frame after a fresh instance sees dt > maxDt and caps
+            // to 16.66ms (vs the 16ms of every later frame). Instance A enters here with a ticker already
+            // primed by its drain pumps, while instance B is freshly created -- so without this prime the
+            // plain burst's first frame would be 16ms on A but 16.66ms on B, an ~8px cumulative-sumX skew
+            // unrelated to friction. The pool is empty here, so the prime draws nothing and moves no sumX.
+            pump(1, 16);
             c.seed(RSEED);
             const before = canvas.sumX;
             c.burst({ ...floorSkid, friction: 0 });
@@ -321,8 +328,12 @@ export function run() {
             const cA = createConfetti(canvasA, { seed: RSEED, maxParticles: 1 });
             for (let cycle = 0; cycle < 5; cycle++) {
                 cA.burst({ ...floorSkid, friction: 0.9 });
-                let guard = 0;
-                while (cA.count > 0 && guard++ < 500) pump(1, 16);
+                // Pump UNCONDITIONALLY past the 1.0s life to genuinely empty slot 0 (30x50ms = 1500ms),
+                // matching A8-A11/A14-A16. A bare `while (count > 0)` never enters: the count getter
+                // reflects aliveCount, refreshed only inside update(), so it is stale (0) right after a
+                // burst. Under v1.26.0 drop-new-when-full a still-live slot BLOCKS the next re-spawn, so
+                // the drain MUST actually reach life 0 for the recycle-retention witness to be real.
+                for (let f = 0; f < 30; f++) pump(1, 50);
                 check(cA.count === 0, () => `T3 A12: cycle ${cycle} single-slot pool did not drain the friction:0.9 piece (count ${cA.count})`);
             }
             const aDelta = plainDelta(cA, canvasA);   // recycled slot, plain (friction:0) burst
@@ -367,6 +378,11 @@ export function run() {
         // on the canvas, but the plain burst descends deepest, so after it drains the canvas maxY IS the plain
         // burst's deepest reach. c.seed() aligns the rng with a fresh instance so ONLY a leaked wallFriction moves it.
         const plainMaxY = (c, canvas) => {
+            // Consume the ticker's capped first tick (see A12's plainDelta): instance A is primed by its
+            // drain pumps while instance B is freshly created, so without this prime the plain burst's
+            // first frame would be 16ms on A but 16.66ms on B -- a maxY skew unrelated to wallFriction.
+            // The pool is empty here, so the prime draws nothing and moves no maxY.
+            pump(1, 16);
             c.seed(RSEED);
             c.burst({ ...wallSkid, wallFriction: 0 });
             for (let f = 0; f < 70; f++) pump(1, 16);
@@ -378,8 +394,12 @@ export function run() {
             const cA = createConfetti(canvasA, { seed: RSEED, maxParticles: 1 });
             for (let cycle = 0; cycle < 5; cycle++) {
                 cA.burst({ ...wallSkid, wallFriction: 0.9 });
-                let guard = 0;
-                while (cA.count > 0 && guard++ < 500) pump(1, 16);
+                // Pump UNCONDITIONALLY past the 1.0s life to genuinely empty slot 0 (30x50ms = 1500ms),
+                // matching A8-A11/A14-A16. A bare `while (count > 0)` never enters: the count getter is
+                // stale (0) right after a burst (aliveCount refreshes only in update()). Under v1.26.0
+                // drop-new-when-full a still-live slot BLOCKS the next re-spawn, so the drain MUST reach
+                // life 0 for the recycle-retention witness to be real.
+                for (let f = 0; f < 30; f++) pump(1, 50);
                 check(cA.count === 0, () => `T3 A13: cycle ${cycle} single-slot pool did not drain the wallFriction:0.9 piece (count ${cA.count})`);
             }
             const aMaxY = plainMaxY(cA, canvasA);   // recycled slot, plain (wallFriction:0) burst descends deepest

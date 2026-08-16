@@ -461,6 +461,32 @@ the differential fuzz; T6 lane 5 arms a stable positive attract+swirl on the imm
 attract/swirl/center poison AND strong finite-life repellers under the finite-position detector.
 See decision 0011. No runtime dep change. Unit suite 122 -> 132.
 
+## v1.26.0 -- pool overwrite fix (drop-new-when-full)
+
+The FIRST bug-fix release (all prior were features). The fixed ring-buffer pool no longer OVERWRITES
+a still-alive piece when it fills. `spawn()` advances a `head` cursor `% maxParticles` and used to
+write whatever slot it landed on -- even one holding an airborne piece. A sustained `spray()` has a
+steady-state alive population of `rate * 60 * avgLife`; past `maxParticles` every new piece stole the
+oldest airborne slot, which popped out mid-flight (a long spray showed only its last ~`maxParticles`
+pieces animating fully -- the "confetti cancels itself" effect).
+
+Now `spawn()` DROPS the new piece when the cursor slot is still alive (`if (pool.life[head] > 0)
+return -1;`): existing pieces live out their full life + fade, the stream thins gracefully instead of
+popping. One Float32 read + compare -- O(1), zero-allocation, no free-slot scan, no new pool column.
+Settled piles and not-yet-born staggered pieces keep `life > 0`, so they are protected from eviction.
+HASH-NEUTRAL: the guard fires only on the buggy overwrite path, which no committed rig exercises, so
+all 30 committed fingerprints reproduce bit-for-bit (zero re-pins).
+
+Sizing guidance: a full CONTINUOUS spray wants `maxParticles >= rate * 60 * avgLife`
+(`avgLife = (lifeMin + lifeMax) / 2`). The default 500 fits typical bursts; a long high-rate spray
+wants a larger pool (below that, excess spawns drop gracefully -- never a pop). This is the zero-GC
+counterpart to object-per-particle engines (which never cut a piece off but allocate without bound):
+lite-confetti keeps 0 B/frame and caps the live set, and documents the headroom rule instead.
+
+Tests 281 -> 285 (a `pool saturation` suite incl. the anti-regression that fails on the old code);
+t6 gains a full-pool drop-path alloc lane + a re-rigged emit-spray lane, t1 a sustained-spray
+cap+drain lane. No `_env.mjs` change, no new option, no new pool column.
+
 ## v1.25.0 -- gustRate / gust swell frequency
 
 The SWELL FREQUENCY of `gust`, the speed knob to its depth. Since v1.8.0 `gust` has layered a global

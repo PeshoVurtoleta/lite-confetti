@@ -62,6 +62,32 @@ export function run() {
         c.destroy();
     }
 
+    // --- sustained spray never over-runs the cap, then drains to 0 (v1.26.0 drop-new-when-full).
+    //     A rate-16 spray for ~3.2s into a CAP-slot pool has a steady-state alive population
+    //     16*60*0.5 = 480 >> CAP, so past CAP spawns the pool is full and every new spawn takes
+    //     the guard and drops -- count must never exceed CAP on any frame. Finite life then drains
+    //     the whole pool back to 0 once emission stops (nothing was immortalized by the drop). The
+    //     retention half of the fix: a saturating stream is bounded above AND fully recyclable. ---
+    {
+        const c = fresh(CAP);
+        const err = capture(() => {
+            c.spray({ duration: 3200, rate: 16, x: 400, y: 300, lifeMin: 0.5, lifeMax: 0.5, gravity: 400 });
+            let filled = false;
+            for (let f = 0; f < 200; f++) {
+                pump(1, 16);
+                check(c.count >= 0 && c.count <= CAP,
+                    () => `T1 sustained-spray: count ${c.count} out of [0, ${CAP}] (cap breached)`);
+                if (c.count === CAP) filled = true;
+            }
+            check(filled, () => `T1 sustained-spray: the saturating spray never filled the pool (vacuous)`);
+            // Emission is over (3200ms << 200*16ms); life 0.5s drains the rest.
+            for (let f = 0; f < 60 && c.count > 0; f++) pump(1, 50);
+            check(c.count === 0, () => `T1 sustained-spray: pool did not drain after the spray (count ${c.count})`);
+        });
+        check(err === null, () => `T1 sustained-spray: threw ${err && err.message}`);
+        c.destroy();
+    }
+
     // --- non-finite numerics FAIL CLOSED (v1.3.1): each is coerced to its default, so
     //     NO throw, count bounded, AND -- under assertFinite -- NO drawn position is
     //     ever non-finite. Every finite-life burst still drains the pool. -----------

@@ -3,6 +3,44 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.26.0] - 2026-08-16
+
+### Fixed
+
+The particle pool no longer OVERWRITES a still-alive piece when it fills. The pool is a fixed ring
+buffer (`spawn()` advances a `head` cursor `% maxParticles`), and it used to write whatever slot
+`head` landed on -- even one holding an airborne piece. A sustained `spray()` has a steady-state
+alive population of `rate * 60 * avgLife`; once that exceeds `maxParticles`, every new piece stole
+the slot of the OLDEST airborne piece, which popped out of existence mid-flight. On a long spray you
+saw only the last ~`maxParticles` pieces animate fully, the rest cut off -- the "confetti cancels
+itself" effect.
+
+Now `spawn()` DROPS the new piece when the cursor's slot is still alive (`if (pool.life[head] > 0)
+return -1;`): existing pieces live out their full life + fade, and the stream thins gracefully
+instead of popping. One Float32 read + compare -- O(1), zero-allocation, no free-slot scan, no new
+pool column. Settled piles and not-yet-born staggered pieces keep `life > 0`, so they are correctly
+protected from eviction.
+
+HASH-NEUTRAL: the guard fires only on a spawn that would overwrite a live slot -- exactly the buggy
+path -- and no committed rig ever did that, so all 30 committed fingerprints (position, rotate,
+scale, stroke, color, alpha, and every force/box/friction hash) reproduce bit-for-bit. Zero re-pins.
+
+### Guidance
+
+Sizing the pool for continuous sprays: `maxParticles >= rate * 60 * avgLife` (with
+`avgLife = (lifeMin + lifeMax) / 2`). The default 500 fits typical bursts; a long, high-rate spray
+wants a larger `maxParticles` for a fully-dense stream (below that, excess spawns drop gracefully --
+never a pop). This is the zero-GC counterpart to unbounded per-particle allocation: lite-confetti
+keeps 0 B/frame and caps the live set, where object-per-particle engines never cut a piece off but
+allocate without bound. Docs (JSDoc + README) now carry the rule; the library default is unchanged.
+
+Tests: 281 -> 285 (a `pool saturation` suite: the cap holds under a sustained spray, early pieces
+survive a later saturating burst -- the anti-regression that fails on the old code -- drops are
+deterministic, and a sub-cap rig still equals COMMITTED_HASH). Torture: t6 gains a full-pool
+drop-path alloc lane (every spawn drops, still ~0 B/frame) and its emit-spray lane is re-rigged with
+finite life so it measures real spawns; t1 gains a sustained-spray cap+drain lane. No `_env.mjs`
+change, no new option, no new pool column.
+
 ## [1.25.0] - 2026-08-15
 
 Feature release: `gustRate` -- **the SWELL FREQUENCY of `gust`, the speed knob to its depth**. Since v1.8.0

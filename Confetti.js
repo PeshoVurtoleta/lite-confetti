@@ -1,9 +1,25 @@
 /**
- * @zakkster/lite-confetti v1.25.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.26.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
+ *
+ * v1.26.0 fixes: pool overwrite -> DROP-NEW-WHEN-FULL. The particle pool is a fixed ring buffer;
+ * `spawn()` used to advance `head` and overwrite whatever slot it landed on -- even a still-ALIVE
+ * piece. A sustained `spray()` has a steady-state alive population of `rate * fps * avgLife`, which
+ * for realistic sprays exceeds `maxParticles`; past that many cumulative spawns the ring lapped and
+ * every new piece stole the OLDEST airborne slot, popping a live piece out mid-flight (a long spray
+ * appeared to auto-cancel, only the last ~`maxParticles` pieces animating fully). The fix: when the
+ * slot at `head` is still alive (`pool.life[head] > 0`) SKIP the spawn -- keep the existing piece
+ * alive to live out its full life + fade, drop the new one. One Float32 read + compare at the top of
+ * `spawn()`, O(1), zero-alloc, no free-slot scan. The stream thins gracefully instead of popping.
+ * HASH-NEUTRAL: the guard fires ONLY on a spawn that would overwrite a live slot -- no committed
+ * fingerprint exercises that path, so every pinned hash reproduces bit-for-bit. Head-of-line
+ * trade-off (documented): with `lifeMax >> lifeMin` the cursor can rest on one long-lived slot while
+ * later slots are free, so a saturated pool can run marginally UNDER `maxParticles` -- never a pop.
+ * SIZING: a full continuous spray wants `maxParticles >= rate * 60 * avgLife`, else excess spawns
+ * drop (kept, not evicted). Default `maxParticles` STAYS 500 (sizing is caller opt-in).
  *
  * v1.25.0 adds: `gustRate` -- the SWELL-FREQUENCY knob to `gust`'s depth, the exact house mirror of
  * `gust:gustRate :: flutter:flutterRate`. `gust` (v1.9.0) layers one global sinusoidal horizontal breeze
@@ -701,7 +717,11 @@ const SpriteAtlas = (() => {
  * @param {HTMLCanvasElement} canvas  Overlay canvas (position: fixed, pointer-events: none)
  * @param {Object} [options]
  * @param {number} [options.seed]            RNG seed for deterministic output
- * @param {number} [options.maxParticles=500] Pool size
+ * @param {number} [options.maxParticles=500] Pool size. When the pool is full a new spawn is DROPPED
+ *   (existing pieces live out their full life + fade) rather than overwriting a live one (v1.26.0). A
+ *   full CONTINUOUS spray wants `maxParticles >= rate * 60 * avgLife` (avgLife = (lifeMin+lifeMax)/2);
+ *   below that the pool saturates and excess spawns drop gracefully (kept, not evicted). 500 fits
+ *   typical bursts; long high-rate sprays want a larger pool.
  * @param {boolean} [options.respectReducedMotion=true]  Honor prefers-reduced-motion
  * @param {number} [options.trail=0]         Motion-trail capacity: ring-buffer depth (samples of
  *   recent world positions) for the per-particle ribbon. 0 = off (no buffers, byte-identical to
@@ -917,6 +937,15 @@ export function createConfetti(canvas, {
 
     // -- Spawn a single particle --
     function spawn(x, y, vx, vy, config) {
+        // Pool full at the cursor -> DROP (v1.26.0). `head` addresses the OLDEST-written slot, so
+        // life > 0 there means the ring lapped a piece that is still airborne (or a settled/unborn-
+        // staggered piece, both of which keep life > 0 and MUST be protected). Overwriting it made a
+        // live piece pop out mid-flight (a sustained spray's steady-state population rate*fps*avgLife
+        // exceeds maxParticles). Drop WITHOUT writing and WITHOUT advancing head: one Float32 read +
+        // compare, O(1), no scan, no alloc -- a count=N burst into a full pool stays O(N), not O(N^2).
+        // Returns -1 so a staggered burst skips the delay write. `pool.life` zero-inits to 0 and is
+        // pinned to 0 on death/clear, so `> 0` is the exact reusable test (no epsilon).
+        if (pool.life[head] > 0) return -1;
         const i = head;
         head = (head + 1) % maxParticles;
 
@@ -1402,7 +1431,8 @@ export function createConfetti(canvas, {
     // -- Reduced-motion static render (per-instance so it shares the shape table) --
     // Shows confetti pieces in their spread positions with no animation, holds ~1.5s,
     // then fades via a CSS opacity transition. Custom shapes render here too, through
-    // the same shapeDraw/shapeBlit table as the animated path.
+    // the same shapeDraw/shapeBlit table as the animated path. The pool is NOT involved here
+    // (no spawn/head/pool.life), so the v1.26.0 drop-new-when-full guard does not apply to this path.
     function renderStaticBurst(cx, cy, count, colors, shapeId, sizeMin, sizeMax, spread, emoji, shapeIds) {
         ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
@@ -1695,8 +1725,10 @@ export function createConfetti(canvas, {
                 // Staggered birth: piece i wakes at `staggerSec * i / count` s (linear, even, NO rng),
                 // so the whole burst cascades over the window. Guarded so the default (staggerSec 0)
                 // never writes -- the delay column stays 0 and the burst spawns synchronously,
-                // byte-identical to every prior release.
-                if (staggerSec > 0) pool.delay[slot] = staggerSec * i / count;
+                // byte-identical to every prior release. `slot >= 0` is fail-closed against a DROPPED
+                // spawn (v1.26.0 returns -1 when the pool is full): `pool.delay[-1] = v` is a silent
+                // TypedArray no-op, but the explicit guard beats relying on it.
+                if (staggerSec > 0 && slot >= 0) pool.delay[slot] = staggerSec * i / count;
             }
 
             if (onComplete) {
@@ -1713,9 +1745,15 @@ export function createConfetti(canvas, {
         /**
          * Continuous confetti spray over a duration.
          *
+         * A full continuous spray wants `maxParticles >= rate * 60 * avgLife`
+         * (avgLife = (lifeMin + lifeMax) / 2); below that the pool saturates and excess spawns DROP
+         * (existing pieces live out their full life + fade, never overwritten -- v1.26.0).
+         *
          * @param {Object} [options]    Same as burst, plus:
          * @param {number} [options.duration=1000]  Spray duration in ms
-         * @param {number} [options.rate=5]         Particles per frame
+         * @param {number} [options.rate=5]         Particles per frame (see the sizing rule above:
+         *   a sustained spray's steady-state population is `rate * 60 * avgLife`; past `maxParticles`
+         *   new spawns drop, so size the pool for the longest continuous spray)
          * @param {number} [options.wind=0]         Lateral acceleration px/sec^2 (negative = leftward)
          * @param {number} [options.floor=Infinity] Settle-boundary Y in CSS px (default none). Opt-in
          * @param {number} [options.bounce=0]       Restitution 0..1 on any boundary contact (0 rests, 1 elastic); shared by floor and walls

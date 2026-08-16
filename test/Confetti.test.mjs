@@ -3700,6 +3700,15 @@ describe('lite-confetti', () => {
             for (let k = 0; k < 5; k++) {
                 cA.burst({ count: 1, x: 400, y: 300, spread: 0.001, speed: 5, gravity: 0, drag: 1,
                     flutter: 0, lifeMin: 0.5, lifeMax: 0.5, fadeOut: 0 });
+                // Pump ONCE before reading count: the count getter reflects `aliveCount`, refreshed
+                // only inside update(), so it is stale (0) right after a burst -- a bare `while (count>0)`
+                // never enters and the slot is never actually drained. This first pump refreshes the
+                // getter AND (life 0.5 << the guaranteed post-first-frame dt) empties the slot; the loop
+                // finishes any residue. Genuinely draining pool.life[0] to 0 is REQUIRED under v1.26.0
+                // drop-new-when-full: a still-live slot is protected, so the re-spawn would otherwise drop
+                // and the recycled-slot retention check would test nothing. (Pre-v1.26.0 the overwrite
+                // masked the vacuous drain.)
+                pump(1, 1000);
                 let guard = 0;
                 while (cA.count > 0 && guard++ < 500) pump(1, 16);
                 assert.equal(cA.count, 0, 'the armed burst did not drain before recycling');
@@ -4465,6 +4474,76 @@ describe('lite-confetti', () => {
             const after = c.__stats();
             assert.equal(after.aliveActual, 0);
             assert.equal(after.aliveGetter, 0);
+        });
+    });
+
+    describe('pool saturation (v1.26.0)', () => {
+        // The ring buffer used to overwrite still-alive slots once cumulative spawns lapped
+        // maxParticles, popping the oldest airborne piece out mid-flight. v1.26.0 DROPS a new
+        // spawn when the slot at `head` is still alive -- existing pieces live out their full life.
+
+        it('cap holds under a sustained spray (never reports count > maxParticles)', () => {
+            const c = createConfetti(makeCanvas(), { seed: 5, maxParticles: 64 });
+            // rate 24 over ~120 frames * lifeMin/Max 5 => steady-state population 24*60*5 >> 64:
+            // a heavily saturating spray. The cap must hold every frame.
+            c.spray({ duration: 4000, rate: 24, lifeMin: 5, lifeMax: 5, x: 400, y: 300 });
+            let filled = false;
+            for (let f = 0; f < 120; f++) {
+                pump(1, 16);
+                assert.ok(c.count <= 64, 'count exceeded maxParticles under a saturating spray');
+                if (c.count === 64) filled = true;
+            }
+            assert.ok(filled, 'the saturating spray never filled the pool (non-vacuous)');
+        });
+
+        it('anti-regression: early pieces SURVIVE a later saturating burst (the actual bug)', () => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 5, maxParticles: 8 });
+            // Fill all 8 slots at x=100, frozen (speed 0, gravity 0, drag 1) so they sit put.
+            c.burst({ count: 8, x: 100, y: 100, speed: 0, gravity: 0, drag: 1, spread: 0,
+                flutter: 0, sway: 0, lifeMin: 3, lifeMax: 3 });
+            pump(1, 16);
+            assert.equal(c.count, 8, 'the fill burst did not populate all 8 slots');
+            // The eight sit frozen at x=100 (speed 0, gravity 0, drag 1, spread 0), so the running
+            // maxX witness stays near 100. Fire a 200-count burst at x=700: under HEAD every one of the
+            // eight is evicted and re-drawn near x=700 (maxX jumps past 700); under v1.26.0 the pool is
+            // full of live pieces so all 200 DROP and maxX never reaches 700.
+            c.burst({ count: 200, x: 700, y: 100, speed: 0, gravity: 0, drag: 1, spread: 0,
+                flutter: 0, sway: 0, lifeMin: 3, lifeMax: 3 });
+            pump(1, 16);
+            assert.equal(c.count, 8, 'the pool grew or shrank past its 8 live pieces');
+            assert.ok(canvas.maxX < 700, 'the original eight were displaced to x=700 (overwrite bug)');
+            // Mirror: nothing is immortalized -- past the 3s life the pool drains to empty.
+            for (let f = 0; f < 220 && c.count > 0; f++) pump(1, 16);
+            assert.equal(c.count, 0, 'a saturated pool did not drain to 0 after its life');
+        });
+
+        it('drops are deterministic: two same-seed instances match hash + count every frame', () => {
+            const script = (c) => c.spray({ duration: 2000, rate: 20, lifeMin: 2, lifeMax: 2,
+                x: 400, y: 300, spread: 1.5, gravity: 400 });
+            const canvasA = makeCanvas({ record: true });
+            const cA = createConfetti(canvasA, { seed: 11, maxParticles: 48 });
+            const canvasB = makeCanvas({ record: true });
+            const cB = createConfetti(canvasB, { seed: 11, maxParticles: 48 });
+            script(cA); script(cB);
+            for (let f = 0; f < 150; f++) {
+                pump(1, 16); // pump() drives every registered ticker, so both advance together
+                assert.equal(cA.count, cB.count, 'saturating count diverged across identical seeds');
+            }
+            assert.equal(canvasA.hash, canvasB.hash, 'saturating hash diverged across identical seeds');
+        });
+
+        it('non-saturating rig unchanged: the canonical sub-cap burst still equals COMMITTED_HASH', () => {
+            // The byte-identity proof, re-asserted here: the canonical seed-12345 burst (count 120
+            // into the default 500-slot pool -- 120 < 500, never saturates) reproduces COMMITTED_HASH
+            // bit-for-bit. The drop guard reads pool.life[head] but never FIRES below the cap, so the
+            // spawn stream (and every position it feeds) is byte-identical to every prior release.
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8 });
+            pump(1, 1000); pump(29, 16);
+            assert.equal(canvas.hash, COMMITTED_HASH, 'a sub-cap burst moved COMMITTED_HASH (guard mis-fired)');
+            c.destroy();
         });
     });
 });
