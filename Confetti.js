@@ -1,9 +1,20 @@
 /**
- * @zakkster/lite-confetti v1.27.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.28.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
+ *
+ * v1.28.0 adds: `blast` -- an opt-in high-power preset that clears at least half a screen of vertical
+ * reach from a bottom origin. Vertical reach is `speed^2 / (2 * gravity)` throttled by per-frame `drag`;
+ * `wind` is HORIZONTAL and adds ZERO reach, so the default `speed:400` straight-up launch rises only
+ * ~160px -- half a screen was reachable all along, just undiscoverable. `blast` (count 120, straight-up
+ * `angle: -HALF_PI`, `speed:1300`, `gravity:500`, `drag:0.99`, rect) is the ready-made half-screen cannon:
+ * on the real engine from a bottom origin it rises ~1025px (>= 540 = half a 1080-tall screen) and settles
+ * in ~4.5s. PURE PRESET DATA -- a new key in `export const presets`, NO engine code path, NO new pool
+ * column, NO rng, NO allocation. The committed default fingerprint 1569828004 and every other committed
+ * hash stay byte-identical; the alloc table stays 178 B / 44 Float32 (no column added). NOT a default
+ * change (defaults are untouched), NOT a per-second `drag` rewrite, NOT a new `power`/reach knob.
  *
  * v1.27.0 adds: `swayRate` -- the sway SWING-FREQUENCY knob to `sway`'s depth, the exact house mirror of
  * `sway:swayRate :: flutter:flutterRate` and the third member of the speed-knob family (flutter:flutterRate,
@@ -558,6 +569,12 @@ export const presets = {
         count: 55, spread: 0.5, speed: 720, speedVariance: 80,
         gravity: 920, drag: 0.985, sizeMin: 5, sizeMax: 11,
         lifeMin: 1.3, lifeMax: 2.8, shape: 'rect', angle: -Math.PI * 0.65,
+    },
+    /** Maximum-power straight-up launch -- clears half a screen from a bottom origin. */
+    blast: {
+        count: 120, spread: 0.9, speed: 1300, speedVariance: 200,
+        gravity: 500, drag: 0.99, sizeMin: 5, sizeMax: 12,
+        lifeMin: 2.8, lifeMax: 4.5, shape: 'rect', angle: -HALF_PI,
     },
     /** Gentle wide falling snow -- long life, low gravity, circles. */
     snow: {

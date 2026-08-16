@@ -3,6 +3,27 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.28.0] - 2026-08-16
+
+Feature release: `presets.blast` -- **a ready-made maximum-power straight-up cannon that clears at least
+half a screen of vertical reach from a bottom origin**. Closes the reach gap versus canvas-confetti, whose
+default launch shoots high out of the box. Root cause of the gap: vertical reach is `speed^2 / (2 * gravity)`,
+throttled further by the per-frame `drag`, so the gentle default `speed: 400` rises only ~160px; and `wind`
+is a purely horizontal force (the X-mirror of `gravity`), so it can never add vertical reach no matter how
+large. Half a screen was already reachable (`speed: 1200` -> ~590px), so this is a DISCOVERABILITY fix, not a
+capability one: `presets.blast` bundles the tuned numbers -- `speed: 1300`, `gravity: 500`, `drag: 0.99`,
+straight-up `angle`, a focused `spread`, and a long life -- so `c.burst({ ...presets.blast, x, y: bottom })`
+peaks at ~1025px of rise on a 1080-tall screen (measured, seed 42), settling in ~4.5s.
+
+A preset is pure module-level DATA spread into `burst()`/`spray()`: there is NO engine code path, NO new pool
+column, and NO hot-path allocation, so the committed default fingerprint `1569828004` and every other
+committed hash are byte-identical, and the 178 B / 44 Float32 alloc table is unchanged. `presets` now ships
+FIVE named configs (`blast`, `cannons`, `fireworks`, `pride`, `snow`). Docs gain a "Reach / power" note
+capturing the durable fact: `speed` (with the default straight-up `angle`) is the vertical lever, `wind` is
+horizontal and never adds reach, and a looser `drag` extends the arc. Not done: no change to any default,
+preset, or the per-frame `drag` model; no new `power`/reach knob. Unit suite 296 -> 300. See
+`decisions/0029-blast-preset.md`.
+
 ## [1.27.0] - 2026-08-16
 
 Feature release: `swayRate` -- **the SWING FREQUENCY of `sway`, the speed knob to its depth**. Since v1.3.0

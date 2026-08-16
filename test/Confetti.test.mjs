@@ -384,8 +384,8 @@ describe('lite-confetti', () => {
     describe('presets', () => {
         const KNOWN_SHAPES = new Set(['rect', 'circle', 'star', 'triangle', 'emoji']);
 
-        it('ships the four documented presets', () => {
-            assert.deepEqual(Object.keys(presets).sort(), ['cannons', 'fireworks', 'pride', 'snow']);
+        it('ships the five documented presets', () => {
+            assert.deepEqual(Object.keys(presets).sort(), ['blast', 'cannons', 'fireworks', 'pride', 'snow']);
         });
 
         it('every preset shape is one the engine actually renders', () => {
@@ -423,6 +423,68 @@ describe('lite-confetti', () => {
                 return n;
             };
             assert.equal(runN(), runN());
+        });
+
+        // v1.28.0 -- `blast` is the ready-made half-screen cannon. On an 800x1080 rig fired
+        // from a bottom origin (y = 1040) it must clear >= 540px of vertical reach (half the
+        // 1080-tall screen). Vertical reach = speed^2 / (2 * gravity) throttled by drag; the
+        // default straight-up launch (speed 400) rises only ~160px, which is why this is a
+        // discoverability preset, not a default change.
+        const HALF_PI = Math.PI / 2;
+        const ORIGIN_Y = 1040;
+        const HALF_SCREEN = 540;
+
+        // A recording rig fired from a bottom origin (y = 1040). minY reach is pure physics
+        // (integrated vy vs the HALF_SCREEN = 540 constant below), so the bar is that constant,
+        // not the canvas height; the clientHeight:1080 override just keeps the rig visually
+        // consistent with a 1080 screen. The non-vacuity comes from speed (see the speed:400
+        // case in the reviewer notes: a default-speed blast rises ~118px and would fail 540).
+        const tallRig = (seed) => {
+            const canvas = makeCanvas({ record: true });
+            Object.defineProperty(canvas, 'clientHeight', { value: 1080, configurable: true });
+            return { c: createConfetti(canvas, { seed }), canvas };
+        };
+
+        // Fire `cfg` from the bottom origin, pump ~5s past its life, return the vertical rise.
+        const riseOf = (cfg, seed) => {
+            const { c, canvas } = tallRig(seed);
+            c.burst({ ...cfg, x: 400, y: ORIGIN_Y });
+            pump(320); // ~5.1s at 16ms/frame -- past blast's ~4.5s lifeMax
+            const rise = ORIGIN_Y - canvas.minY;
+            c.destroy();
+            return rise;
+        };
+
+        it('blast clears half a screen from a bottom origin', () => {
+            const rise = riseOf(presets.blast, 42);
+            assert.ok(rise >= HALF_SCREEN, 'blast rise ' + rise.toFixed(1) + ' < ' + HALF_SCREEN);
+        });
+
+        it('the half-screen bar is meaningful -- snow and a bare burst fall short', () => {
+            assert.ok(riseOf(presets.snow, 42) < HALF_SCREEN, 'snow should not clear half a screen');
+            assert.ok(riseOf({ angle: -HALF_PI }, 42) < HALF_SCREEN, 'a bare burst should not clear half a screen');
+        });
+
+        it('a blast burst is deterministic under a fixed seed', () => {
+            const runN = () => {
+                const { c } = tallRig(11);
+                c.burst({ ...presets.blast, x: 400, y: ORIGIN_Y, lifeMin: 5, lifeMax: 5 });
+                pump(1);
+                const n = c.count;
+                c.destroy();
+                return n;
+            };
+            assert.equal(runN(), runN());
+        });
+
+        it('repeated blast+clear cycles return the pool to empty', () => {
+            const { c } = tallRig(3);
+            for (let k = 0; k < 6; k++) {
+                c.burst({ ...presets.blast, x: 400, y: ORIGIN_Y });
+                c.clear();
+            }
+            assert.equal(c.count, 0);
+            c.destroy();
         });
     });
 

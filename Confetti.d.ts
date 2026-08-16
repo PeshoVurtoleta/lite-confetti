@@ -327,6 +327,8 @@ export type Preset = BurstOptions;
 export const presets: {
     readonly fireworks: Preset;
     readonly cannons: Preset;
+    /** Maximum-power straight-up launch -- clears half a screen from a bottom origin. */
+    readonly blast: Preset;
     readonly snow: Preset;
     readonly pride: Preset;
 };

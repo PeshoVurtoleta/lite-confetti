@@ -426,6 +426,7 @@
             <div class="presets">
                 <button class="preset active" data-preset="fireworks">🎆 Fireworks</button>
                 <button class="preset" data-preset="cannons">💥 Cannons</button>
+                <button class="preset" data-preset="blast">🚀 Blast</button>
                 <button class="preset" data-preset="snow">❄️ Snow</button>
                 <button class="preset" data-preset="pride">🏳️‍🌈 Pride</button>
                 <button class="preset" data-preset="golden">✨ Golden</button>
@@ -455,7 +456,7 @@
             <div class="control">
                 <div class="control-header"><span class="control-name">speed</span><span class="control-val"
                                                                                          id="speedVal">400</span></div>
-                <input type="range" id="speed" min="50" max="1200" value="400" step="25">
+                <input type="range" id="speed" min="50" max="1500" value="400" step="25">
             </div>
             <div class="control">
                 <div class="control-header"><span class="control-name">speedVariance</span><span class="control-val"
@@ -965,7 +966,7 @@
         $emojiRow.style.display = $shape.value === 'emoji' ? '' : 'none';
     });
 
-    // ── Presets. The four canonical ones are the LIBRARY's exported `presets`, so the
+    // ── Presets. The five canonical ones are the LIBRARY's exported `presets`, so the
     //    demo stays in lockstep with the package instead of hand-copying values that
     //    drift. The library presets use radians + engine field names already; we map
     //    them onto the slider UI (degrees, split min/max). Two extra buttons are demo-
@@ -984,6 +985,7 @@
     const UI_PRESETS = {
         fireworks: presetToUI(presets.fireworks),
         cannons:   presetToUI(presets.cannons),
+        blast:     presetToUI(presets.blast),
         snow:      presetToUI(presets.snow),
         pride:     presetToUI(presets.pride),
         // demo-only flavours (not in the package export)

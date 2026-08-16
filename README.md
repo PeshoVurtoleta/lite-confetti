@@ -537,7 +537,7 @@ Custom shapes go through the same zero-allocation dispatch as the built-ins — 
 
 ## Presets
 
-Four drop-in configs for iconic effects. Spread them into `burst()` or `spray()`:
+Five drop-in configs for iconic effects. Spread them into `burst()` or `spray()`:
 
 ```js
 import { createConfetti, presets } from '@zakkster/lite-confetti';
@@ -547,9 +547,14 @@ c.burst({ ...presets.fireworks });          // stars, explosive, upward
 c.burst({ ...presets.cannons, x: 0 });      // angled launch — override origin
 c.spray({ ...presets.snow, duration: 8000 }); // gentle falling, long life
 c.burst({ ...presets.pride });              // OKLCH rainbow palette baked in
+c.burst({ ...presets.blast, y: innerHeight }); // max-power cannon from the bottom
 ```
 
 Because a preset is just an options object, anything you add after the spread wins — `{ ...presets.snow, gravity: 200 }` keeps the snow look but drops faster. Every preset's `shape` is one of the five the engine renders, and every preset stays deterministic under a fixed seed (the test suite checks both).
+
+### Reach / power
+
+If a burst feels weak — it barely leaves the origin instead of arcing up the screen — the lever is `speed`, not `wind`. Vertical reach is `speed^2 / (2 * gravity)`, throttled further by the per-frame `drag`, so with the default straight-up `angle` a piece rises about `speed^2 / (2 * gravity)` pixels before falling back. The gentle default `speed: 400` (with `gravity: 600`, `drag: 0.98`) rises only ~160px; to clear half a 1080-tall screen from the bottom you want `speed` around 1200-1500, and a looser `drag` (e.g. `0.99`) lengthens the arc. `wind` is a purely horizontal force (the X-mirror of `gravity`), so it drifts a burst sideways but adds **zero** vertical reach — combining `speed` with `wind` reaches exactly as high as `speed` alone. `presets.blast` is the ready-made half-screen cannon: `c.burst({ ...presets.blast, x, y: innerHeight })` peaks at ~1025px of rise on a 1080 screen.
 
 ## Palette import (lite-hueforge)
 
@@ -763,7 +768,7 @@ Creates a temporary overlay canvas, fires a burst, cleans up automatically when 
 
 | Export | Description |
 |---|---|
-| `presets` | `{ fireworks, cannons, snow, pride }` — drop-in configs to spread into burst/spray. |
+| `presets` | `{ blast, cannons, fireworks, pride, snow }` — drop-in configs to spread into burst/spray (`blast` = a max-power straight-up cannon that clears half a screen). |
 | `colorsFromPalette(input)` | lite-hueforge gradient stops (or a palette) → a `colors` array. |
 | `fromElement(el, extra?)` | Element centre as a burst origin (viewport coords), measured once. |
 
@@ -856,10 +861,10 @@ The gated quality numbers the torture harness commits, so a regression fails CI 
 
 ## Testing
 
-**296 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
+**300 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
 
 ```bash
-npm test          # 296 node:test cases (contract + boundary + fingerprint)
+npm test          # 300 node:test cases (contract + boundary + fingerprint)
 npm run torture   # @zakkster/lite-leak + lite-gc-profiler under --expose-gc
 npm run verify    # test + torture, the publish gate
 ```
@@ -1005,7 +1010,7 @@ committed determinism fingerprint unchanged.
 
 **Presets + palette import + pointer-follow.**
 
-- `presets.fireworks / cannons / snow / pride` — named configs, spread into `burst()`/`spray()`. Every shape is engine-valid and every preset stays seed-deterministic.
+- `presets.blast / cannons / fireworks / pride / snow` — named configs, spread into `burst()`/`spray()`. Every shape is engine-valid and every preset stays seed-deterministic. `blast` is the max-power straight-up cannon (clears half a screen from a bottom origin).
 - `colorsFromPalette()` — consumes lite-hueforge `toGradientStops()` (and `{ stops }`, plain arrays, single colors) directly. Never yields an empty array.
 - `fromElement(el)` — burst origin from `getBoundingClientRect()`, once. Documented viewport-vs-canvas coordinate handling.
 - `spray({ followPointer: true })` — per-instance, opt-in, passive listener bound only while active and released on end/destroy. Coordinates converted into the canvas's own space. Non-deterministic by nature; consumes no RNG draw.

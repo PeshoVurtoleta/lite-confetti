@@ -129,10 +129,22 @@ Zero-GC, deterministic, tree-shakeable micro-libraries for high-performance web 
 
 ## v1.2.0 — presets, palette import, pointer-follow
 
-presets: named configs { fireworks, cannons, snow, pride } (export const presets). Spread into
+presets: named configs { blast, cannons, fireworks, pride, snow } (export const presets). Spread into
 burst()/spray(): c.burst({ ...presets.fireworks }). Every shape is one the engine renders
 (rect|circle|star|triangle|emoji); every preset stays deterministic under a fixed seed. pride
-carries a 6-color OKLCH rainbow palette.
+carries a 6-color OKLCH rainbow palette. blast (v1.28.0) is a maximum-power straight-up cannon --
+speed 1300, gravity 500, drag 0.99, angle straight up, a focused spread, a long life -- tuned so
+c.burst({ ...presets.blast, x, y: bottom }) clears at least half a screen of vertical reach (~1025px
+of rise on a 1080-tall screen, measured); fire it from a BOTTOM origin (a top/center origin overshoots
+offscreen). Pure preset data: no engine path, no pool column, no allocation, so every committed
+fingerprint (default 1569828004 included) is byte-identical.
+
+Reach / power: if a burst barely leaves the origin, the vertical lever is `speed`, NOT `wind`. Vertical
+reach ~= speed^2 / (2 * gravity), throttled by the per-frame `drag`, with the default straight-up `angle`.
+The gentle default speed 400 (gravity 600, drag 0.98) rises only ~160px; ~1200-1500 speed clears half a
+1080 screen, and a looser drag (0.99) lengthens the arc. `wind` is a PURELY HORIZONTAL force (the X-mirror
+of gravity), so it drifts a burst sideways but adds ZERO vertical reach -- speed+wind reaches exactly as
+high as speed alone. presets.blast bundles the tuned numbers as the ready-made half-screen cannon.
 
 colorsFromPalette(input): normalize a lite-hueforge toGradientStops() result into a colors array.
 Accepts gradient stops [{color,stop}], a { stops } wrapper, a plain colors array (pass-through), or
@@ -462,6 +474,29 @@ finiteness case (the accel cap). Torture T5 threads signed attract/swirl + a jit
 the differential fuzz; T6 lane 5 arms a stable positive attract+swirl on the immortal pool; T1 adds
 attract/swirl/center poison AND strong finite-life repellers under the finite-position detector.
 See decision 0011. No runtime dep change. Unit suite 122 -> 132.
+
+## v1.28.0 -- blast preset / half-screen reach
+
+`presets.blast` -- a ready-made maximum-power straight-up cannon that clears at least half a screen of
+vertical reach from a bottom origin, closing the reach gap versus canvas-confetti. Root cause of the gap
+(measured on the real engine via the minY reach probe): vertical reach ~= speed^2 / (2 * gravity),
+throttled by the per-frame `drag`; the gentle default speed 400 rises only ~160px, and `wind` is a purely
+HORIZONTAL force (the X-mirror of gravity) so it adds ZERO vertical reach -- speed+wind reaches exactly as
+high as speed alone. Half a screen was already reachable (speed 1200 -> ~590px), so this is a
+DISCOVERABILITY fix, not a capability one. `presets.blast` bundles the tuned numbers -- speed 1300,
+speedVariance 200, gravity 500, drag 0.99, spread 0.9, straight-up angle (-HALF_PI), life 2.8-4.5, rect --
+so c.burst({ ...presets.blast, x, y: bottom }) peaks at ~1025px of rise on a 1080-tall screen (measured,
+seed 42), settling in ~4.5s. Fire from a BOTTOM origin (a top/center origin overshoots offscreen).
+
+A preset is pure module-level DATA spread into burst()/spray(): NO engine code path, NO new pool column, NO
+hot-path allocation, so the committed default fingerprint 1569828004 and every other committed hash are
+byte-identical and the 178 B / 44 Float32 alloc table is unchanged. `presets` now ships FIVE names
+{ blast, cannons, fireworks, pride, snow }; the one preset-list pin (`ships the ... documented presets`)
+moves four -> five. New unit tests: blast rise >= 540 on an 800x1080 bottom-origin rig, NON-VACUOUS (snow
+and a bare burst fall short on the same rig), plus a two-run determinism check (presets stay unpinned by a
+committed hash, house style). Docs gain a "Reach / power" note (speed is the vertical lever, wind is
+horizontal, looser drag lengthens the arc). NOT done: no change to any default/preset or the per-frame
+`drag` model; no new `power`/reach knob. See decision 0029. No runtime dep change. Unit suite 296 -> 300.
 
 ## v1.27.0 -- swayRate / sway swing frequency
 
