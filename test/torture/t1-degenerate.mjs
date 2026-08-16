@@ -321,6 +321,23 @@ export function run() {
         ['gustRate:neg', { count: 60, gust: 400, gustRate: -6, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['gustRate:tiny', { count: 60, gust: 400, gustRate: 1e-9, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['gustRate:huge', { count: 60, gust: 400, gustRate: 1e6, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        // swayRate poison (v1.27.0): garbage frequencies coerce via num(swayRate, 1) (non-finite/non-numeric/
+        // null/{} -> 1 off; a NEGATIVE is legal phase reversal, NOT clamped; no upper cap). The read lives
+        // inside `if (pool.sway[i] !== 0)` behind a `!== 1` sentinel, scaling the sway swing phase about the
+        // birth pivot tilt0 -- it draws no rng and only steers x, so a poisoned rate can only re-phase the
+        // drift, never blow up a draw (sin is bounded in [-1,1] for any finite argument). sway 1 arms the
+        // read; legal extremes (0 frozen-lean, -3 reversed, 1e-9 near-frozen, 1e6 fast shimmy) + wind +
+        // turbulence + a bouncing box confirm the swing never yields a non-finite draw under load.
+        ['swayRate:NaN', { count: 60, sway: 1, swayRate: NaN, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['swayRate:Infinity', { count: 60, sway: 1, swayRate: Infinity, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['swayRate:-Infinity', { count: 60, sway: 1, swayRate: -Infinity, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['swayRate:nonnumeric', { count: 60, sway: 1, swayRate: '3', turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['swayRate:null', { count: 60, sway: 1, swayRate: null, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['swayRate:object', { count: 60, sway: 1, swayRate: {}, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['swayRate:0', { count: 60, sway: 1, swayRate: 0, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['swayRate:neg', { count: 60, sway: 1, swayRate: -3, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['swayRate:tiny', { count: 60, sway: 1, swayRate: 1e-9, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
+        ['swayRate:huge', { count: 60, sway: 1, swayRate: 1e6, turbulence: 400, wind: 500, wallLeft: 200, wallRight: 600, ceiling: 100, floor: 300, bounce: 0.5, lifeMin: 0.3, lifeMax: 0.3 }],
         ['sizeMin/Max:NaN', { count: 60, sizeMin: NaN, sizeMax: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['angle:NaN', { count: 60, angle: NaN, lifeMin: 0.3, lifeMax: 0.3 }],
         ['drag:NaN', { count: 60, drag: NaN, lifeMin: 0.3, lifeMax: 0.3 }],

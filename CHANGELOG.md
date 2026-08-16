@@ -3,6 +3,63 @@
 All notable changes to `@zakkster/lite-confetti` are documented here. Format
 follows Keep a Changelog; this project adheres to Semantic Versioning.
 
+## [1.27.0] - 2026-08-16
+
+Feature release: `swayRate` -- **the SWING FREQUENCY of `sway`, the speed knob to its depth**. Since v1.3.0
+`sway` has been a per-particle horizontal OSCILLATION (`x += sin(tilt) * sway * SWAY_PX * dt`) with a tunable
+DEPTH (`sway: 0..1`) but a hardcoded FREQUENCY: the swing rate was whatever `pool.tilt` advanced at, so a
+lazy paper-drift and a fast shimmy-drift were the same knob. `swayRate` (opt-in scalar, default `1` = off)
+scales the sway swing phase about the stored birth pivot `tilt0` (the SAME pivot `flutterRate` reads),
+feeding ONLY the sway `x` term -- `3` swings three times as fast, `0.3` a long lazy drift, `0` FREEZES the
+phase at each piece's own birth tilt, a NEGATIVE reverses the swing. It is the exact house mirror
+`sway:swayRate :: flutter:flutterRate`, completing the speed-knob family (flutter:flutterRate,
+gust:gustRate, sway:swayRate) -- after it, every oscillator with a tunable amplitude has a tunable frequency.
+
+This is the flutterRate archetype, NOT the gustRate one: coerced with `num(swayRate, 1)` (a signed helper --
+a frequency has a SIGN, so a NEGATIVE is legal phase reversal, NOT clamped; non-finite/undefined => 1 off,
+no upper cap), and because the default `1` IS `Float32`-exact there is **NO fround sentinel** -- the off-path
+is guarded by a plain `swrate !== 1` compare. At the default the inner guard is skipped and the write is the
+raw `Math.sin(pool.tilt[i]) * pool.sway[i] * SWAY_PX * dtSec` -- **byte-for-byte the shipped v1.3.0 sway
+line**. The read stays INSIDE the existing `if (pool.sway[i] !== 0)` guard, so a sway-off burst (the DEFAULT)
+reproduces every committed fingerprint for ANY swayRate.
+
+The distinguishing wrinkle: NO committed fingerprint rode the sway integrator before this release (`sway`
+defaults to 0, so COMMITTED_HASH never exercised the sway `x` term). The off-proof
+(`run({sway:1,swayRate:1}).hash === run({sway:1}).hash`) is unfalsifiable without a baseline, so this chapter
+MINTS `SWAY_HASH = 1887116762` on the canonical rig before the edit -- the only chapter to date whose
+off-proof baseline did not already exist.
+
+`swayRate:0` is a **FROZEN LEAN, not an inert zero** (the gustRate contrast): sway's phase is
+`tilt0 + (tilt - tilt0) * swayRate`, so `swayRate:0 -> swayPhase = tilt0`, giving `x += sin(tilt0) * sway *
+SWAY_PX * dt` -- a per-particle CONSTANT non-zero lean (varied by the random birth tilt). So
+`run({sway:1,swayRate:0}).hash = 1963198227` is a DISTINCT reproducible fingerprint, mirroring `flutterRate:0`
+(frozen wobble) one-for-one -- do NOT expect the `gustRate:0 -> sin(0)=0` collapse here.
+
+PURE physics scalar with a genuinely provable purity: `pool.swrate` is read in EXACTLY one place (the sway
+`x` term) and written ONLY at spawn -- unconditional and LOAD-BEARING, since a `Float32` zero-init `0` would
+mean "frozen lean" on a recycled sway-armed slot (the default is `1`, not `0`). `pool.tilt`/`tilt0` are NEVER
+written, so the turbulence curl and `flutterRate` wobble stay byte-identical. A sway-armed rig with swayRate
+set moves ONLY the position `hash` + drift `sumX`; `rotateHash`/`scaleHash`/`alphaHash`/`colorHash`/
+`strokeHash` are all byte-identical. New committed `SWAYRATE_HASH = 3473529279`
+(`run({sway:1,swayRate:3})`), cross-process stable and distinct from both SWAY_HASH and the frozen lean.
+
+One new `Float32Array` column `swrate` (+4 B/particle, **174 -> 178 B**), zero rng, zero hot-path allocation
+(a guarded read + compare + one `sin`). **NO `_env.mjs` change** -- swayRate rides the existing out-of-hash
+`sumX` drift witness, the first physics-speed knob after gustRate to also add zero harness surface. Both
+`burst()` and `spray()` honor it; inert when `sway` is 0; inert under reduced motion.
+
+Every prior committed fingerprint reproduces bit-for-bit at the default swayRate: COMMITTED, WIND, FLOOR, BOX,
+TURB, GUST, TURBGUST, GUSTRATE, TRAIL, SETTLE, COLOR, ALIGN, SPINRATE, SPINDRAG, SCALE, SCALEFROM, FLUTRATE,
+ALPHA, FADEOUT, FRICTION, WALLFRICTION. Zero re-pins.
+
+Tests: 285 -> 296 (a `swayRate / sway swing frequency` suite: opt-in/fail-closed, sway-off short-circuit,
+the frozen-lean crux, the committed SWAYRATE_HASH, second-reader purity, non-vacuous sumX, decoupling from
+flutterRate/turbulence, finite-under-load, spray honoring, and reduced-motion inertness). Torture: t1 gains a
+swayRate poison lane (garbage -> 1, legal extremes 0/-3/1e-9/1e6 under sway + wind + turbulence + a box), t3
+gains the A17 windowed symmetric-history sumX-delta retention proof, t5 threads a random sway + swayRate
+through the burst + spray differential, and t6 adds a sway-swept immortal-pool alloc lane (sway:1 +
+swayRate:3 + wind:400, <= RETAIN_FLOOR_BPF, 10000-frame window maxMajor 0).
+
 ## [1.26.0] - 2026-08-16
 
 ### Fixed

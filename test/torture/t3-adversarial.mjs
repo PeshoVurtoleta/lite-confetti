@@ -583,6 +583,55 @@ export function run() {
         check(err === null, () => `T3 A16: threw ${err && err.message}`);
     }
 
+    // A17 -- pool-recycle retention for swayRate (v1.27.0). swayRate is UNCONDITIONALLY written at spawn --
+    // LOAD-BEARING (like gustRate/scaleFrom), since a Float32 zero-init 0 would mean "frozen lean" (a constant
+    // non-zero offset, NOT off) on a recycled slot whose sway IS armed -- a WRONG default (off is 1) -- so a
+    // recycled slot must never inherit a prior burst's swing frequency. A single-slot pool FORCES slot 0
+    // reuse: run 5 drain cycles arming the frequency, then RESEED and fire a measurement burst into the
+    // recycled slot. Because the sway phase rescales about the per-piece birth tilt0, the witness is a
+    // hash-neutral WINDOWED sumX DELTA (a before/after snapshot over a fixed 20-frame window), NOT a
+    // cumulative-from-zero hash/sumX compare (canvas.sumX accumulates and would false-fail; see the retention
+    // rule). A/B share the IDENTICAL 5-cycle history timing (swayRate draws no rng, so the histories differ
+    // ONLY in the armed value the spawn write must overwrite) and both MEASURE with the default (off, 1)
+    // frequency: a leaked swayRate:3 would have re-phased the recycled sway swing -> a different windowed
+    // sumX delta. C shares B's history but MEASURES armed (swayRate:3), so its delta must differ -- the
+    // non-vacuous guard.
+    {
+        const recycleThenMeasure = (historyRate, measureRate) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 7, maxParticles: 1 });
+            for (let cycle = 0; cycle < 5; cycle++) {
+                c.seed(7);
+                c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 0, align: 0,
+                    sway: 1, swayRate: historyRate, lifeMin: 0.3, lifeMax: 0.3 });
+                for (let f = 0; f < 20; f++) pump(1, 50);
+                check(c.count === 0, () => `T3 A17: an armed(${historyRate}) drain cycle left ${c.count} alive in the single-slot pool`);
+            }
+            c.seed(7);   // measurement burst into the recycled slot, rng-aligned
+            c.burst({ count: 1, x: 400, y: 300, speed: 0, gravity: 0, drag: 1, flutter: 0, align: 0,
+                sway: 1, swayRate: measureRate, lifeMin: 5, lifeMax: 5 });
+            const before = canvas.sumX;
+            for (let f = 0; f < 20; f++) pump(1, 16);   // fixed windowed measurement
+            const delta = canvas.sumX - before;
+            const s = c.__stats();
+            c.destroy();
+            return { delta, s };
+        };
+        const err = capture(() => {
+            const A = recycleThenMeasure(3, undefined);          // history armed 3, measure DEFAULT (off, 1)
+            const B = recycleThenMeasure(undefined, undefined);  // history default, measure DEFAULT -- symmetric
+            check(B.s.aliveActual === 1 && B.s.aliveGetter === 1, () =>
+                `T3 A17: __stats after the recycled measurement burst shows getter=${B.s.aliveGetter} actual=${B.s.aliveActual}, expected 1`);
+            check(A.delta === B.delta, () =>
+                `T3 A17: a recycled slot leaked a stale swayRate -- windowed sumX delta ${A.delta} != control ${B.delta}`);
+            // Non-vacuous: MEASURE armed (swayRate:3) on B's history -> a DIFFERENT windowed sumX delta.
+            const C = recycleThenMeasure(undefined, 3);
+            check(C.delta !== B.delta, () =>
+                `T3 A17: swayRate:3 did not change the swing delta vs the default (${C.delta} == ${B.delta}) -- the witness is vacuous`);
+        });
+        check(err === null, () => `T3 A17: threw ${err && err.message}`);
+    }
+
     check(pointerListenerCount() === baseListeners,
         () => `T3: tier leaked ${pointerListenerCount() - baseListeners} pointer listener(s) overall`);
 }

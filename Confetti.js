@@ -1,9 +1,30 @@
 /**
- * @zakkster/lite-confetti v1.26.0 -- Deterministic Confetti Engine
+ * @zakkster/lite-confetti v1.27.0 -- Deterministic Confetti Engine
  *
  * The confetti library that canvas-confetti wishes it was.
  * Deterministic (seeded), zero-GC hot path, OKLCH colors,
  * reduced-motion aware, composable with lite-timeline.
+ *
+ * v1.27.0 adds: `swayRate` -- the sway SWING-FREQUENCY knob to `sway`'s depth, the exact house mirror of
+ * `sway:swayRate :: flutter:flutterRate` and the third member of the speed-knob family (flutter:flutterRate,
+ * gust:gustRate, sway:swayRate). `sway` (v1.3.0) is a per-particle horizontal OSCILLATION whose DEPTH is
+ * tunable (`sway: 0..1`) but whose FREQUENCY has been baked to whatever `pool.tilt` advances at since it
+ * shipped -- so a lazy paper-drift and a fast shimmy-drift were the same knob. `swayRate` (opt-in scalar,
+ * default `1` = off) scales the sway swing phase about the stored birth pivot `tilt0` (the SAME pivot
+ * flutterRate reads), feeding ONLY the sway x term: `3` swings three times as fast, `0.3` a long lazy drift,
+ * `0` FREEZES the phase at each piece's own birth tilt (a per-particle constant non-zero LEAN, NOT an inert
+ * zero -- the flutterRate:0 analog, and the contrast to gustRate:0 which collapses to sin(0)=0), a NEGATIVE
+ * reverses the swing. Coerced with `num(swayRate, 1)` (the SAME signed helper flutterRate/gustRate use -- a
+ * frequency has a SIGN, so NOT nonneg/clamp01); non-finite/undefined => 1 (off). Default `1` IS Float32-exact
+ * (UNLIKE gustRate's GUST_HZ), so NO fround sentinel -- the flutterRate archetype. The read stays INSIDE the
+ * existing `if (pool.sway[i] !== 0)` guard behind a `!== 1` inner sentinel, so at the default the off-branch
+ * feeds the raw `tilt` verbatim -- BYTE-for-BYTE the shipped v1.3.0 sway write -- and a sway-off burst
+ * reproduces every committed fingerprint for ANY swayRate. A PURE physics scalar: `pool.swrate` is read ONLY
+ * in the sway x term and written ONLY at spawn (unconditional + LOAD-BEARING -- a Float32 zero-init `0` would
+ * mean "frozen lean" on a recycled sway-armed slot); `pool.tilt`/`tilt0` are NEVER written, so turbulence +
+ * flutterRate stay byte-identical. Both burst AND spray honor it; inert when `sway` is 0; inert under reduced
+ * motion. NO harness change (rides the existing out-of-hash `sumX` drift witness). One new Float32 column
+ * (+4 B/particle), zero rng, zero hot-path allocation.
  *
  * v1.26.0 fixes: pool overwrite -> DROP-NEW-WHEN-FULL. The particle pool is a fixed ring buffer;
  * `spawn()` used to advance `head` and overwrite whatever slot it landed on -- even a still-ALIVE
@@ -813,6 +834,7 @@ export function createConfetti(canvas, {
         drag:  new Float32Array(maxParticles),
         flut:  new Float32Array(maxParticles),   // flutter: tumble depth 0..1 (X-scale wobble)
         sway:  new Float32Array(maxParticles),   // sway: horizontal drift amplitude 0..1
+        swrate: new Float32Array(maxParticles),  // sway swing frequency; 1 = as seeded (baked tilt rate) (v1.27.0)
         align: new Float32Array(maxParticles),   // velocity-align blend 0..1 (0 = pure random spin)
         spin0: new Float32Array(maxParticles),   // birth orientation (the pivot spinRate scales about)
         spinRate: new Float32Array(maxParticles), // render-time tumble-speed multiplier; 1 = as seeded
@@ -978,6 +1000,10 @@ export function createConfetti(canvas, {
         pool.drag[i] = config.drag;
         pool.flut[i] = config.flutter;
         pool.sway[i] = config.sway;
+        // Sway swing frequency (v1.27.0). ALWAYS written, never zero-init: a Float32Array default of 0
+        // would mean "frozen sway phase" (a constant lean) on a recycled slot whose sway IS armed (the
+        // default must be 1, not 0), so this is unconditional and LOAD-BEARING, like flutterRate/scaleTo.
+        pool.swrate[i] = config.swayRate;
         pool.align[i] = config.align;   // velocity-align blend (v1.15.0); 0 = pure random spin
         pool.spinRate[i] = config.spinRate;   // render-time tumble-speed multiplier (v1.16.0); 1 = as seeded
         // Size-over-life target (v1.17.0). ALWAYS written, never zero-init: a Float32Array default of 0
@@ -1227,8 +1253,20 @@ export function createConfetti(canvas, {
                 // Sway: paper-like side-to-side drift, opt-in. Guarded so the default
                 // (sway == 0) leaves positions byte-identical to pre-1.3.0 -- the committed
                 // determinism fingerprint depends on this branch never firing by default.
+                // swayRate (v1.27.0) is the SPEED knob to sway's DEPTH: it scales the sway swing
+                // phase about the stored birth pivot `tilt0` (the SAME pivot flutterRate reads),
+                // feeding ONLY the sway term. Off (swrate == 1) skips the inner guard and feeds the
+                // raw `tilt` verbatim -- BYTE-for-BYTE the shipped v1.3.0 write. `pool.tilt`/`tilt0`
+                // are NEVER written, so turbulence + flutterRate stay byte-identical. swayRate:0 is a
+                // FROZEN LEAN (phase pinned at tilt0, a per-piece constant non-zero offset), NOT an
+                // inert zero -- the flutterRate:0 analog.
                 if (pool.sway[i] !== 0) {
-                    pool.x[i] += Math.sin(pool.tilt[i]) * pool.sway[i] * SWAY_PX * dtSec;
+                    let swayPhase = pool.tilt[i];
+                    if (pool.swrate[i] !== 1) {
+                        const t0 = pool.tilt0[i];
+                        swayPhase = t0 + (pool.tilt[i] - t0) * pool.swrate[i];
+                    }
+                    pool.x[i] += Math.sin(swayPhase) * pool.sway[i] * SWAY_PX * dtSec;
                 }
 
                 // Walls: the X-min / X-max edges of the bounding box (v1.7.0), the X-axis mirror
@@ -1466,6 +1504,8 @@ export function createConfetti(canvas, {
             // birth-to-death age fraction to ramp -- a piece is drawn once at its birth size. `gustRate`
             // (v1.25.0) is INERT for the same reason as `gust`: the static fan runs no update loop, so the
             // gust vx term is never integrated and there is no swell phase to advance at any frequency.
+            // `swayRate` (v1.27.0) is INERT for the same reason as `sway`: the static fan runs no update loop,
+            // so the sway x term is never integrated and there is no swing phase to scale at any frequency.
             const rotation = rng.next() * TAU;
             // Honour a `shapes` mix in the reduced-motion render too. Single-shape (null)
             // takes no extra rng draw, so the non-mixed static render is unchanged.
@@ -1530,6 +1570,7 @@ export function createConfetti(canvas, {
          * @param {string} [options.emoji]       Emoji character (shape must be 'emoji'); defaults to a party popper
          * @param {number} [options.flutter=1]   Tumble depth 0..1 (0 rigid, 1 full wobble)
          * @param {number} [options.sway=0]      Horizontal drift 0..1 (0 straight fall)
+         * @param {number} [options.swayRate=1]  Sway swing FREQUENCY, the SPEED knob to `sway`'s depth (the mirror `sway:swayRate :: flutter:flutterRate`): `3` swings three times as fast, `0.3` a long lazy drift, `0` FREEZES the phase at each piece's own birth tilt (a per-piece constant LEAN, NOT zero -- the flutterRate:0 analog), a NEGATIVE reverses the swing. Scales the sway swing phase about the stored birth pivot `tilt0` inside the existing `sway !== 0` guard, feeding ONLY the sway x term -- a `!== 1` sentinel keeps the default byte-identical, so a sway-off burst reproduces every fingerprint for ANY swayRate. Coerced with num: a NEGATIVE is legal phase reversal (a frequency has a SIGN, NOT clamped), non-finite => 1 (off), no upper cap. A pure PHYSICS scalar feeding only x -> position; `tilt`/`tilt0` are never written, so turbulence + flutterRate stay byte-identical. Inert when `sway` is 0. Zero-rng; inert under reduced motion
          * @param {number} [options.align=0]     Velocity-align blend 0..1: rotate each piece BROADSIDE to its live velocity (its flat face meets the airflow, like a leaf), 0 = pure random spin, 1 = fully locked. Coerced to [0,1] (non-finite/negative => 0). A pure orientation overlay (rotation only) -- the seeded POSITION stream is byte-identical whether off or on. Zero-rng; inert under reduced motion
          * @param {number} [options.spinRate=1]  Tumble-speed multiplier on the seeded random spin: 0 = rigid at the random birth tilt, 0.3 = slow drift, 2 = double, negative = reverse. A pure RENDER scale, so the seeded POSITION stream is byte-identical off or on, even with `turbulence` armed. Zero-rng; non-finite => 1; inert under reduced motion
          * @param {number} [options.spinDrag=1]  Angular-velocity retention in [0,1] -- the angular mirror of the linear `drag`. Each frame, before the spin advance, `spinV *= spinDrag`, so the tumble decays exactly as `drag` decays translation. `1` = off (default, tumble forever, exactly today's look), `0.95` = settle to a lazy drift, `0` = FREEZE at the birth angle. clamp01: a NEGATIVE clamps to `0` (freeze -- a retention has no direction, unlike spinRate's reverse), non-finite/undefined => `1` (off), > 1 => 1. A contraction (|spinV| never grows), finite with no accel cap. Damps `spinV` only, never `tiltV`. HYBRID physics knob: with turbulence OFF it moves ONLY the render rotation (position byte-identical, rotateHash moves); with turbulence ON the curl reads the slower spin, so it MOVES positions and earns its own hash -- NOT a pure render overlay. Zero-rng; inert under reduced motion
@@ -1583,6 +1624,7 @@ export function createConfetti(canvas, {
                   emoji = DEFAULT_EMOJI,
                   flutter = 1,
                   sway = 0,
+                  swayRate = 1,
                   align = 0,
                   spinRate = 1,
                   spinDrag = 1,
@@ -1696,7 +1738,7 @@ export function createConfetti(canvas, {
                 : (trail === undefined ? trailCap : Math.min(trailCap, Math.floor(nonneg(trail, trailCap))));
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), spinDrag: clamp01(spinDrag, 1), scaleTo: nonneg(scaleTo, 1), scaleFrom: nonneg(scaleFrom, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), fadeOut: clamp01(fadeOut, FADE_OUT_DEF), turbulence, gust, gustRate, trailLen: trailDraw,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), swayRate: num(swayRate, 1), align: clamp01(align, 0), spinRate: num(spinRate, 1), spinDrag: clamp01(spinDrag, 1), scaleTo: nonneg(scaleTo, 1), scaleFrom: nonneg(scaleFrom, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), fadeOut: clamp01(fadeOut, FADE_OUT_DEF), turbulence, gust, gustRate, trailLen: trailDraw,
                 attract, swirl, attractX: vortX, attractY: vortY, settle, friction, wallFriction, lifeRamp,
             };
 
@@ -1762,6 +1804,7 @@ export function createConfetti(canvas, {
          * @param {number} [options.ceiling=-Infinity]   Ceiling Y in CSS px (default none). Opt-in
          * @param {number} [options.flutter=1]      Tumble depth 0..1
          * @param {number} [options.sway=0]         Horizontal drift 0..1
+         * @param {number} [options.swayRate=1]     Sway swing FREQUENCY, the SPEED knob to `sway`'s depth (the mirror `sway:swayRate :: flutter:flutterRate`): `3` swings three times as fast, `0.3` a long lazy drift, `0` freezes the phase at each piece's birth tilt (a per-piece constant LEAN, NOT zero), a NEGATIVE reverses the swing; 1 = as seeded. Scales the sway swing phase about the birth pivot `tilt0` inside the existing `sway !== 0` guard, feeding only x -> position; a `!== 1` sentinel keeps the default byte-identical. Coerced with num: a NEGATIVE is legal phase reversal, non-finite => 1 (off), no upper cap. Inert when `sway` is 0. Zero-rng; inert under reduced motion
          * @param {number} [options.align=0]        Velocity-align blend 0..1: rotate each piece broadside to its live velocity (0 = random spin, 1 = locked). A pure orientation overlay -- the seeded position stream is byte-identical off or on. Zero-rng
          * @param {number} [options.spinRate=1]     Tumble-speed multiplier on the seeded random spin (0 = rigid at the random birth tilt, 0.3 = slow drift, 2 = double, negative = reverse). A pure render scale -- the seeded position stream is byte-identical off or on, even with `turbulence` armed. Zero-rng; non-finite => 1
          * @param {number} [options.spinDrag=1]     Angular-velocity retention in [0,1] -- the angular mirror of the linear `drag`. Each frame, before the spin advance, `spinV *= spinDrag`, so the tumble decays as `drag` decays translation. `1` = off (default), `0.95` = settle to a lazy drift, `0` = FREEZE at the birth angle. clamp01: a NEGATIVE clamps to `0` (freeze -- a retention has no direction), non-finite => `1` (off), > 1 => 1. A contraction (|spinV| never grows), finite with no accel cap. Damps `spinV` only, never `tiltV`. HYBRID physics knob: turbulence OFF moves only the render rotation (position byte-identical); turbulence ON the curl reads the slower spin and MOVES positions -- NOT a pure render overlay. Zero-rng
@@ -1812,6 +1855,7 @@ export function createConfetti(canvas, {
                   emoji = DEFAULT_EMOJI,
                   flutter = 1,
                   sway = 0,
+                  swayRate = 1,
                   align = 0,
                   spinRate = 1,
                   spinDrag = 1,
@@ -1914,7 +1958,7 @@ export function createConfetti(canvas, {
                 : (trail === undefined ? trailCap : Math.min(trailCap, Math.floor(nonneg(trail, trailCap))));
             const config = {
                 sizeMin, sizeMax, lifeMin, lifeMax, gravity, wind, floor, bounce, wallLeft, wallRight, ceiling, drag, shapeId, shapeIds, emoji, colorPick,
-                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), align: clamp01(align, 0), spinRate: num(spinRate, 1), spinDrag: clamp01(spinDrag, 1), scaleTo: nonneg(scaleTo, 1), scaleFrom: nonneg(scaleFrom, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), fadeOut: clamp01(fadeOut, FADE_OUT_DEF), turbulence, gust, gustRate, trailLen: trailDraw,
+                flutter: clamp01(flutter, 1), sway: clamp01(sway, 0), swayRate: num(swayRate, 1), align: clamp01(align, 0), spinRate: num(spinRate, 1), spinDrag: clamp01(spinDrag, 1), scaleTo: nonneg(scaleTo, 1), scaleFrom: nonneg(scaleFrom, 1), flutterRate: num(flutterRate, 1), fadeIn: clamp01(fadeIn, 0), fadeOut: clamp01(fadeOut, FADE_OUT_DEF), turbulence, gust, gustRate, trailLen: trailDraw,
                 attract, swirl, attractX: vortX, attractY: vortY, settle, friction, wallFriction, lifeRamp,
             };
 

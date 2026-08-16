@@ -441,6 +441,27 @@ export async function run() {
             + RETAIN_FLOOR_BPF + ' floor -- the gustRate parameterized-frequency gust term is allocating');
     }
 
+    // (20) A sway-swept live pool (v1.27.0): with sway:1 + swayRate:3 every alive piece runs the sway x term
+    // on the PARAMETERIZED-frequency path -- swayRate:3 != 1, so the `!== 1` inner guard is taken and the
+    // phase is rescaled about tilt0 (`swayPhase = t0 + (tilt - t0) * swrate`), not the byte-identical default
+    // -- INSIDE the measured window. wind:400 arms a sustained drift the swing rides on. It is a Float32 read
+    // + a compare + one subtract/multiply/add + a Math.sin + two multiplies, allocating nothing; the immortal
+    // 1e6 life holds the pool at MAXP so any per-frame allocation on the swayRate path shows as retained
+    // bytes. The drift analog of lane (19)'s gust-swept work, exercising the rewritten sway integrator.
+    const csr = createConfetti(makeCanvas(), { seed: 2701, maxParticles: MAXP });
+    csr.burst({
+        count: MAXP, lifeMin: 1e6, lifeMax: 1e6, sizeMin: 4, sizeMax: 12,
+        sway: 1, swayRate: 3, wind: 400, gravity: 700,
+    });
+    pump(1, 1000); pump(30, 16); // let the swing phase advance for a while before measuring
+    check(csr.count === MAXP, () => `T6: sway-swept pool has ${csr.count} alive, expected ${MAXP}`);
+    const bpfSwayRate = retainedBytesPerCall(() => { pump(1, 16); }, FRAMES);
+    csr.destroy();
+    if (bpfSwayRate > RETAIN_FLOOR_BPF) {
+        die('T6: sway-swept update() retains ' + bpfSwayRate.toFixed(2) + ' B/frame over the '
+            + RETAIN_FLOOR_BPF + ' floor -- the swayRate parameterized-frequency sway term is allocating');
+    }
+
     let budgetOk = true;
     let budgetMsg = '';
     try { assertNoGc(summary, RULES); } catch (e) { budgetOk = false; budgetMsg = e && e.message ? e.message : String(e); }
@@ -467,6 +488,7 @@ export async function run() {
         + bpfWfric.toFixed(2) + ' B/frame from a wall-friction (wall-skid) live pool, '
         + bpfSdrag.toFixed(2) + ' B/frame from a spin-damped (spinDrag + turbulence + flutter) live pool, '
         + bpfScaleFrom.toFixed(2) + ' B/frame from a birth-ramped (scaleFrom + scaleTo + flutter) live pool, '
-        + bpfGustRate.toFixed(2) + ' B/frame from a gust-swept (gust + gustRate) live pool); '
+        + bpfGustRate.toFixed(2) + ' B/frame from a gust-swept (gust + gustRate) live pool, '
+        + bpfSwayRate.toFixed(2) + ' B/frame from a sway-swept (sway + swayRate) live pool); '
         + SOAK + '-frame window no major GC [' + gcLine + ']');
 }

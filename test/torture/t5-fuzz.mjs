@@ -71,6 +71,8 @@ function genOp(prng, allowReseed) {
                 turbulence: (prng() % 2 === 0) ? 0 : (prng() % 800) - 400, // signed wander, half off
                 gust: (prng() % 2 === 0) ? 0 : (prng() % 600) - 300,       // signed gust, half off
                 gustRate: (prng() % 2 === 0) ? undefined : ((prng() % 1601) / 100) - 8, // gust swell frequency, half at the default (off); else signed [-8,8], physics (steers vx), zero-rng (rides the hash/sumX channel)
+                sway: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100,       // horizontal drift depth 0..1, half off
+                swayRate: (prng() % 2 === 0) ? 1 : ((prng() % 601) / 100) - 3, // sway swing frequency, half at 1 (off); else signed [-3,3], physics (steers x), zero-rng (rides the hash/sumX channel; non-vacuous only when sway is armed above)
                 attract: (prng() % 2 === 0) ? 0 : (prng() % 20) - 10,      // signed spring, half off
                 swirl: (prng() % 2 === 0) ? 0 : (prng() % 20) - 10,        // signed swirl, half off
                 attractX: 100 + (prng() % 500), attractY: 50 + (prng() % 400), // jittered center
@@ -109,6 +111,8 @@ function genOp(prng, allowReseed) {
                 turbulence: (prng() % 2 === 0) ? 0 : (prng() % 800) - 400,
                 gust: (prng() % 2 === 0) ? 0 : (prng() % 600) - 300,
                 gustRate: (prng() % 2 === 0) ? undefined : ((prng() % 1601) / 100) - 8, // gust swell frequency, half at the default (off); else signed [-8,8], spray honors it, zero-rng (rides the hash/sumX channel)
+                sway: (prng() % 2 === 0) ? 0 : (prng() % 101) / 100,       // horizontal drift depth 0..1, half off
+                swayRate: (prng() % 2 === 0) ? 1 : ((prng() % 601) / 100) - 3, // sway swing frequency, half at 1 (off); else signed [-3,3], spray honors it, zero-rng (rides the hash/sumX channel; non-vacuous only when sway is armed above)
                 attract: (prng() % 2 === 0) ? 0 : (prng() % 20) - 10,
                 swirl: (prng() % 2 === 0) ? 0 : (prng() % 20) - 10,
                 attractX: 100 + (prng() % 500), attractY: 50 + (prng() % 400),

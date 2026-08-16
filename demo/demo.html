@@ -681,6 +681,8 @@
                 <button class="btn" id="wallSkidBtn">🧱 Wall skid</button>
                 <button class="btn" id="fastGustBtn">💨 Fast gust</button>
                 <button class="btn" id="slowSwellBtn">🌊 Slow swell</button>
+                <button class="btn" id="fastSwayBtn">🍃 Fast sway</button>
+                <button class="btn" id="lazyDriftBtn">🍂 Lazy drift</button>
             </div>
             <div class="btn-row">
                 <button class="btn" id="followBtn" aria-pressed="false">🧲 Follow</button>
@@ -740,6 +742,8 @@
     const $fadeOutBtn = document.getElementById('fadeOutBtn');
     const $fastGustBtn = document.getElementById('fastGustBtn');
     const $slowSwellBtn = document.getElementById('slowSwellBtn');
+    const $fastSwayBtn = document.getElementById('fastSwayBtn');
+    const $lazyDriftBtn = document.getElementById('lazyDriftBtn');
     const $skidBtn = document.getElementById('skidBtn');
     const $wallSkidBtn = document.getElementById('wallSkidBtn');
     const $followBtn = document.getElementById('followBtn');
@@ -1110,6 +1114,16 @@
     });
     $slowSwellBtn.addEventListener('click', () => {
         c.burst({ gust: 500, gustRate: 0.5, gravity: 120, count: 140, lifeMin: 3, lifeMax: 4 });
+    });
+
+    // Sway swing frequency (v1.27.0). Same sway DEPTH, different SPEED: Fast sway shimmies each piece
+    // side to side several times as fast (swayRate 3), Lazy drift is a long slow paper-drift (swayRate 0.3).
+    // swayRate scales the swing phase about each piece's birth tilt; light gravity + long life keep it visible.
+    $fastSwayBtn.addEventListener('click', () => {
+        c.burst({ sway: 1, swayRate: 3, gravity: 120, count: 140, lifeMin: 3, lifeMax: 4 });
+    });
+    $lazyDriftBtn.addEventListener('click', () => {
+        c.burst({ sway: 1, swayRate: 0.3, gravity: 120, count: 140, lifeMin: 3, lifeMax: 4 });
     });
 
     // Follow-spray: a continuous stream that chases the pointer (v1.2.0 followPointer).

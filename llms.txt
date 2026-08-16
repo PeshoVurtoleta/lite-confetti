@@ -1,6 +1,6 @@
 # @zakkster/lite-confetti
 
-> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, turbulence + gust (time-varying living-air forces), a vortex/attractor point force (attract + swirl), a full bounding box (floor + walls + ceiling) with bounce, settle-and-pile (rest-threshold freeze on the floor), tangential floor friction (skid-to-rest), tangential wall/ceiling friction (grip on the box's three non-floor edges), zero-GC motion trails (fading ribbons), color-over-life ramps (multi-stop OKLCH per-life gradients), spawn emitter shapes (line curtain / ring shell / box area), staggered emission (a burst cascades in over a ms window), velocity-aligned orientation (pieces bank broadside to their flight, like leaves), tunable tumble speed (slow drift to reverse spin), size-over-life ramps with a tunable BIRTH endpoint (a two-endpoint size envelope: bloom-in / shrink-out / born-big-settles), tunable wobble speed (lazy flutter to fast shimmer), birth-opacity ramps (materialize-in), a tunable death-fade window (dissolve-out timing), angular drag (tumble decay -- the angular mirror of drag), tunable gust swell frequency (the speed knob to gust's depth -- a fast breeze to a slow ocean roll, the mirror of flutterRate), reduced-motion support, and timeline composability.
+> Deterministic confetti engine with OKLCH colors, 5 built-in shapes + custom registerShape() shapes (vector or sprite), per-particle multi-shape mixing, tunable flutter/sway, lateral wind, turbulence + gust (time-varying living-air forces), a vortex/attractor point force (attract + swirl), a full bounding box (floor + walls + ceiling) with bounce, settle-and-pile (rest-threshold freeze on the floor), tangential floor friction (skid-to-rest), tangential wall/ceiling friction (grip on the box's three non-floor edges), zero-GC motion trails (fading ribbons), color-over-life ramps (multi-stop OKLCH per-life gradients), spawn emitter shapes (line curtain / ring shell / box area), staggered emission (a burst cascades in over a ms window), velocity-aligned orientation (pieces bank broadside to their flight, like leaves), tunable tumble speed (slow drift to reverse spin), size-over-life ramps with a tunable BIRTH endpoint (a two-endpoint size envelope: bloom-in / shrink-out / born-big-settles), tunable wobble speed (lazy flutter to fast shimmer), birth-opacity ramps (materialize-in), a tunable death-fade window (dissolve-out timing), angular drag (tumble decay -- the angular mirror of drag), tunable gust swell frequency (the speed knob to gust's depth -- a fast breeze to a slow ocean roll, the mirror of flutterRate), tunable sway swing frequency (the speed knob to sway's drift -- a lazy paper-drift to a fast shimmy, or a swing frozen at birth), reduced-motion support, and timeline composability.
 
 ## Installation
 npm install @zakkster/lite-confetti
@@ -58,6 +58,7 @@ Full control instance bound to a specific canvas.
 | `emoji` | party popper | Emoji character (when shape is 'emoji') |
 | `flutter` | 1 | Tumble depth 0–1 (0 rigid, 1 classic wobble). Scale only — never moves a particle. |
 | `sway` | 0 | Horizontal drift 0–1 (0 straight fall). Opt-in side-to-side motion. |
+| `swayRate` | 1 | Sway SWING FREQUENCY -- the speed knob to `sway`'s depth (mirror `sway:swayRate :: flutter:flutterRate`). `3` swings three times as fast, `0.3` a long lazy drift, `0` FREEZES the phase at each piece's own birth tilt (a per-particle constant LEAN, NOT an inert zero -- the flutterRate:0 analog, contrast gustRate:0's sin(0)=0 collapse), negative reverses the swing. Scales the sway swing phase about the birth pivot `tilt0` only inside the `sway != 0` branch behind a `!= 1` sentinel (a sway-off burst is byte-identical for any value); `num`-coerced (signed -- a frequency has a direction), non-finite => 1 (off), no upper cap; the default 1 IS Float32-exact so NO fround sentinel (the flutterRate archetype). Reads `tilt`/`tilt0` read-only and writes nothing but `x`, so turbulence + flutterRate stay byte-identical. Inert when `sway` is 0. Honored by burst AND spray. Opt-in; zero-rng; fingerprint-safe (v1.27.0) |
 | `turbulence` | 0 | Per-particle rotating acceleration (px/s²) for organic wander (fans the pool). Opt-in; zero-rng; fingerprint-safe (v1.8.0) |
 | `gust` | 0 | Global sinusoidal horizontal acceleration (px/s²) layered on wind (~3s swells). Opt-in; zero-rng; fingerprint-safe (v1.8.0) |
 | `gustRate` | `GUST_HZ` | Gust SWELL FREQUENCY -- the speed knob to `gust`'s depth (mirror `gust:gustRate :: flutter:flutterRate`). `6` fast breeze, `0.5` a long ocean roll, `0` freezes the phase (inert), negative reverses it. Read only inside the `gust != 0` branch (a gust-off burst is byte-identical for any value); `num`-coerced (signed -- a frequency has a direction), non-finite => the default (off), no upper cap; a fround sentinel keeps the default byte-identical. Opt-in; zero-rng; fingerprint-safe (v1.25.0) |
@@ -93,7 +94,7 @@ Particles rotate via `spin` (angular velocity applied each frame). The `spinV` i
 - SoA flat TypedArrays for cache-friendly particle physics
 - Deterministic: `seed(42)` produces identical output every time
 - 5 built-in shapes (rect, circle, star, triangle, emoji) + `registerShape()` for custom vector/sprite shapes
-- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + turbulence/gust (time-varying living-air forces) + vortex/attractor (attract + swirl point force) + a full bounding box (floor/walls/ceiling) with bounce + settle-and-pile (rest-threshold freeze on the floor) + tangential floor friction (a landed piece skids to rest -- the horizontal complement to bounce) + tangential wall/ceiling friction (a piece grips and slows along any non-floor box edge -- the tangential analog to the box's shared bounce) + color-over-life (multi-stop OKLCH ramp swept over each particle's life) + spawn emitter shapes (line curtain / ring shell / box area) + staggered emission (a burst cascades in over a ms window) + velocity-aligned orientation (pieces bank broadside to their flight) + tunable tumble speed (slow drift to reverse spin) + size-over-life with a tunable BIRTH endpoint (scaleFrom + scaleTo: a two-endpoint size envelope -- bloom from a fraction, start big and settle, shrink out, or a constant multiplier) + tunable wobble speed (lazy flutter to fast shimmer, or a wobble frozen at birth) + birth-opacity ramps (each piece materializes in, fading up from transparent over the first fraction of its life) + a tunable death-fade window (dissolve-out timing -- long gentle dissolve, quick blink-out, or hard cut; the mirror of fade-in, completing the opacity envelope) + angular drag (spinDrag: the tumble decays each frame as the linear drag decays translation -- the last unmirrored asymmetry in the integrator), all deterministic
+- Tunable flutter (tumble depth) + sway (horizontal drift) + wind (lateral drift) + turbulence/gust (time-varying living-air forces) + vortex/attractor (attract + swirl point force) + a full bounding box (floor/walls/ceiling) with bounce + settle-and-pile (rest-threshold freeze on the floor) + tangential floor friction (a landed piece skids to rest -- the horizontal complement to bounce) + tangential wall/ceiling friction (a piece grips and slows along any non-floor box edge -- the tangential analog to the box's shared bounce) + color-over-life (multi-stop OKLCH ramp swept over each particle's life) + spawn emitter shapes (line curtain / ring shell / box area) + staggered emission (a burst cascades in over a ms window) + velocity-aligned orientation (pieces bank broadside to their flight) + tunable tumble speed (slow drift to reverse spin) + size-over-life with a tunable BIRTH endpoint (scaleFrom + scaleTo: a two-endpoint size envelope -- bloom from a fraction, start big and settle, shrink out, or a constant multiplier) + tunable wobble speed (lazy flutter to fast shimmer, or a wobble frozen at birth) + birth-opacity ramps (each piece materializes in, fading up from transparent over the first fraction of its life) + a tunable death-fade window (dissolve-out timing -- long gentle dissolve, quick blink-out, or hard cut; the mirror of fade-in, completing the opacity envelope) + angular drag (spinDrag: the tumble decays each frame as the linear drag decays translation -- the last unmirrored asymmetry in the integrator) + tunable sway swing frequency (swayRate: the speed knob to sway's drift -- a lazy paper-drift to a fast shimmy, or a swing frozen at each piece's birth tilt; the mirror of flutterRate), all deterministic
 - Motion trails (v1.9.0): opt-in fading ribbons via a zero-GC fixed ring buffer; a pure render overlay (world-space stroke, never translate) so every physics fingerprint is preserved
 - OKLCH colors (perceptually uniform — every piece looks equally vibrant)
 - Reduced motion: auto-detects `prefers-reduced-motion: reduce`, renders static spread, fades out
@@ -201,7 +202,8 @@ cheaper than the switch. T6 measures a live pool of a custom vector shape + a sp
 flutter (0..1, default 1): tumble depth via X-scale, wobbleScale = 1 - flutter*0.5*(1-|cos(tilt)|).
 flutter=1 reproduces the pre-1.3.0 wobble exactly; flutter=0 is rigid. Scale-only, so it never
 changes the translate fingerprint at any value. sway (0..1, default 0): horizontal drift
-x += sin(tilt)*sway*60*dt, guarded so default (0) keeps byte-identical straight-fall positions.
+x += sin(tilt)*sway*60*dt, guarded so default (0) keeps byte-identical straight-fall positions
+(v1.27.0's `swayRate` makes the baked swing rate tunable -- see below).
 Both are per-particle Float32Array columns set at spawn (no hot-path alloc) and, unlike the
 physics numerics, are validated (non-finite clamps to the default -- a NaN knob never yields a
 NaN position).
@@ -460,6 +462,49 @@ finiteness case (the accel cap). Torture T5 threads signed attract/swirl + a jit
 the differential fuzz; T6 lane 5 arms a stable positive attract+swirl on the immortal pool; T1 adds
 attract/swirl/center poison AND strong finite-life repellers under the finite-position detector.
 See decision 0011. No runtime dep change. Unit suite 122 -> 132.
+
+## v1.27.0 -- swayRate / sway swing frequency
+
+The SWING FREQUENCY of `sway`, the speed knob to its depth. Since v1.3.0 `sway` has been a per-particle
+horizontal OSCILLATION (`x += sin(tilt) * sway * SWAY_PX * dt`) with a tunable DEPTH (`sway: 0..1`) but a
+hardcoded FREQUENCY -- the swing rate was whatever `pool.tilt` advanced at -- so a lazy paper-drift and a
+fast shimmy-drift were the same knob. `swayRate` (opt-in scalar, default `1` = off) scales the sway swing
+phase about the stored birth pivot `tilt0` (the SAME pivot `flutterRate` reads), feeding ONLY the sway `x`
+term: `3` swings three times as fast, `0.3` a long lazy drift, `0` FREEZES the phase at each piece's own
+birth tilt, a NEGATIVE reverses the swing. It is the exact house mirror `sway:swayRate :: flutter:flutterRate`,
+completing the speed-knob family (flutter:flutterRate, gust:gustRate, sway:swayRate).
+
+The flutterRate archetype, NOT the gustRate one: coerced with `num(swayRate, 1)` (signed -- a frequency has
+a direction, so a NEGATIVE is legal phase reversal, NOT clamped; non-finite/undefined => 1 off, no upper
+cap), and because the default `1` IS Float32-exact there is NO fround sentinel -- the off-path is a plain
+`swrate != 1` compare. At the default the inner guard is skipped and the write is the raw
+`Math.sin(pool.tilt[i]) * pool.sway[i] * SWAY_PX * dtSec` -- byte-for-byte the shipped v1.3.0 sway line. The
+read stays INSIDE the existing `if (pool.sway[i] != 0)` guard, so a sway-off burst (the default) reproduces
+every committed fingerprint for ANY swayRate.
+
+The distinguishing wrinkle: NO committed fingerprint rode the sway integrator before this release (`sway`
+defaults to 0). The off-proof (`run({sway:1,swayRate:1}).hash == run({sway:1}).hash`) is unfalsifiable
+without a baseline, so this chapter MINTS `SWAY_HASH = 1887116762` on the canonical rig BEFORE the edit --
+the only chapter to date whose off-proof baseline did not already exist.
+
+`swayRate:0` is a FROZEN LEAN, not an inert zero (the gustRate contrast): sway's phase is
+`tilt0 + (tilt - tilt0) * swayRate`, so `swayRate:0 -> swayPhase = tilt0`, giving
+`x += sin(tilt0) * sway * SWAY_PX * dt` -- a per-particle CONSTANT non-zero lean (varied by the random birth
+tilt). So `run({sway:1,swayRate:0}).hash = 1963198227` is a DISTINCT reproducible fingerprint, mirroring
+`flutterRate:0` -- do NOT expect the `gustRate:0 -> sin(0)=0` collapse here.
+
+PURE physics scalar: `pool.swrate` is read in EXACTLY one place (the sway `x` term) and written ONLY at
+spawn (unconditional + LOAD-BEARING -- a Float32 zero-init 0 would mean "frozen lean" on a recycled
+sway-armed slot; off is 1, not 0). `pool.tilt`/`tilt0` are NEVER written, so the turbulence curl +
+flutterRate wobble stay byte-identical. A sway-armed rig moves ONLY the position `hash` + drift `sumX`;
+rotate/scale/alpha/color/stroke are byte-identical. New committed `SWAYRATE_HASH = 3473529279`
+(`run({sway:1,swayRate:3})`), cross-process stable. One new Float32 column `swrate` (+4 B/particle,
+174 -> 178 B), zero rng, zero hot-path allocation. NO `_env.mjs` change (rides the existing out-of-hash
+`sumX` witness). Both burst AND spray honor it; inert when `sway` is 0; inert under reduced motion.
+
+Tests 285 -> 296 (a `swayRate / sway swing frequency` suite); t1 gains a swayRate poison lane, t3 the A17
+windowed symmetric-history sumX-delta retention proof, t5 threads a random sway + swayRate through the
+burst + spray differential, t6 adds a sway-swept immortal-pool alloc lane. No `_env.mjs` change.
 
 ## v1.26.0 -- pool overwrite fix (drop-new-when-full)
 

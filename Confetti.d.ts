@@ -125,6 +125,18 @@ export interface BurstOptions {
     /** Horizontal drift 0..1 (0 straight fall). Default 0. */
     sway?: number;
     /**
+     * Sway swing FREQUENCY: the SPEED knob to `sway`'s depth (the mirror
+     * `sway:swayRate :: flutter:flutterRate`). `3` swings three times as fast,
+     * `0.3` a long lazy drift, `0` FREEZES the phase at each piece's own birth tilt
+     * (a per-particle constant LEAN, NOT an inert zero -- the flutterRate:0 analog),
+     * a NEGATIVE reverses the swing; `1` = as seeded (default). Scales the sway swing
+     * phase about the birth pivot `tilt0` inside the existing `sway !== 0` guard,
+     * feeding ONLY the x term -- `tilt`/`tilt0` are never written, so turbulence and
+     * flutterRate stay byte-identical. num-coerced (signed: a frequency has a sign, so
+     * NOT clamped); non-finite/undefined => 1 (off). Inert when `sway` is 0.
+     */
+    swayRate?: number;
+    /**
      * Velocity-aligned orientation, a 0..1 blend. `0` (default) is pure random tumble; `1` rotates
      * each piece BROADSIDE to its LIVE velocity (`atan2(vy, vx) + PI/2`), so its flat face meets the
      * airflow like a falling leaf, re-banking every frame as forces bend the path; partial values

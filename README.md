@@ -105,6 +105,7 @@ Every parameter is optional. Sensible defaults produce a beautiful upward confet
 | `emoji` | string | party popper | Emoji character (only used when `shape` is `'emoji'`) |
 | `flutter` | number | 1 | Tumble depth, 0–1. `1` = full wobble (classic), `0` = rigid. Affects scale only, never position. |
 | `sway` | number | 0 | Horizontal drift, 0–1. `0` = straight fall; higher values sway side-to-side like real paper. |
+| `swayRate` | number | `1` | Sway **swing frequency** — the speed knob to `sway`'s depth (the mirror `sway:swayRate :: flutter:flutterRate`). `3` swings three times as fast, `0.3` a long lazy drift, `0` freezes the phase at each piece's random birth tilt (a per-particle **constant lean**, *not* inert — contrast `gustRate:0`, which collapses to `sin(0) = 0`), a **negative** reverses the swing. Coerced with `num` (signed — a frequency has a direction): non-finite → `1` (off); no upper cap. **Inert when `sway` is 0** (read only inside the `sway != 0` branch, so a sway-off burst is byte-identical for any value). A **physics** knob (it moves the position fingerprint) that reads `tilt`/`tilt0` read-only and writes nothing but `x`, so `turbulence` and `flutterRate` stay byte-identical. Honored by `burst()` **and** `spray()`; zero-rng; inert under reduced motion. |
 | `turbulence` | number | 0 | Per-particle rotating acceleration in px/s² — organic wander, so a burst fans out and mills. Opt-in; `0` = none. Draws no rng. See [Living air](#living-air). |
 | `gust` | number | 0 | Global oscillating horizontal acceleration in px/s² layered on `wind` — the whole burst swells side to side in ~3s waves. Opt-in; `0` = none. See [Living air](#living-air). |
 | `gustRate` | number | `GUST_HZ` | Gust **swell frequency** — the speed knob to `gust`'s depth (the mirror `gust:gustRate :: flutter:flutterRate`). `6` triples the swell rate (a fast breeze), `0.5` a long ocean roll, `0` freezes the phase (inert — the gust force collapses to `sin(0) = 0`), a **negative** reverses the phase (the breeze leans the other way first). Default `GUST_HZ` (= `TAU/3`, today's baked ~3s swell). Read only inside the `gust != 0` branch, so a gust-off burst is byte-identical for any value. Coerced with `num` (signed — a frequency has a direction): non-finite → the default (off); no upper cap. A **physics** knob (it moves the position fingerprint). Honored by `burst()` **and** `spray()`; zero-rng; inert under reduced motion. See [Living air](#living-air). |
@@ -802,33 +803,34 @@ The pool is `maxParticles` wide. Per particle, the **always-on** columns cost a 
 | `drag` | Float32 | 4 | 84 |
 | `flut` | Float32 | 4 | 88 |
 | `sway` | Float32 | 4 | 92 |
-| `align` | Float32 | 4 | 96 |
-| `spin0` | Float32 | 4 | 100 |
-| `spinRate` | Float32 | 4 | 104 |
-| `scaleTo` | Float32 | 4 | 108 |
-| `scaleFrom` | Float32 | 4 | 112 |
-| `tilt0` | Float32 | 4 | 116 |
-| `flutterRate` | Float32 | 4 | 120 |
-| `fadeIn` | Float32 | 4 | 124 |
-| `fadeOut` | Float32 | 4 | 128 |
-| `turb` | Float32 | 4 | 132 |
-| `gust` | Float32 | 4 | 136 |
-| `grate` | Float32 | 4 | 140 |
-| `vortX` | Float32 | 4 | 144 |
-| `vortY` | Float32 | 4 | 148 |
-| `attract` | Float32 | 4 | 152 |
-| `swirl` | Float32 | 4 | 156 |
-| `settle` | Float32 | 4 | 160 |
-| `friction` | Float32 | 4 | 164 |
-| `wfric` | Float32 | 4 | 168 |
-| `delay` | Float32 | 4 | 172 |
-| `landed` | Uint8 | 1 | 173 |
-| `shape` | Uint8 | 1 | 174 |
-| **always-on total** | **43×F32 + 2×U8** | **174** | **174** |
+| `swrate` | Float32 | 4 | 96 |
+| `align` | Float32 | 4 | 100 |
+| `spin0` | Float32 | 4 | 104 |
+| `spinRate` | Float32 | 4 | 108 |
+| `scaleTo` | Float32 | 4 | 112 |
+| `scaleFrom` | Float32 | 4 | 116 |
+| `tilt0` | Float32 | 4 | 120 |
+| `flutterRate` | Float32 | 4 | 124 |
+| `fadeIn` | Float32 | 4 | 128 |
+| `fadeOut` | Float32 | 4 | 132 |
+| `turb` | Float32 | 4 | 136 |
+| `gust` | Float32 | 4 | 140 |
+| `grate` | Float32 | 4 | 144 |
+| `vortX` | Float32 | 4 | 148 |
+| `vortY` | Float32 | 4 | 152 |
+| `attract` | Float32 | 4 | 156 |
+| `swirl` | Float32 | 4 | 160 |
+| `settle` | Float32 | 4 | 164 |
+| `friction` | Float32 | 4 | 168 |
+| `wfric` | Float32 | 4 | 172 |
+| `delay` | Float32 | 4 | 176 |
+| `landed` | Uint8 | 1 | 177 |
+| `shape` | Uint8 | 1 | 178 |
+| **always-on total** | **44×F32 + 2×U8** | **178** | **178** |
 
-The render-orientation / render-scale / render-opacity family added over v1.15.0–v1.24.0 is nine of those columns — `align` + `spin0` + `spinRate` + `scaleTo` + `scaleFrom` + `tilt0` + `flutterRate` + `fadeIn` + `fadeOut` = 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 = **36 B/particle** — each a birth pivot or a render-time multiplier that never enters `ctx.translate`, so they cost bytes but move no fingerprint. `scaleFrom` (v1.24.0) is the birth endpoint of the size ramp `scaleTo` targets — the two now fold a two-endpoint size envelope into one `ctx.scale`, still touching no position. `fadeIn` (birth) and `fadeOut` (death) now bracket the full opacity envelope on one shared `alpha`. `friction` (v1.21.0) is a **physics** column — the tangential complement to `bounce`, damping `vx` on each floor contact — so unlike those nine it *does* move the position fingerprint. `wfric` (`wallFriction`, v1.22.0) is a second physics column — the same tangential drag on the box's three non-floor edges (ceiling damps `vx`, walls damp `vy`) — so it, too, moves the fingerprint. `sdrag` (`spinDrag`, v1.23.0) is a third — the angular mirror of `drag`, damping `spinV` every frame — which moves the fingerprint only when `turbulence` is armed (the sole path that couples `spin` back into position). `grate` (`gustRate`, v1.25.0) is a fourth physics column — the swell frequency parameterizing the baked `GUST_HZ` in the gust `vx` term — read only when `gust` is armed and, like the others, moving the position fingerprint (never a render channel).
+The render-orientation / render-scale / render-opacity family added over v1.15.0–v1.24.0 is nine of those columns — `align` + `spin0` + `spinRate` + `scaleTo` + `scaleFrom` + `tilt0` + `flutterRate` + `fadeIn` + `fadeOut` = 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 = **36 B/particle** — each a birth pivot or a render-time multiplier that never enters `ctx.translate`, so they cost bytes but move no fingerprint. `scaleFrom` (v1.24.0) is the birth endpoint of the size ramp `scaleTo` targets — the two now fold a two-endpoint size envelope into one `ctx.scale`, still touching no position. `fadeIn` (birth) and `fadeOut` (death) now bracket the full opacity envelope on one shared `alpha`. `friction` (v1.21.0) is a **physics** column — the tangential complement to `bounce`, damping `vx` on each floor contact — so unlike those nine it *does* move the position fingerprint. `wfric` (`wallFriction`, v1.22.0) is a second physics column — the same tangential drag on the box's three non-floor edges (ceiling damps `vx`, walls damp `vy`) — so it, too, moves the fingerprint. `sdrag` (`spinDrag`, v1.23.0) is a third — the angular mirror of `drag`, damping `spinV` every frame — which moves the fingerprint only when `turbulence` is armed (the sole path that couples `spin` back into position). `grate` (`gustRate`, v1.25.0) is a fourth physics column — the swell frequency parameterizing the baked `GUST_HZ` in the gust `vx` term — read only when `gust` is armed and, like the others, moving the position fingerprint (never a render channel). `swrate` (`swayRate`, v1.27.0) is a fifth physics column — the sway swing frequency scaling the swing phase about the birth pivot `tilt0` in the sway `x` term — read only when `sway` is armed and, like the others, moving the position fingerprint (never a render channel); it reads `tilt`/`tilt0` read-only and writes nothing but `x`, so turbulence and `flutterRate` stay byte-identical.
 
-Two more classes sit **outside** the always-on 174 B:
+Two more classes sit **outside** the always-on 178 B:
 
 | Buffer | Type | B/particle | When |
 |---|---|---:|---|
@@ -845,7 +847,7 @@ The trail ring buffers are allocated **only** when the instance is built with a 
 The gated quality numbers the torture harness commits, so a regression fails CI as loudly as a leak:
 
 - **Alloc gate.** `update()` over a **full `maxParticles` pool** — including a custom vector shape, an image sprite, the living-air forces, and a trailed pool — retains **~0 B/frame**, measured against a retained-bytes floor of **8.0 B/frame** (`RETAIN_FLOOR_BPF`). A per-frame-allocating control provably exceeds it.
-- **Determinism.** Every feature-off path preserves the committed default determinism fingerprint **`1569828004`** byte-for-byte (each opt-in feature — wind, floor, box, living air, trails, vortex, settle, life colors, emit, stagger, align, spinRate, scaleTo, scaleFrom, flutterRate, fadeIn, fadeOut, friction, wallFriction, spinDrag, gustRate — carries its own committed fingerprint when on, and leaves the default untouched when off).
+- **Determinism.** Every feature-off path preserves the committed default determinism fingerprint **`1569828004`** byte-for-byte (each opt-in feature — wind, floor, box, living air, trails, vortex, settle, life colors, emit, stagger, align, spinRate, scaleTo, scaleFrom, flutterRate, fadeIn, fadeOut, friction, wallFriction, spinDrag, gustRate, swayRate — carries its own committed fingerprint when on, and leaves the default untouched when off).
 - **GC budget.** The full-pool loop runs under `@zakkster/lite-gc-profiler` with `maxMajor: 0` and 0 retained bytes under `@zakkster/lite-leak`, all under `--expose-gc`.
 
 </details>
@@ -854,10 +856,10 @@ The gated quality numbers the torture harness commits, so a regression fails CI 
 
 ## Testing
 
-**285 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
+**296 deterministic tests, all pass** (`node:test`), plus a torture gate that proves both leak-freedom and the zero-alloc + determinism claims.
 
 ```bash
-npm test          # 285 node:test cases (contract + boundary + fingerprint)
+npm test          # 296 node:test cases (contract + boundary + fingerprint)
 npm run torture   # @zakkster/lite-leak + lite-gc-profiler under --expose-gc
 npm run verify    # test + torture, the publish gate
 ```

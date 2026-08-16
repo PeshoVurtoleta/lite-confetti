@@ -66,6 +66,20 @@ const TURBGUST_HASH = 15761758; // turbulence: 500 + gust: 400
 // with the default swell) and from gustRate:3 (probed on the gust-armed seed-12345 rig below).
 const GUSTRATE_HASH = 870603509; // gust: 400 + gustRate: 6 (fast breeze)
 
+// sway (v1.3.0): the horizontal side-to-side OSCILLATION. NO committed fingerprint rode the sway
+// integrator before v1.27.0 (sway defaults 0, so COMMITTED_HASH never exercised the sway x term),
+// so this baseline is MINTED here on the canonical seed-12345 rig -- swayRate's off-proof
+// (run({sway:1,swayRate:1}).hash === run({sway:1}).hash === SWAY_HASH) is unfalsifiable without it.
+const SWAY_HASH = 1887116762;     // sway: 1 (armed depth, default swing rate)
+
+// swayRate (v1.27.0): the swing-FREQUENCY knob to sway's depth, the flutterRate archetype (num-coerced,
+// default 1 IS Float32-exact so NO fround sentinel; the read is gated behind a `!== 1` sentinel inside
+// the existing `sway !== 0` guard). Draws NO rng (a pure function of the seeded tilt phase + the
+// per-particle swrate), so it is cross-process stable and its own replay gate. Distinct from SWAY_HASH
+// (default swing) and from SWAYRATE_ZERO_HASH (the FROZEN LEAN, phase pinned at tilt0 -- NOT inert-zero).
+const SWAYRATE_HASH = 3473529279; // sway: 1 + swayRate: 3 (fast shimmy)
+const SWAYRATE_ZERO_HASH = 1963198227; // sway: 1 + swayRate: 0 (frozen lean at the birth tilt)
+
 // Committed fingerprint for the trail GEOMETRY (v1.9.0) -- the strokeHash of the mock ctx, which
 // accumulates only stroked (trail) paths and is kept entirely out of the position `hash`. Trails
 // are a pure RENDER overlay (they draw via moveTo/lineTo/stroke, never translate), so the POSITION
@@ -3272,6 +3286,191 @@ describe('lite-confetti', () => {
             // reproduces the gust-default GUST_HASH exactly (the off look).
             for (const gr of [NaN, Infinity, -Infinity, '6', null, {}, undefined]) {
                 assert.equal(run({ gust: 400, gustRate: gr }).hash, GUST_HASH, `gustRate ${JSON.stringify(gr)} must coerce to the default (off)`);
+            }
+        });
+    });
+
+    describe('swayRate / sway swing frequency', () => {
+        // The canonical seed-12345 rig (shared with the gustRate / align / spinRate / scale suites; a plain
+        // run reproduces COMMITTED_HASH). `run` reports the position `hash` (folds only translate), its
+        // drift witness `sumX`, and the render probes kept OUT of the hash. swayRate is the SPEED knob to
+        // sway's DEPTH: it scales the sway swing phase about the birth pivot `tilt0`, feeding ONLY x ->
+        // position. Its headline is that with `sway` off (the DEFAULT) it is byte-identical for ANY value
+        // (the read short-circuits behind `sway !== 0`), and with `sway` armed it moves ONLY hash/sumX --
+        // never a render channel. NO trail is armed, so the sway-off fingerprints match their committed
+        // trail-free baselines. UNLIKE gustRate:0 (an inert zero), swayRate:0 is a FROZEN LEAN.
+        const run = (opts) => {
+            const canvas = makeCanvas({ record: true });
+            const c = createConfetti(canvas, { seed: 12345 });
+            c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+            pump(1, 1000); pump(29, 16);
+            const out = {
+                hash: canvas.hash, sumX: canvas.sumX,
+                rotateHash: canvas.rotateHash, colorHash: canvas.colorHash,
+                scaleHash: canvas.scaleHash, alphaHash: canvas.alphaHash, strokeHash: canvas.strokeHash,
+            };
+            c.destroy();
+            return out;
+        };
+
+        it('is opt-in and fail-closed: sway-armed but swayRate absent/non-finite reproduces SWAY_HASH bit-for-bit (DONE-WHEN 1)', () => {
+            // sway:1 with swayRate absent OR any non-finite/non-numeric (num -> 1) skips the `!== 1` inner
+            // guard, feeding the raw `tilt` verbatim -- the SAME sway x term shipped since v1.3.0. SWAY_HASH
+            // is the freshly-minted baseline (no committed fingerprint rode the sway integrator before now).
+            for (const o of [
+                { sway: 1 },
+                { sway: 1, swayRate: 1 },
+                { sway: 1, swayRate: NaN },
+                { sway: 1, swayRate: Infinity },
+                { sway: 1, swayRate: -Infinity },
+                { sway: 1, swayRate: '3' },
+                { sway: 1, swayRate: null },
+                { sway: 1, swayRate: {} },
+                { sway: 1, swayRate: undefined },
+            ]) {
+                assert.equal(run(o).hash, SWAY_HASH, `swayRate ${JSON.stringify(o)} moved the committed sway stream`);
+            }
+        });
+
+        it('sway-off short-circuits the swrate read entirely for any swayRate (DONE-WHEN 2)', () => {
+            // The read lives INSIDE `if (pool.sway[i] !== 0)`, so with sway off (the DEFAULT) swrate is NEVER
+            // read and any swayRate value reproduces the committed default fingerprint. Also holds for every
+            // prior physics/render fingerprint (swayRate present but sway off perturbs nothing).
+            for (const sr of [3, 0, -3, 1e6]) {
+                assert.equal(run({ swayRate: sr }).hash, COMMITTED_HASH, `sway-off swayRate:${sr} must not move positions`);
+            }
+            assert.equal(run({ floor: FLOOR_Y, swayRate: 3 }).hash, FLOOR_HASH, 'floor fingerprint drifted under swayRate');
+            assert.equal(run({ ...BOX, bounce: 0, swayRate: 3 }).hash, BOX_HASH, 'box fingerprint drifted under swayRate');
+            assert.equal(run({ lifeColors: EMBER, swayRate: 3 }).colorHash, COLOR_HASH, 'color fingerprint drifted under swayRate');
+            assert.equal(run({ align: 1, swayRate: 3 }).rotateHash, ALIGN_HASH, 'align fingerprint drifted under swayRate');
+            assert.equal(run({ gust: 400, gustRate: 6, swayRate: 3 }).hash, GUSTRATE_HASH, 'gustRate fingerprint drifted under swayRate');
+            assert.equal(run({ flutter: 1, flutterRate: 2, swayRate: 3 }).scaleHash, FLUTRATE_HASH, 'flutterRate fingerprint drifted under swayRate');
+        });
+
+        it('FROZEN LEAN, not inert-zero: swayRate:0 pins the phase at the birth tilt (DONE-WHEN 3)', () => {
+            // sway's phase is tilt0 + (tilt - tilt0)*swayRate, so swayRate:0 -> swayPhase = tilt0, giving
+            // x += sin(tilt0)*sway*SWAY_PX*dt -- a per-particle CONSTANT non-zero lean (the flutterRate:0
+            // analog). So it is a DISTINCT reproducible fingerprint, NOT COMMITTED_HASH and NOT SWAY_HASH.
+            const z = run({ sway: 1, swayRate: 0 });
+            assert.equal(z.hash, SWAYRATE_ZERO_HASH, 'frozen-lean stream changed vs the committed baseline');
+            assert.notEqual(z.hash, SWAY_HASH, 'swayRate:0 must differ from the default swing (else no freeze)');
+            assert.notEqual(z.hash, COMMITTED_HASH, 'swayRate:0 is a lean, not an inert zero');
+            assert.equal(run({ sway: 1, swayRate: 0 }).hash, z.hash, 'frozen lean not deterministic on replay');
+            assert.notEqual(z.hash, SWAYRATE_HASH, 'swayRate:0 must differ from swayRate:3');
+        });
+
+        it('matches the committed SWAYRATE fingerprint -- distinct + deterministic (DONE-WHEN 4)', () => {
+            const on = run({ sway: 1, swayRate: 3 });
+            assert.equal(on.hash, SWAYRATE_HASH, 'swayRate stream changed vs the committed baseline');
+            assert.equal(run({ sway: 1, swayRate: 3 }).hash, on.hash, 'swayRate not deterministic on replay');
+            assert.notEqual(on.hash, SWAY_HASH, 'swayRate:3 should differ from the default swing');
+            assert.notEqual(on.hash, run({ sway: 1, swayRate: 1.5 }).hash, 'swayRate:3 should differ from swayRate:1.5');
+        });
+
+        it('is a PURE physics scalar: sway-armed swayRate moves ONLY hash/sumX, never a render channel (DONE-WHEN 5)', () => {
+            // Zero second-reader: pool.swrate feeds only x. So vs the sway-default run it moves the POSITION
+            // hash and its drift sumX, but rotateHash / colorHash / scaleHash / alphaHash / the (trail-free)
+            // strokeHash are all byte-identical (nothing downstream reads swrate; tilt/tilt0 are unwritten).
+            const off = run({ sway: 1 });
+            const on = run({ sway: 1, swayRate: 3 });
+            assert.notEqual(on.hash, off.hash, 'swayRate should move the position stream');
+            assert.notEqual(on.sumX, off.sumX, 'swayRate should move the drift witness');
+            assert.equal(on.rotateHash, off.rotateHash, 'swayRate must not touch rotation');
+            assert.equal(on.colorHash, off.colorHash, 'swayRate must not touch color');
+            assert.equal(on.scaleHash, off.scaleHash, 'swayRate must not touch the size fold');
+            assert.equal(on.alphaHash, off.alphaHash, 'swayRate must not touch alpha');
+            assert.equal(on.strokeHash, off.strokeHash, 'swayRate must not add a trail of its own');
+        });
+
+        it('NON-VACUOUS sumX: a different swing frequency cuts the oscillation at a different phase (DONE-WHEN 6)', () => {
+            // A different frequency nets the oscillation to zero at a different phase within the fixed window,
+            // so sumX differs from the default swing AND between +3 and -3 (a clean sign flip is NOT asserted
+            // -- sway nets to zero and tilt0 is a random per-particle offset -- only distinctness is).
+            const base = run({ sway: 1 }).sumX;
+            const p3 = run({ sway: 1, swayRate: 3 }).sumX;
+            const n3 = run({ sway: 1, swayRate: -3 }).sumX;
+            assert.notEqual(p3, base, 'swayRate:3 must move the drift (else vacuous)');
+            assert.notEqual(n3, p3, 'swayRate:-3 must differ from swayRate:3');
+        });
+
+        it('is DECOUPLED from flutterRate + turbulence: rotation/scale unmoved, positions differ (DONE-WHEN 7)', () => {
+            // tilt/tilt0 are never written, so the turbulence curl phase (tilt*1.7 + spin) and the flutterRate
+            // render scale stay byte-identical; only x moves.
+            const off = run({ sway: 1, turbulence: 500 });
+            const on = run({ sway: 1, swayRate: 3, turbulence: 500 });
+            assert.equal(on.rotateHash, off.rotateHash, 'swayRate must not perturb turbulence rotation');
+            assert.notEqual(on.hash, off.hash, 'swayRate must move positions even with turbulence armed');
+            const foff = run({ sway: 1, flutter: 1, flutterRate: 2 });
+            const fon = run({ sway: 1, swayRate: 3, flutter: 1, flutterRate: 2 });
+            assert.equal(fon.scaleHash, foff.scaleHash, 'swayRate must not perturb the flutterRate wobble fold');
+        });
+
+        it('keeps positions finite under swayRate extremes + sway + wind + turbulence + a bouncing box (DONE-WHEN 8)', () => {
+            for (const sr of [0, -3, 1e-9, 1e6]) {
+                const canvas = makeCanvas({ record: true, assertFinite: true });
+                const c = createConfetti(canvas, { seed: 3, trail: 12 });
+                assert.doesNotThrow(() => {
+                    c.burst({
+                        x: 400, y: 300, count: 80, spread: 2.0, lifeMin: 4, lifeMax: 4,
+                        wallLeft: 350, wallRight: 450, ceiling: 250, floor: 350, bounce: 0.6,
+                        gravity: 4000, wind: 1200, turbulence: 500, sway: 1, swayRate: sr, trail: 12,
+                    });
+                    pump(80, 16);
+                }, `swayRate:${sr} produced a non-finite draw`);
+                c.destroy();
+            }
+        });
+
+        it('is honored by spray() too: sway-armed rate moves the stream; sway-off is unchanged (DONE-WHEN 9)', () => {
+            const spray = (opts) => {
+                const canvas = makeCanvas({ record: true });
+                const c = createConfetti(canvas, { seed: 9 });
+                c.spray({ duration: 400, rate: 15, x: 400, y: 200, spread: 1.2, shape: 'rect',
+                    lifeMin: 4, lifeMax: 4, ...opts });
+                pump(1, 1000); pump(60, 16);
+                const out = { hash: canvas.hash, rotateHash: canvas.rotateHash, scaleHash: canvas.scaleHash };
+                c.destroy();
+                return out;
+            };
+            const swayOn = spray({ sway: 1 });
+            const rateOn = spray({ sway: 1, swayRate: 3 });
+            assert.notEqual(rateOn.hash, swayOn.hash, 'spray ignored swayRate');
+            assert.equal(rateOn.rotateHash, swayOn.rotateHash, 'spray swayRate perturbed rotation');
+            assert.equal(rateOn.scaleHash, swayOn.scaleHash, 'spray swayRate perturbed the size fold');
+            assert.equal(spray({ sway: 1, swayRate: 3 }).hash, rateOn.hash, 'forced spray swayRate not deterministic');
+            assert.equal(spray({ swayRate: 3 }).hash, spray({}).hash, 'swayRate perturbed a sway-off spray');
+        });
+
+        it('has no effect under reduced motion (static fan runs no update loop) (DONE-WHEN 10)', () => {
+            const staticOut = (opts) => {
+                setReducedMotion(true);
+                try {
+                    const canvas = makeCanvas({ record: true });
+                    const c = createConfetti(canvas, { seed: 5 });
+                    c.burst({ count: 120, shape: 'rect', lifeMin: 5, lifeMax: 5, spread: 1.8, ...opts });
+                    pump(1, 1000); pump(29, 16);
+                    const out = { hash: canvas.hash, rotateHash: canvas.rotateHash, scaleHash: canvas.scaleHash,
+                        alphaHash: canvas.alphaHash, colorHash: canvas.colorHash };
+                    c.destroy();
+                    return out;
+                } finally {
+                    setReducedMotion(false);
+                }
+            };
+            const off = staticOut({ sway: 1 });
+            const on = staticOut({ sway: 1, swayRate: 0.1 });
+            assert.equal(on.hash, off.hash, 'swayRate must be inert under reduced motion (position)');
+            assert.equal(on.rotateHash, off.rotateHash, 'swayRate must be inert under reduced motion (rotate)');
+            assert.equal(on.scaleHash, off.scaleHash, 'swayRate must be inert under reduced motion (scale)');
+            assert.equal(on.alphaHash, off.alphaHash, 'swayRate must be inert under reduced motion (alpha)');
+            assert.equal(on.colorHash, off.colorHash, 'swayRate must be inert under reduced motion (color)');
+        });
+
+        it('fail-closed table: garbage coerces to the default (off), sway-armed (DONE-WHEN 11)', () => {
+            // Every non-finite / non-numeric value must fall to 1 (off), so with sway armed each reproduces
+            // the sway-default SWAY_HASH exactly (the off look).
+            for (const sr of [NaN, Infinity, -Infinity, '3', null, {}, undefined]) {
+                assert.equal(run({ sway: 1, swayRate: sr }).hash, SWAY_HASH, `swayRate ${JSON.stringify(sr)} must coerce to the default (off)`);
             }
         });
     });
